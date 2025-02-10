@@ -302,39 +302,7 @@ class InvertibleMatrix(RotationMatrix):
         if inverse: return self.rot_inv(h)
         return self.rot_forward(h)
 
-class FixedMask(torch.nn.Module):
-    def __init__(self,
-            size=None,
-            n_units=1,
-            custom_mask=None,
-            *args, **kwargs):
-        """
-        1s in the early dims, 0s in the later dims.
-
-        size: int
-            the number of the hidden state vector
-        n_units: int
-            the number of units to swap
-        """
-        super().__init__()
-        if custom_mask is not None and len(custom_mask)>0:
-            mask = custom_mask.float()
-            self.size = mask.shape[-1]
-        else:
-            self.size = size
-            self.n_units = n_units
-            self.temperature = None
-            mask = torch.zeros(self.size).float()
-            mask[:self.n_units] = 1
-        self.register_buffer("_mask", mask)
-        
-    @property
-    def mask(self):
-        return self._mask
-
-    def get_boundary_mask(self):
-        return self.mask
-        
+class Mask(torch.nn.Module):
     def forward(self, target, source):
         """
         target: torch tensor (B,H)
@@ -359,7 +327,42 @@ class FixedMask(torch.nn.Module):
             swapped[...,:masked_src.shape[-1]] += masked_src
         return swapped
 
-class ZeroMask(FixedMask):
+
+class FixedMask(Mask):
+    def __init__(self,
+            size=None,
+            n_units=1,
+            custom_mask=None,
+            *args, **kwargs):
+        """
+        1s in the early dims, 0s in the later dims.
+
+        size: int
+            the number of the hidden state vector
+        n_units: int
+            the number of units to swap
+        """
+        super().__init__()
+        if custom_mask is not None and len(custom_mask)>0:
+            mask = custom_mask.float()
+            self.size = mask.shape[-1]
+        else:
+            self.size = size if size is not None else 1
+            self.n_units = n_units
+            self.temperature = None
+            mask = torch.zeros(self.size).float()
+            mask[:self.n_units] = 1
+        self.register_buffer("_mask", mask)
+        
+    @property
+    def mask(self):
+        return self._mask
+
+    def get_boundary_mask(self):
+        return self.mask
+        
+
+class ZeroMask(Mask):
     def __init__(self,
             size=None,
             n_units=1,
@@ -396,22 +399,6 @@ class ZeroMask(FixedMask):
     def get_boundary_mask(self):
         return self.mask
         
-    def forward(self, source, *args, **kwargs):
-        """
-        source: torch tensor (B,H)
-            the vector that will give neurons to create a
-            causal interchange in the other sequence
-            
-        Returns:
-            target: torch tensor (B,H)
-                the vector that received new neurons for
-                a causal interchange
-        """
-        mask = self.mask
-        masked_vec = mask[:source.shape[-1]]*source
-        if self.learnable_add:
-            masked_vec[:, -self.add_vec.shape[0]:] += self.add_vec
-        return masked_vec
 
 class BoundlessMask(FixedMask):
     def __init__(self,
@@ -452,6 +439,10 @@ class BoundlessMask(FixedMask):
     @property
     def mask(self):
         return self.get_boundary_mask()
+
+    @property
+    def n_units(self):
+        return (self.mask>0.5).float().sum()
 
     def full_boundary_mask(self):
         return torch.sigmoid(self.boundaries/self.temperature)
@@ -498,7 +489,7 @@ class InterventionModule(torch.nn.Module):
 
         # Swap Mask
         size = max(self.sizes)
-        if mask_kwargs is None:
+        if mask_kwargs is None or mask_kwargs.get("n_units", None) is None:
             n_units = min(self.sizes)//2
             mask_kwargs = {"n_units": n_units}
         mask_kwargs["size"] = size
@@ -522,18 +513,10 @@ class InterventionModule(torch.nn.Module):
         rot_target_h = self.rot_mtxs[target_idx](target)
         rot_src_h = self.rot_mtxs[source_idx](source)
 
-        mask = self.swap_mask.mask
-        masked_target = (1-mask)[:rot_target_h.shape[-1]]*rot_target_h
-        masked_src = mask[:rot_src_h.shape[-1]]*rot_src_h
-        if masked_target.shape[-1]<masked_src.shape[-1]:
-            rot_swapped = masked_target + masked_src[...,:masked_target.shape[-1]]
-        else:
-            rot_swapped = masked_target
-            rot_swapped[...,:masked_src.shape[-1]] += masked_src
-        #rot_swapped = self.swap_mask(
-        #    target=rot_target_h,
-        #    source=rot_src_h
-        #)
+        rot_swapped = self.swap_mask(
+            target=rot_target_h,
+            source=rot_src_h
+        )
 
         new_h = self.rot_mtxs[target_idx](rot_swapped, inverse=True)
         return new_h
