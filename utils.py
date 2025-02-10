@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import json
 import yaml
+import os
 
 def device_fxn(device):
     if device<0: return "cpu"
