@@ -98,22 +98,29 @@ def main():
         "identity_init": False,
         "identity_rot": False,
         "mask_type":   "FixedMask", # BoundlessMask
-        "learnable_add": False,
+        "n_units": None,
+        "learnable_addition": False,
 
         "num_training_steps": 50000,
         "print_every": 100,
         "batch_size": 32,
         "grad_accumulation_steps": 8,
-        "learning_rate": 1e-3,
+        "lr": 1e-3,
         "max_length": 256,                 # max token length for our (toy) examples
         "eval_batch_size": 16,             # batch size for correctness evaluation
     }
     config = {**defaults}
     for k in arg_config: config[k] = arg_config[k]
+    print("Config:")
+    for k in sorted(list(config.keys())):
+        print(k, config[k])
+
     config["mtx_kwargs"] = [{**config} for _ in range(len(config["model_names"]))]
     config["mask_kwargs"] = {**config}
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    save_folder, save_name = get_save_paths(kwargs=arg_config, config=config)
     
     ##########################
     #    Load two models and tokenizers
@@ -266,7 +273,7 @@ def main():
     intrv_module.to(device)
     optimizer = torch.optim.Adam(
         intrv_module.parameters(),
-        lr=config["learning_rate"])
+        lr=config["lr"])
     
     ##########################
     #    Define and attach forward hooks to a specified layer in each model.
@@ -296,6 +303,11 @@ def main():
     print("Starting training of the rotation matrix ...")
     models = [model.eval() for model in models]
     optimizer.zero_grad()
+    df_dict = {
+        "loss": [],
+        "tok_acc": [],
+        "direction": [], # 1->2 or 2->1
+    }
     while global_step < config["num_training_steps"]:
         for batch_indices in train_loader:
             # Forward passes. The hook functions will transform activations at the chosen layer.
@@ -326,6 +338,10 @@ def main():
             tids = torch.argmax(src_probs[sidx][batch_indices], dim=-1)
             tok_acc1 = (pids==tids.to(device).reshape(-1)[pmask]).float().mean()
 
+            df_dict["loss"].append(loss1.item())
+            df_dict["tok_acc"].append(tok_acc1.item())
+            df_dict["direction"].append("1->2")
+
 
             ## Model 2 -> Model 1
             sidx = 1
@@ -351,13 +367,19 @@ def main():
             tids = torch.argmax(src_probs[sidx][batch_indices], dim=-1)
             tok_acc2 = (pids==tids.to(device).reshape(-1)[pmask]).float().mean()
 
+            df_dict["loss"].append(loss2.item())
+            df_dict["tok_acc"].append(tok_acc2.item())
+            df_dict["direction"].append("2->1")
+
+
+            # Combine losses and backprop
             accum = config.get("grad_accumulation_steps", 1)
             loss = (loss1 + loss2) / 2.0 / accum
 
             loss.backward()
-            #if global_step % accum==0:
-            #    optimizer.step()
-            #    optimizer.zero_grad()
+            if global_step % accum==0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             
             # Print a sample generation every print_every steps.
@@ -401,7 +423,8 @@ def main():
                         print()
                         print("Mtx  Type:", config["mtx_types"][0])
                         print("Mask Type:", config["mask_type"],
-                                "- Learn:", config["learnable_add"])
+                                "- Learn:", config["learnable_addition"],
+                                "- Units:", intrv_module.swap_mask.n_units)
                     print()
             
                 print("Step:", global_step)
@@ -411,6 +434,21 @@ def main():
                 print("Tok Acc:")
                 print("\tM1->M2:", tok_acc1)
                 print("\tM2->M1:", tok_acc2)
+            
+            ### Save loss and state dict
+            if global_step%config.get("save_every_steps", 100):
+                csv = os.path.join(save_folder, save_name+".csv")
+                df = pd.DataFrame(df_dict)
+                df.to_csv(csv, header=True, index=False)
+
+                pt = os.path.join(save_folder, save_name+".pt")
+                sd = {
+                    "config": config,
+                    "state_dict": intrv_module.state_dict(),
+                }
+                torch.save(sd, pt)
+
+            ### Stop training
             global_step += 1
             if global_step >= config["num_training_steps"]:
                 break
