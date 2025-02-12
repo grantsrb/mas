@@ -6,7 +6,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset, Dataset, load_from_disk
 import torch.nn.functional as F
 
+import pandas as pd # import after transformers
+
 from utils import collect_activations, device_fxn, get_command_line_args
+import seq_models as smods
+from dl_utils.save_io import get_save_folder, load_checkpoint
+from dl_utils.tokenizer import Tokenizer
 from interchange import InterventionModule
 
 def is_correct_batch(model, tokenizer, examples, device, max_new_tokens=50):
@@ -75,12 +80,33 @@ def get_hook_module(model, hook_layer):
     else:
         raise ValueError("Cannot locate hook layer in the model.")
 
+def get_model_and_tokenizer(model_name, device=0):
+    if os.path.exists(model_name):
+        checkpt = load_checkpoint(model_name)
+        mconfig = checkpt["config"]
+        temp = smods.make_model(mconfig)
+        temp.load_state_dict(checkpt["state_dict"])
+        model = temp.model
+
+        tokenizer = Tokenizer(
+            words=set(), unk_token=None, word2id=mconfig.get("word2id",{}))
+    else:
+        print(f"Loading model and tokenizer for {model_name}...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
+        tokenizer.pad_token = "<PAD>"
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+    model.to(device)
+    model.eval()
+    return model, tokenizer
+
 def main():
     arg_config = get_command_line_args(sys.argv)
     ##########################
     #    Default configuration
     ##########################
     defaults = {
+        "save_root": "/data2/grantsrb/icml_mas/",
         "exp_name": "myexp",
         # Use two identical models by default (replace with real LLaMA repo names as needed)
         "model_names": ["gpt2", "gpt2"], #["huggyllama/llama-7b", "huggyllama/llama-7b"],
@@ -90,7 +116,7 @@ def main():
             "split":"train",
         },
         "filtered_dataset_path": "./filtered_gsm8k",  # where to save/load the filtered dataset
-        "hook_layers": [ # layers at which to attach the hooks
+        "layers": [ # layers at which to attach the hooks
             "transformer.wte",
             "transformer.wte"
         ],  
@@ -120,7 +146,10 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    save_folder, save_name = get_save_paths(kwargs=arg_config, config=config)
+    save_folder = get_save_folder(kwargs=arg_config, config=config)
+    if not os.path.exists(save_folder):
+        os.mkdir(save_folder)
+    print("Saving to:", save_folder)
     
     ##########################
     #    Load two models and tokenizers
@@ -129,14 +158,8 @@ def main():
     tokenizers = []
     m_sizes = []
     for mi,model_name in enumerate(config["model_names"]):
-        print(f"Loading model and tokenizer for {model_name}...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
-        tokenizer.pad_token = "|<PAD>|"
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-        # (If the model is very large, consider using load_in_8bit or device_map="auto".)
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        model.to(device)
-        model.eval()
+        model, tokenizer = get_model_and_tokenizer(model_name, device=device)
+        
         # Freeze model parameters so that only our rotation matrix is trained.
         for param in model.parameters():
             param.requires_grad = False
@@ -144,14 +167,17 @@ def main():
         print(model)
         models.append(model)
         tokenizers.append(tokenizer)
+        
+        # Just collect a single step to determine the dimensionality of
+        # the hooked layer
         with torch.no_grad():
             actvs = collect_activations(
                 model,
                 torch.LongTensor([[[0]]]),
-                layers=[config["hook_layers"][mi]],
+                layers=[config["layers"][mi]],
                 batch_size=500,
                 to_cpu=True,)
-        m_sizes.append(actvs[config["hook_layers"][mi]].shape[-1])
+        m_sizes.append(actvs[config["layers"][mi]].shape[-1])
     
     ##########################
     #    Load the dataset (gsm8k)
@@ -241,12 +267,12 @@ def main():
                 model,
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
-                layers=[config["hook_layers"][mi], "lm_head"],
+                layers=[config["layers"][mi], "lm_head"],
                 ret_pred_ids=True,
                 batch_size=vbsize,
                 to_cpu=True,)
 
-            src_activations.append(actvs[config["hook_layers"][mi]])
+            src_activations.append(actvs[config["layers"][mi]])
             src_activations[-1] = src_activations[-1].squeeze()
 
             logits = actvs["lm_head"].squeeze()
@@ -289,8 +315,8 @@ def main():
     hook_fn_model1 = get_hook(comms_dict)
     hook_fn_model2 = get_hook(comms_dict)
     
-    hook_module_model1 = get_hook_module(models[0], config["hook_layers"][0])
-    hook_module_model2 = get_hook_module(models[1], config["hook_layers"][1])
+    hook_module_model1 = get_hook_module(models[0], config["layers"][0])
+    hook_module_model2 = get_hook_module(models[1], config["layers"][1])
     hook_handle1 = hook_module_model1.register_forward_hook(hook_fn_model1)
     hook_handle2 = hook_module_model2.register_forward_hook(hook_fn_model2)
     
@@ -437,11 +463,11 @@ def main():
             
             ### Save loss and state dict
             if global_step%config.get("save_every_steps", 100):
-                csv = os.path.join(save_folder, save_name+".csv")
+                csv = os.path.join(save_folder, "tokenwise_mas.csv")
                 df = pd.DataFrame(df_dict)
                 df.to_csv(csv, header=True, index=False)
 
-                pt = os.path.join(save_folder, save_name+".pt")
+                pt = os.path.join(save_folder, "tokenwise_mas.pt")
                 sd = {
                     "config": config,
                     "state_dict": intrv_module.state_dict(),
