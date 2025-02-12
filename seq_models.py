@@ -56,11 +56,13 @@ class LSTM(smods.LSTM):
         h = (cat[..., :h[0].shape[-1]], cat[..., h[0].shape[-1]:]) 
         return h
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.BoolTensor=None,
                       task_mask:torch.BoolTensor=None,
                       n_steps:int=0,
                       temperature=None,
+                      input_ids=None,
+                      attention_mask=None,
                       inputs_embeds=None,
                       ret_gtruth=True,
                       *args, **kwargs):
@@ -93,6 +95,8 @@ class LSTM(smods.LSTM):
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
         input_ids = inpts
         if not inputs_embeds:
             embs = self.embeddings(inpts)
@@ -103,6 +107,8 @@ class LSTM(smods.LSTM):
         pred_ids = []
         past_hs,past_cs = [],[]
         hs,cs = self.get_fresh_recurrent_vectors(B)
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is None:
             pad_mask = torch.zeros_like(inpts).bool()
         # The task mask allows us to do teacher forcing up until
@@ -182,11 +188,13 @@ class RNN(smods.RNN):
         hcopy = self.identities[layer](hcopy)
         return hcopy
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.Tensor=None,
                       task_mask:torch.Tensor=None,
                       n_steps:int=0,
                       temperature=None,
+                      input_ids=None,
+                      attention_mask=None,
                       inputs_embeds=None,
                       ret_gtruth=True,
                       *args, **kwargs):
@@ -205,6 +213,8 @@ class RNN(smods.RNN):
             temperature: float
                 a parameter to adjust the entropy of the
                 token sampling. high temperature means high entropy
+            attention_mask: Tensor
+                huggingface padding mask where false means padding
             inputs_embeds: None or Tensor, shape (B,S,D)
                 optionally argue the embeddings directly instead of
                 token ids.
@@ -218,6 +228,8 @@ class RNN(smods.RNN):
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
         input_ids = inpts
         if not inputs_embeds:
             embs = self.embeddings(inpts)
@@ -228,6 +240,8 @@ class RNN(smods.RNN):
         pred_ids = []
         past_hs = []
         hs = self.get_fresh_recurrent_vectors(B)
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is None:
             pad_mask = torch.zeros_like(inpts).bool()
         # The task mask allows us to do selective teacher forcing.
@@ -691,7 +705,7 @@ class Transformer(smods.Transformer):
         ))
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     task_mask:torch.Tensor=None,
@@ -918,7 +932,7 @@ class KWindowTransformer(Transformer):
         self.attn_window = attn_window
 
     def tforce_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     task_mask:torch.Tensor=None,
@@ -941,7 +955,7 @@ class KWindowTransformer(Transformer):
             *args, **kwargs)
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     task_mask:torch.Tensor=None,
@@ -965,130 +979,6 @@ class KWindowTransformer(Transformer):
             n_steps=n_steps,
             past_key_values=past_key_values,
             *args, **kwargs)
-
-class MambaModel(smods.MambaModel):
-    def __init__(self,trigger_ids=7,linear_output=False,*args,**kwargs):
-        raise NotImplemented
-        super().__init__(*args, **kwargs)
-        if type(trigger_ids)==int: trigger_ids = [trigger_ids]
-        self.inpt_identity = tmods.IdentityModule()
-        self.identities = nn.ModuleList([])
-        for _ in range(self.n_layers):
-            self.identities.append(tmods.IdentityModule())
-        self.register_buffer("trigger_ids", torch.LongTensor(
-            [tid for tid in trigger_ids]
-        ))
-        if linear_output:
-            self.decoder = tmods.IdentityModule()
-            self.lm_head = torch.nn.Linear(self.d_model,self.out_tokens)
-
-    def forward(self, inpts:torch.Tensor,
-                      n_steps:int=0,
-                      temperature=None,
-                      inputs_embeds=None,
-                      ret_gtruth=True,
-                      reset_state=True,
-                      tforce=True,
-                      task_mask=None,
-                      *args, **kwargs):
-        """
-        Arguments:
-            inpts: Tensor, shape ``[bsize, seq_len]``
-            n_steps: int
-                the number of prediction steps if not using teacher
-                forcing
-            temperature: float
-                a parameter to adjust the entropy of the
-                token sampling. high temperature means high entropy
-            inputs_embeds: None or Tensor, shape (B,S,D)
-                optionally argue the embeddings directly instead of
-                token ids.
-            ret_gtruth: bool
-                if true, will return the pred ids of the argued input
-                instead of the predicted ids. The predicted logits are
-                returned the same either way. This is for ease of
-                computing accuracy in random sequences.
-            reset_state: bool
-                optionally use the state from the last pass. defaults to
-                resetting the state.
-            task_mask: Tensor, shape (B, S)
-                true means the tokens are a part of the prediction
-                task and as such should not be teacher forced. Tokens at
-                indices that are false will be fed into the model
-                regardless of the model's predictions.
-        Returns:
-            ret_dict: dict
-                logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
-                pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
-        """
-        input_ids = inpts
-        if not inputs_embeds:
-            embs = self.embeddings(inpts)
-        else:
-            if not tforce: raise NotImplemented
-            embs = inputs_embeds
-
-        B,S,D = embs.shape
-        logits = []
-        pred_ids = []
-        past_hs = []
-        if reset_state: self.reset_state(batch_size=B,seq_len=S+n_steps)
-
-        if task_mask is None:
-            task_mask = torch.zeros(B,S).bool().to(self.get_device())
-
-        if tforce:
-            return self.step(
-                inputs_embeds=embs,
-                hs=None,
-                temperature=temperature)
-
-        # Loop through sequence
-        for step in range(S+n_steps):
-            if step<embs.shape[1]:
-                inpt = embs[:,step]
-                tmask = task_mask[:,step]
-                if torch.any(tmask):
-                    inpt[tmask] = self.embeddings( pred_ids[-1][tmask] )
-            else:
-                inpt = self.embeddings(pred_ids[-1])
-            inpt = self.inpt_identity(inpt)
-            ret_dict = self.step(
-                inputs_embeds=inpt,
-                hs=self.state,
-                temperature=temperature,
-            )
-            hs = []
-            mem_dict = self.state.key_value_memory_dict
-            for k in range(self.n_layers):
-                hs.append(mem_dict[k])
-                new_val = [
-                    mem_dict[k][i] for i in range(len(mem_dict[k]))
-                ]
-                # We use the identity module to hook interventions
-                new_val[1] = self.identities[k](new_val[1])
-                self.state.key_value_memory_dict[k] = tuple(new_val)
-            # 1 refers to the recurrent state as opposed to the
-            # convolutional state
-            past_hs.append([h[1].data.clone().cpu() for h in hs])
-            logits.append(ret_dict["logits"][:,-1])
-            new_preds = ret_dict["pred_ids"][:,-1]
-            if ret_gtruth and step<S-1:
-                new_ids = input_ids[:,step+1].data.clone()
-                # If next step is not task pred, then we'll return the
-                # prediction as the ground truth.
-                tmask = task_mask[:,step+1] 
-                new_preds[~tmask] = new_ids[~tmask]
-            pred_ids.append(new_preds)
-        return {
-            "logits":   torch.stack(logits, dim=1),
-            "pred_ids": torch.stack(pred_ids,dim=1),
-            "hs":       hs,
-            "past_hs":  past_hs,
-        }
-
-class Mamba(MambaModel):
-    pass
 
 class LossWrapper(torch.nn.Module):
     """

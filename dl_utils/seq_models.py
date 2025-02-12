@@ -214,6 +214,7 @@ class SequenceModule(tmods.CoreModule):
                       temperature=None,
                       inputs_embeds:torch.Tensor=None,
                       input_ids=None,
+                      attention_mask:torch.BoolTensor=None,
                       use_cache=False,
                       past_key_values=None,
                       stop_ids=None,
@@ -244,6 +245,8 @@ class SequenceModule(tmods.CoreModule):
                 optionally argue input embeddings instead of token ids.
             input_ids: torch LongTensor (B,S)
                 optionally use different keyword
+            attention_mask: bool tensor (B,S)
+                pad mask except that 0s denote padding tokens
             past_key_values: tuple of tuple of tensors
                 if use_cache is true, will return saved computations
                 that can be argued on the next pass to save on
@@ -267,6 +270,8 @@ class SequenceModule(tmods.CoreModule):
         """
         if input_ids is not None:
             inpts = input_ids
+        if attention_mask is not None:
+            pad_mask = attention_mask
         if pad_mask is None:
             if past_key_values is None or past_key_values[0] is None:
                 if inpts is not None:
@@ -326,6 +331,11 @@ class SequenceModule(tmods.CoreModule):
                 *args, **kwargs,
             )
         return ret_dict
+
+    def generate(self, *args, **kwargs):
+        if "max_new_tokens" in kwargs:
+            kwargs["n_steps"] = kwargs["max_new_tokens"]
+        return self.freedom_fwd(*args, **kwargs)
 
 class RNN(SequenceModule):
     def __init__(self, rnn_type="RNNCell", *args, **kwargs):
@@ -466,11 +476,13 @@ class RNN(SequenceModule):
         hcopy[idx] = h
         return hcopy
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.Tensor=None,
                       n_steps:int=0,
                       temperature=None,
                       inputs_embeds=None,
+                      input_ids=None,
+                      attention_mask=None,
                       stop_ids=None,
                       *args, **kwargs):
         """
@@ -492,11 +504,17 @@ class RNN(SequenceModule):
                 a token that is contained within stop_ids. The resulting
                 return sequence will be the sequence including the stop
                 id
+            input_ids: long tensor (B,S)
+            attention_mask: bool tensor (B,S)
+                pad mask except that 0s denote padding tokens
         Returns:
             ret_dict: dict
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
+        input_ids = inpts
         if stop_ids is not None:
             if type(stop_ids)==int: stop_ids = [stop_ids]
             if len(stop_ids)>0:
@@ -509,6 +527,8 @@ class RNN(SequenceModule):
         else: embs = inputs_embeds
 
         # TODO this if block needs testing
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is None:
             pad_mask = torch.zeros(
                 embs.shape[:2],device=self.get_device()).bool()
@@ -678,11 +698,13 @@ class LSTM(RNN):
         hcopy[1][idx] = h[1]
         return hcopy
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.Tensor=None,
                       n_steps:int=0,
                       temperature=None,
                       inputs_embeds=None,
+                      input_ids=None,
+                      attention_mask=None,
                       stop_ids=None,
                       *args, **kwargs):
         """
@@ -704,11 +726,17 @@ class LSTM(RNN):
                 a token that is contained within stop_ids. The resulting
                 return sequence will be the sequence including the stop
                 id
+            input_ids: long tensor (B,S)
+            attention_mask: bool tensor (B,S)
+                pad mask except that 0s denote padding tokens
         Returns:
             ret_dict: dict
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
+        input_ids = inpts
         if stop_ids is not None:
             if type(stop_ids)==int: stop_ids = [stop_ids]
             if len(stop_ids)>0:
@@ -719,6 +747,13 @@ class LSTM(RNN):
         if not inputs_embeds:
             embs = self.embeddings(inpts)
         else: embs = inputs_embeds
+
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
+        if pad_mask is None:
+            pad_mask = torch.zeros(
+                embs.shape[:2],device=self.get_device()).bool()
+
 
         B,S,D = embs.shape
         logits = []
@@ -978,7 +1013,7 @@ class Transformer(SequenceModule):
         return attn_mask
 
     def tforce_fwd(self,
-                   inpts:torch.Tensor,
+                   inpts:torch.Tensor=None,
                    mask:torch.Tensor=None,
                    pad_mask:torch.Tensor=None,
                    inputs_embeds:torch.Tensor=None,
@@ -1055,7 +1090,7 @@ class Transformer(SequenceModule):
         }
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     n_steps:int=0,
@@ -1301,7 +1336,7 @@ class HFTransformer(SequenceModule):
         self.init_weights()
 
     def tforce_fwd(self,
-                   inpts:torch.Tensor,
+                   inpts:torch.Tensor=None,
                    mask:torch.Tensor=None,
                    pad_mask:torch.Tensor=None,
                    inputs_embeds:torch.Tensor=None,
@@ -1368,7 +1403,7 @@ class HFTransformer(SequenceModule):
         }
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     is_causal:bool=None,
@@ -1671,7 +1706,7 @@ class TorchTransformer(SequenceModule):
         )
 
     def tforce_fwd(self,
-                   inpts:torch.Tensor,
+                   inpts:torch.Tensor=None,
                    mask:torch.Tensor=None,
                    pad_mask:torch.Tensor=None,
                    inputs_embeds:torch.Tensor=None,
@@ -1738,7 +1773,7 @@ class TorchTransformer(SequenceModule):
         }
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     n_steps:int=1,
@@ -1892,198 +1927,6 @@ class TorchTransformer(SequenceModule):
             "past_key_values": past_key_values,
             "last_hidden_state": torch.cat(h_states, dim=1),
         }
-
-
-class MambaModel(SequenceModule):
-    def __init__(self,
-                pos_enc_class="IdentityPositionalEncoding",
-                d_state=None,
-                d_conv=4,
-                expand=2,
-                dt_rank="auto",
-                dt_min=0.001,
-                dt_max=0.1,
-                dt_init="random",
-                dt_scale=1.0,
-                dt_init_floor=1e-4,
-                conv_bias=True,
-                bias=False,
-                use_fast_path=True,  # Fused kernel options
-                *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.model_type = 'Transformer'
-        self.state = None
-        if d_state is None: d_state = self.d_model
-        pos_enc_class = getattr(tmods, pos_enc_class)
-        self.embeddings = torch.nn.Embedding(self.n_tokens,self.d_model)
-        if self.seq_len is None: self.seq_len = 2048
-        self.pos_encs = pos_enc_class(
-            d_model=self.d_model,
-            max_len=self.seq_len,
-            learnable=self.learn_posencs,
-        )
-        self.layers = torch.nn.ModuleList([])
-        self.lnorms = torch.nn.ModuleList([])
-        for el in range(self.n_layers):
-            self.layers.append(Mamba(
-                d_model=self.d_model,
-                d_state=d_state,
-                d_conv=d_conv,
-                expand=expand,
-                dt_rank=dt_rank,
-                dt_min=dt_min,
-                dt_max=dt_max,
-                dt_init=dt_init,
-                dt_scale=dt_scale,
-                dt_init_floor=dt_init_floor,
-                conv_bias=conv_bias,
-                bias=bias,
-                use_fast_path=use_fast_path,
-                layer_idx=el,
-            ))
-            self.lnorms.append(nn.LayerNorm(self.d_model))
-        #self.decoder = nn.LayerNorm(self.d_model)
-        #self.lm_head = nn.Linear(self.d_model, self.n_tokens)
-        d_hid = self.d_model*4
-        modules = []
-        modules.append(torch.nn.Linear( self.d_model, d_hid ))
-        modules.append(torch.nn.GELU())
-        if self.l_norm:
-            modules.append(torch.nn.LayerNorm(d_hid))
-        modules.append(torch.nn.Dropout(self.drop_p))
-        self.decoder = torch.nn.Sequential( *modules )
-        self.lm_head = torch.nn.Linear( d_hid, self.out_tokens )
-        self.init_weights()
-
-    def reset_state(self, batch_size=1, seq_len=None):
-        """
-        Refreshes the state of the SSM
-
-        Args:
-            batch_size: int
-            seq_len: None or int
-                the maximum sequence length of the sequence.  if None,
-                uses self.seq_len.
-        Returns:
-            infp: InferenceParams
-                a new InferenceParams object
-        """
-        slen = seq_len if seq_len is not None else self.seq_len
-        self.state = InferenceParams(
-            max_seqlen=slen,
-            max_batch_size=batch_size)
-        return self.state
-    
-    def step(self,
-             inpts=None,
-             hs=None,
-             temperature=None,
-             inputs_embeds=None,
-             *args, **kwargs):
-        """
-        Arguments:
-            inpts: Tensor, shape ``[bsize,seqlen]``
-                if None, inputs_embeds must be not None
-            hs: InferenceParams
-            temperature: float
-                a parameter to adjust the entropy of the
-                token sampling. high temperature means high entropy
-            inputs_embeds: None or Tensor, shape (B,S,D)
-                optionally argue the embeddings directly instead of
-                token ids.
-        Returns:
-            dict:
-                logits: Tensor of shape (B, S, N)
-                pred_ids: Tensor of shape (B, S)
-                hs: list of Tensors with shape (B, D)
-                    a list of updated h vectors for each lstm
-        """
-        if inpts is not None: inpt = self.embeddings(inpts)
-        else: inpt = inputs_embeds
-        if len(inpt.shape)==2: inpt = inpt[:,None]
-        if hs is None: hs = self.state
-
-        # Loop through mamba layers of model
-        for l,(layer,norm) in enumerate(zip(self.layers,self.lnorms)):
-            out = layer(inpt, inference_params=hs)
-            inpt = norm(inpt + out)
-        logits = self.lm_head(self.decoder(out))
-        pred_ids = self.sample_with_temperature(logits, temperature )
-        hs.seqlen_offset += inpt.shape[1]
-        return {
-            "logits":   logits,
-            "pred_ids": pred_ids,
-            "hs": hs, 
-        }
-
-    def forward(self, inpts:torch.Tensor,
-                      n_steps:int=0,
-                      temperature=None,
-                      inputs_embeds=None,
-                      stop_ids=None,
-                      reset_state=True,
-                      *args, **kwargs):
-        """
-        Arguments:
-            inpts: Tensor, shape ``[bsize, seq_len]``
-            pad_mask: Tensor, shape ``[bsize, seq_len]``
-                true means padding
-            n_steps: int
-                the number of prediction steps if not using teacher
-                forcing
-            temperature: float
-                a parameter to adjust the entropy of the
-                token sampling. high temperature means high entropy
-            inputs_embeds: None or Tensor, shape (B,S,D)
-                optionally argue the embeddings directly instead of
-                token ids.
-            stop_ids: set of ints
-                the prediction loop will terminate if the model produces
-                a token that is contained within stop_ids. The resulting
-                return sequence will be the sequence including the stop
-                id
-            reset_state: bool
-                optionally use the state from the last pass. defaults to
-                resetting the state.
-        Returns:
-            ret_dict: dict
-                logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
-                pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
-        """
-        if stop_ids is not None:
-            if type(stop_ids)==int: stop_ids = [stop_ids]
-            if len(stop_ids)>0:
-                stop_ids = torch.LongTensor(list(stop_ids))
-                stop_ids = stop_ids.to(self.get_device())
-            else: stop_ids = None
-        else: stop_ids = None
-        if not inputs_embeds:
-            embs = self.embeddings(inpts)
-        else: embs = inputs_embeds
-
-        B,S,D = embs.shape
-        logits = []
-        pred_ids = []
-        if reset_state: self.reset_state(batch_size=B,seq_len=S+n_steps)
-
-        for step in range(n_steps+1):
-            if step==0: inpt = embs
-            else: inpt = self.embeddings(pred_ids[-1][:,-1:])
-            ret_dict = self.step(
-                inputs_embeds=inpt,
-                hs=self.state,
-                temperature=temperature)
-            logits.append(ret_dict["logits"])
-            pred_ids.append(ret_dict["pred_ids"])
-            if stop_ids is not None and torch.isin(pred_ids[-1],stop_ids):
-                break
-        return {
-            "logits": torch.cat(logits, dim=1),
-            "pred_ids": torch.cat(pred_ids,dim=1),
-            "hs": self.state,
-        }
-
-
 
 class LossWrapper(torch.nn.Module):
     """
