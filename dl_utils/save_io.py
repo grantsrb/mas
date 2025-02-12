@@ -542,69 +542,6 @@ def exp_num_exists(exp_num, exp_folder):
             return True
     return False
 
-def make_save_folder(hyps, incl_full_path=False):
-    """
-    Creates the save name for the model. Will add exp_num to hyps if
-    it does not exist when argued.
-
-    hyps: dict
-        keys:
-            exp_save_path: str
-                path to the experiment folder where all experiments
-                sharing the same `exp_name` are saved.
-                i.e. /home/user/all_saves/exp_name/
-            exp_name: str
-                the experiment name
-            exp_num: int
-                the experiment id number
-            search_keys: str
-                the identifying keys for this hyperparameter search
-    incl_full_path: bool
-        if true, prepends the exp_save_path to the save_folder.
-    """
-    return get_save_folder(hyps, incl_full_path=incl_full_path)
-
-def get_save_folder(hyps, incl_full_path=False):
-    """
-    Creates the save name for the model. Will add exp_num to hyps if
-    it does not exist when argued.
-
-    hyps: dict
-        keys:
-            exp_folder: str or None
-                path to the experiment folder where all experiments
-                sharing the same `exp_name` are saved.
-                i.e. /home/user/all_saves/<exp_name>/
-                If None is argued, will use "./<exp_name>"
-            exp_name: str
-                the experiment name.
-            exp_num: int
-                the experiment id number
-            search_keys: str
-                the identifying keys for this hyperparameter search
-    incl_full_path: bool
-        if true, prepends the exp_folder to the save_folder.
-    """
-    if "exp_num" not in hyps:
-        hyps["exp_folder"] = hyps.get(
-          "exp_folder", os.path.join("./", hyps.get("exp_name", "myexp"))
-        )
-        hyps["exp_num"] = get_new_exp_num(
-            hyps["exp_folder"], hyps["exp_name"]
-        )
-    model_folder = "{}_{}".format( hyps["exp_name"], hyps["exp_num"] )
-    model_folder += prep_search_keys(hyps.get("search_keys","_"))
-    if "exp_name" in model_folder:
-        splt = model_folder.split("exp_name")
-        right = splt[-1].split("_")
-        if len(right)>1:
-            model_folder = splt[0] + "_".join(right[1:])
-        else:
-            model_folder = splt[0]
-    if incl_full_path: 
-        return os.path.join(hyps["exp_folder"], model_folder)
-    return model_folder
-
 def get_new_exp_num(exp_folder, exp_name, offset=0):
     """
     Finds the next open experiment id number by searching through the
@@ -809,46 +746,58 @@ def record_session(config, model, globals_dict=None, verbose=False):
         temp_hyps["packages"] = packages
     save_json(temp_hyps, os.path.join(sf,h+".json"))
 
-def get_save_folder(kwargs, config):
+def get_save_folder(
+        kwargs,
+        config,
+        abbrevs = {
+            "model_names": "mdls",
+            "dataset_name": "dset",
+            "dataset_kwargs": "dkwgs",
+            "filtered_dataset_path": "filtdset",
+            "hook_layers": "lyrs",
+            "mtx_types": "mtxtyps",
+            "identity_init": "identinit",
+            "identity_rot": "identrot",
+            "mask_type":   "msktype",
+            "n_units": "nunits",
+            "learnable_addition": "learnadd",
+            "num_training_steps": "ntrain",
+            "batch_size": "bsz",
+            "grad_accumulation_steps": "gradsteps",
+            "max_length": "maxlen",
+            "eval_batch_size": "evalbsz",
+        },
+        ignores = {
+            "print_every",
+            "model_names"
+        },):
     """
     Can make a new intervention model folder for saving much like the existing model folders. This will make it easier to pick and choose what to load.
 
     """
-    ignores = {
-        "print_every",
-    }
-    abbrevs = {
-        "model_names": "mdls",
-        "dataset_name": "dset",
-        "dataset_kwargs": "dkwgs",
-        "filtered_dataset_path": "filtdset",
-        "hook_layers": "lyrs",
-        "mtx_types": "mtxtyps",
-        "identity_init": "identinit",
-        "identity_rot": "identrot",
-        "mask_type":   "msktype",
-        "n_units": "nunits",
-        "learnable_addition": "learnadd",
-        "num_training_steps": "ntrain",
-        "batch_size": "bsz",
-        "grad_accumulation_steps": "gradsteps",
-        "max_length": "maxlen",
-        "eval_batch_size": "evalbsz",
-    }
+    # Get intial save folder root
+    save_root = kwargs.get("save_root", config.get("save_root", "./"))
     exp_name = kwargs.get("exp_name", config.get("exp_name", "experiment"))
-    save_folder = "{}_{}_".format(exp_name, str(get_exp_num(exp_name)))
+    exp_folder = os.path.join(save_root, exp_name)
+    if not os.path.exists(exp_folder):
+        os.mkdir(exp_folder)
+    exp_num = get_new_exp_num(exp_folder=exp_folder,exp_name=exp_name)
+    save_folder = "{}_{}_".format(exp_name, str(exp_num))
+    save_folder = os.path.join(exp_folder, save_folder)
 
+    # always add model names to folder name
     kwargs["model_names"] = kwargs.get("model_names", config["model_names"])
     m1 = "".join([x[:4] for x in kwargs["model_names"][0].split("/")[-1].split("_")])
     m2 = "".join([x[:4] for x in kwargs["model_names"][-1].split("/")[-1].split("_")])
-    mnames = "{m1}-{m2}"
+    mnames = f"{m1}-{m2}"
     save_folder = save_folder + abbrevs["model_names"] + "-" + mnames
 
+    # add key value pairs to folder name
     s = set(kwargs.keys())-set(config.keys())
     if len(s)==0:
         return save_folder 
     for k in sorted(list(s)):
-        if k in {"model_names"}: continue
+        if k in ignores: continue
         has_len = hasattr(kwargs[k],"__len__")
         if k!="hook_layers" and type(kwargs[k])!=str and has_len:
             val = "".join([
