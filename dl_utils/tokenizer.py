@@ -486,6 +486,8 @@ class Tokenizer():
                     add_bos=True,
                     add_eos=True,
                     as_tensor=True,
+                    truncate=False,
+                    padding=None,
                     verbose=False):
         """
         Used to convert tokens to ids
@@ -510,10 +512,15 @@ class Tokenizer():
             as_tensor: bool
                 if true, will return a tensor, otherwise returns list
                 of lists of ids
+            truncation: bool
+                if true, will truncate id lists longer than seq_len
+            padding: None or string
+                applies padding in different ways.
 
         Returns:
             X: list of lists of ids | torch long tensor (N,seq_len)
         """
+        assert not as_tensor or (seq_len and as_tensor) 
         if seq_len is None: seq_len = np.inf
         assert seq_len>=int(add_eos)+int(add_bos)+1
         ids = []
@@ -527,11 +534,14 @@ class Tokenizer():
                 ids[i].append(self.convert2id(t, verbose=verbose))
             if add_eos and len(ids[i])<seq_len:
                 ids[i].append(self.eos_id)
-            if seq_len<np.inf and len(ids[i])<seq_len:
+            if seq_len<np.inf and (len(ids[i])<seq_len or padding):
                 for j in range(len(ids[i]),seq_len):
                     ids[i].append(self.pad_id)
+            if seq_len<np.inf and truncate:
+                ids[i] = ids[i][:seq_len]
             if verbose:
                 print(round(float(i)/len(toks)*100),"%", end="    \r")
+
         if as_tensor:
             return torch.LongTensor(ids)
         return ids
@@ -590,14 +600,26 @@ class Tokenizer():
             strings: list of str
                 a list of the joined string values of the argued indices
         """
+        if type(ids) != torch.Tensor:
+            if "pred_ids" in ids:
+                ids = ids["pred_ids"]
+            elif "logits" in ids:
+                ids = torch.argmax(ids["logits"], dim=-1)
+            elif hasattr(ids, logits):
+                ids = torch.argmax(ids.logits, dim=-1)
         return self.ids_to_strs(ids)
+
+    def batch_decode(self, ids):
+        return self.decode(ids=ids)
 
     def strs_to_ids(self,
                     strings,
                     as_tensor=True,
                     seq_len=None,
                     add_eos=True,
-                    add_bos=True):
+                    add_bos=True,
+                    truncation=False,
+                    padding=True,):
         """
         Converts a list of strings to a list of token id lists or a
         single tensor of ids
@@ -615,6 +637,10 @@ class Tokenizer():
             add_bos: bool
                 if true, adds the bos token to the beginning of every
                 string within strings
+            truncation: bool
+                if true, will truncate id lists longer than seq_len
+            padding: None or bool or string
+                applies padding in different ways.
         Returns:
             ids: list of ints
                 a list of the integer indices of each token in the
@@ -622,20 +648,29 @@ class Tokenizer():
         """
         if type(strings)==str: strings = [strings]
         toks,max_len,_ = self.tokenize(strings,ret_all=True)
-        if seq_len is None and as_tensor:
+        if seq_len is None and (as_tensor or padding):
             seq_len = max_len + add_eos + add_bos
         ids = self.toks_to_ids(
-            toks, seq_len=seq_len, add_bos=add_bos,
-            add_eos=add_eos, as_tensor=as_tensor
+            toks,
+            seq_len=seq_len,
+            add_bos=add_bos,
+            add_eos=add_eos,
+            as_tensor=as_tensor,
+            truncate=truncate,
+            padding=padding,
         )
         return ids
 
     def __call__(self,
-                 strings,
-                 as_tensor=True,
-                 seq_len=None,
-                 add_bos=True,
-                 add_eos=True):
+             strings,
+             as_tensor=True,
+             return_tensors=None,
+             max_length=None,
+             add_bos=True,
+             add_eos=True,
+             truncation=False,
+             padding=True,
+        ):
         """
         Converts a list of strings to a list of tokens
 
@@ -644,7 +679,7 @@ class Tokenizer():
                 the strings to be tokenized
             as_tensor: bool
                 if true, will return indices as a pytorch long tensor
-            seq_len: int or None
+            max_length: int or None
                 optional argument to truncate/pad the indexes
             add_bos: bool
                 if true, adds the bos token to the start of every
@@ -657,15 +692,23 @@ class Tokenizer():
                 a list of the integer indices of each token in the
                 argued strings
         """
+        if return_tensors: as_tensor = True
         # I'll allow it
         if type(strings)==type(torch.zeros(0)):
             return self.ids_to_strs( strings )
-        return self.strs_to_ids(
+        ids = self.strs_to_ids(
             strings,
             as_tensor=as_tensor,
-            seq_len=seq_len,
+            seq_len=max_length,
             add_eos=add_eos,
             add_bos=add_bos,
+            truncation=truncation,
+            padding=padding,
         )
+        attention_mask = ids!=self.pad_id
+        return {
+            "input_ids": ids,
+            "attention_mask": attention_mask,
+        }
 
 
