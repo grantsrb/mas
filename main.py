@@ -6,13 +6,15 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset, Dataset, load_from_disk
 import torch.nn.functional as F
 
-import pandas as pd # import after transformers
 
+from datas import get_dataset
 from utils import collect_activations, device_fxn, get_command_line_args
 import seq_models as smods
 from dl_utils.save_io import get_save_folder, load_checkpoint
 from dl_utils.tokenizer import Tokenizer
 from interchange import InterventionModule
+
+import pandas as pd # import after transformers
 
 def is_correct_batch(model, tokenizer, examples, device, max_new_tokens=50):
     """
@@ -185,41 +187,44 @@ def main():
     print("Loading dataset...")
     # features: ["question", "answer"]
     # num_rows: 7473
-    dataset = load_dataset(config["dataset_name"], **config["dataset_kwargs"])
+    dataset = get_dataset(config["dataset_name"], **config["dataset_kwargs"])
     
     ##########################
     #    Filter the dataset to keep examples that both models answer correctly.
     #    Save the filtered dataset to disk so that future runs can reload it.
     ##########################
-    filtered_dataset_path = config["filtered_dataset_path"]
-    if os.path.exists(filtered_dataset_path):
-        print(f"Loading filtered dataset from disk at {filtered_dataset_path} ...")
-        filtered_dataset = load_from_disk(filtered_dataset_path)
+    if not config.get("filter_dataset", True):
+        filtered_dataset = dataset
     else:
-        print("Filtering dataset by correctness (this may take a while)...")
-        filtered_examples = []
-        num_examples = len(dataset)
-        eval_bs = config["eval_batch_size"]
-        for start in range(0, num_examples, eval_bs):
-            batch = dataset[start: start + eval_bs]
-            correct_mask1 = is_correct_batch(
-                models[0], tokenizers[0], batch, device, max_new_tokens=50)
-            correct_mask2 = is_correct_batch(
-                models[1], tokenizers[1], batch, device, max_new_tokens=50)
-            # Only keep examples where both models are correct.
-            answers = batch["answer"]
-            questions = batch["question"]
-            for ans, q, corr1, corr2 in zip(answers, questions, correct_mask1, correct_mask2):
-                if corr1 and corr2:
-                    filtered_examples.append({"answer": ans, "question": q})
-            if start % (eval_bs * 5) == 0:
-                print(f"Processed {start + len(batch)} examples; {len(filtered_examples)} kept so far.")
-        if len(filtered_examples) == 0:
-            print("WARNING: No examples passed the correctness filter. Using a small subset of the dataset instead.")
-            filtered_examples = dataset.select(range(min(10, len(dataset))))
-        filtered_dataset = Dataset.from_list(filtered_examples)
-        print(f"Saving filtered dataset to disk at {filtered_dataset_path} ...")
-        filtered_dataset.save_to_disk(filtered_dataset_path)
+        filtered_dataset_path = config["filtered_dataset_path"]
+        if os.path.exists(filtered_dataset_path):
+            print(f"Loading filtered dataset from disk at {filtered_dataset_path} ...")
+            filtered_dataset = load_from_disk(filtered_dataset_path)
+        else:
+            print("Filtering dataset by correctness (this may take a while)...")
+            filtered_examples = []
+            num_examples = len(dataset)
+            eval_bs = config["eval_batch_size"]
+            for start in range(0, num_examples, eval_bs):
+                batch = dataset[start: start + eval_bs]
+                correct_mask1 = is_correct_batch(
+                    models[0], tokenizers[0], batch, device, max_new_tokens=50)
+                correct_mask2 = is_correct_batch(
+                    models[1], tokenizers[1], batch, device, max_new_tokens=50)
+                # Only keep examples where both models are correct.
+                answers = batch["answer"]
+                questions = batch["question"]
+                for ans, q, corr1, corr2 in zip(answers, questions, correct_mask1, correct_mask2):
+                    if corr1 and corr2:
+                        filtered_examples.append({"answer": ans, "question": q})
+                if start % (eval_bs * 5) == 0:
+                    print(f"Processed {start + len(batch)} examples; {len(filtered_examples)} kept so far.")
+            if len(filtered_examples) == 0:
+                print("WARNING: No examples passed the correctness filter. Using a small subset of the dataset instead.")
+                filtered_examples = dataset.select(range(min(10, len(dataset))))
+            filtered_dataset = Dataset.from_list(filtered_examples)
+            print(f"Saving filtered dataset to disk at {filtered_dataset_path} ...")
+            filtered_dataset.save_to_disk(filtered_dataset_path)
     
     ##########################
     #    Tokenize the filtered dataset for autoregressive training.

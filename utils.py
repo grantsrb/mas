@@ -242,6 +242,12 @@ def load_json(file_name):
         j = json.loads(s)
     return j
 
+def load_text(file_name):
+    file_name = os.path.expanduser(file_name)
+    with open(file_name, "r") as f:
+        lines = f.readlines()
+    return lines
+
 def is_jsonable(x):
     try:
         json.dumps(x)
