@@ -182,11 +182,9 @@ def main():
         m_sizes.append(actvs[config["layers"][mi]].shape[-1])
     
     ##########################
-    #    Load the dataset (gsm8k)
+    #    Load the dataset
     ##########################
     print("Loading dataset...")
-    # features: ["question", "answer"]
-    # num_rows: 7473
     dataset = get_dataset(config["dataset_name"], **config["dataset_kwargs"])
     
     ##########################
