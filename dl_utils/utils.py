@@ -209,7 +209,8 @@ def pad_to(arr, tot_len, fill_val=0, side="right", dim=-1):
 
     Args:
         arr: list or ndarray or torch tensor
-            cannot take a mixture of datatypes
+            cannot take a mixture of datatypes. If list is argued,
+            must be 1 dimensional list. Cannot take 2d list.
         tot_len: int
             the length of the resulting array
         fill_val: object
@@ -467,7 +468,7 @@ def arglast(mask, dim=None, axis=-1):
     if type(mask)==type(np.zeros(1)):
         argmaxs = np.argmax(np.flip(mask, axis=dim), axis=dim)
     else:
-        argmaxs = torch.argmax(torch.flip(mask, dims=(dim,)), dim=dim)
+        argmaxs = torch.argmax(torch.flip(mask.float(), dims=(dim,)), dim=dim)
     return mask.shape[dim] - argmaxs - 1
 
 def padmask2attnmask(pad_mask):
@@ -589,7 +590,7 @@ def get_mask_past_idx(shape, idx, inclusive=False):
     Args:
         shape: tuple of ints
             the shape of the resulting mask
-        idx: tensor (B,)
+        idx: long tensor (B,)
             the indices that mark the start of the mask
     Returns:
         mask: bool tensor (shape)

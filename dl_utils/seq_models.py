@@ -214,7 +214,7 @@ class SequenceModule(tmods.CoreModule):
                       temperature=None,
                       inputs_embeds:torch.Tensor=None,
                       input_ids=None,
-                      attention_mask:torch.BoolTensor=None,
+                      attention_mask:torch.Tensor=None,
                       use_cache=False,
                       past_key_values=None,
                       stop_ids=None,
@@ -271,7 +271,7 @@ class SequenceModule(tmods.CoreModule):
         if input_ids is not None:
             inpts = input_ids
         if attention_mask is not None:
-            pad_mask = attention_mask
+            pad_mask = ~attention_mask
         if pad_mask is None:
             if past_key_values is None or past_key_values[0] is None:
                 if inpts is not None:
@@ -1017,6 +1017,7 @@ class Transformer(SequenceModule):
                    mask:torch.Tensor=None,
                    pad_mask:torch.Tensor=None,
                    inputs_embeds:torch.Tensor=None,
+                   attention_mask:torch.Tensor=None,
                    past_key_values=None,
                    use_cache=False,
                    temperature=None,
@@ -1053,6 +1054,15 @@ class Transformer(SequenceModule):
         """
         # flipped so that true means attend to
         attn_mask = self.prep_mask(mask=mask, pad_mask=pad_mask)
+
+        ## Left Padding
+        #if position_ids is None and pad_mask is not None and pad_mask[0,0]:
+        #    n_els = (~pad_mask).float().sum(-1)
+        #    pids = torch.cat([torch.arange(n).long() for n in n_els])
+        #    position_ids = torch.zeros(pad_mask.shape).long()
+        #    position_ids[~pad_mask] = pids
+        #    position_ids = position_ids.to(self.get_device())
+
         output = self.encoder(
             inpts,
             attention_mask=attn_mask,

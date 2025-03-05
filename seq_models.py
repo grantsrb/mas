@@ -99,7 +99,7 @@ class LSTM(smods.LSTM):
             inpts = input_ids
         input_ids = inpts
         if not inputs_embeds:
-            embs = self.embeddings(inpts)
+            embs = self.embeddings(input_ids)
         else: embs = inputs_embeds
 
         B,S,D = embs.shape
@@ -231,8 +231,8 @@ class RNN(smods.RNN):
         if input_ids is not None:
             inpts = input_ids
         input_ids = inpts
-        if not inputs_embeds:
-            embs = self.embeddings(inpts)
+        if inputs_embeds is None:
+            embs = self.embeddings(input_ids)
         else: embs = inputs_embeds
 
         B,S,D = embs.shape

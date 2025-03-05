@@ -746,56 +746,66 @@ def record_session(config, model, globals_dict=None, verbose=False):
         temp_hyps["packages"] = packages
     save_json(temp_hyps, os.path.join(sf,h+".json"))
 
-def get_save_folder(
+def get_folder_from_path(path):
+    if os.path.isdir(path): return path
+    return "/".join(path.split("/")[:-1])
+
+def get_num_duplicates(folder, fname, sep="_v"):
+    n_dupls = 0
+    for f in os.listdir(folder):
+        if sep.join(f.split("_")[:-1])==fname:
+            n_dupls += 1
+    return n_dupls
+
+def get_save_name(
+        save_folder,
         kwargs,
         config,
         abbrevs = {
             "model_names": "mdls",
             "dataset_name": "dset",
             "dataset_kwargs": "dkwgs",
-            "filtered_dataset_path": "filtdset",
+            "filtered_dataset_path": "fltdset",
             "hook_layers": "lyrs",
             "mtx_types": "mtxtyps",
-            "identity_init": "identinit",
-            "identity_rot": "identrot",
-            "mask_type":   "msktype",
+            "identity_init": "ideninit",
+            "identity_rot": "idenrot",
+            "mask_type":   "msktyp",
             "n_units": "nunits",
-            "learnable_addition": "learnadd",
-            "num_training_steps": "ntrain",
+            "learnable_addition": "lrnadd",
+            "num_training_steps": "ntrn",
             "batch_size": "bsz",
-            "grad_accumulation_steps": "gradsteps",
-            "max_length": "maxlen",
-            "eval_batch_size": "evalbsz",
+            "grad_accumulation_steps": "gradstps",
+            "max_length": "mxln",
+            "eval_batch_size": "vlbsz",
         },
         ignores = {
             "print_every",
-            "model_names"
+            "model_names",
+            "mtx_kwargs",
+            "save_keys",
         },):
-    """
-    Can make a new intervention model folder for saving much like the existing model folders. This will make it easier to pick and choose what to load.
-
-    """
     # Get intial save folder root
-    save_root = kwargs.get("save_root", config.get("save_root", "./"))
-    exp_name = kwargs.get("exp_name", config.get("exp_name", "experiment"))
-    exp_folder = os.path.join(save_root, exp_name)
-    if not os.path.exists(exp_folder):
-        os.mkdir(exp_folder)
-    exp_num = get_new_exp_num(exp_folder=exp_folder,exp_name=exp_name)
-    save_folder = "{}_{}_".format(exp_name, str(exp_num))
-    save_folder = os.path.join(exp_folder, save_folder)
+    exp_name = kwargs.get("exp_name", config.get("exp_name", "mas_"))
+    save_name = f"{exp_name}_"
 
-    # always add model names to folder name
+    # always add model names to save name
     kwargs["model_names"] = kwargs.get("model_names", config["model_names"])
-    m1 = "".join([x[:4] for x in kwargs["model_names"][0].split("/")[-1].split("_")])
-    m2 = "".join([x[:4] for x in kwargs["model_names"][-1].split("/")[-1].split("_")])
+    m1 = "".join([x[:3] for x in kwargs["model_names"][0].split("/")[-1].split("_")])
+    m2 = "".join([x[:3] for x in kwargs["model_names"][-1].split("/")[-1].split("_")])
     mnames = f"{m1}-{m2}"
-    save_folder = save_folder + abbrevs["model_names"] + "-" + mnames
+    save_name = save_name + abbrevs["model_names"] + "-" + mnames
 
     # add key value pairs to folder name
-    s = set(kwargs.keys())-set(config.keys())
+    if "save_keys" in kwargs:
+        s = set(kwargs["save_keys"])
+    else:
+        s = set(kwargs.keys())
+        d = set(kwargs.keys()).symmetric_difference(set(config.keys()))
+        if len(s)==0 or len(d)==0: s = config.get("save_keys", set())
     if len(s)==0:
-        return save_folder 
+        n_dupls = get_num_duplicates(folder=save_folder, fname=save_name)
+        return save_name + f"_v{n_dupls}"
     for k in sorted(list(s)):
         if k in ignores: continue
         has_len = hasattr(kwargs[k],"__len__")
@@ -815,9 +825,9 @@ def get_save_folder(
                 val = kwargs[k].__name__[:5]
             else:
                 val = str(kwargs[k])[:5]
-        save_folder += abbrevs.get(k, k).replace("_","")[:7]+val+"_"
-    save_folder = save_folder[:-1]
-    save_folder = save_folder\
+        save_name += abbrevs.get(k, k).replace("_","")[:7]+val+"_"
+    save_name = save_name[:-1]
+    save_name = save_name\
         .replace("source", "src")\
         .replace("arith","arth")\
         .replace("base","bse")\
@@ -830,4 +840,5 @@ def get_save_folder(
         .replace("False","F")\
         .replace("auto","ato")\
         .replace("encoder","enc")
-    return save_folder
+    n_dupls = get_num_duplicates(save_folder, save_name)
+    return save_name + f"_v{n_dupls}"

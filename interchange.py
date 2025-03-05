@@ -3,9 +3,10 @@ import torch
 import copy
 from utils import device_fxn
 
-class RotationMatrix(torch.nn.Module):
+class RankRotationMatrix(torch.nn.Module):
     def __init__(self,
             size,
+            rank=None,
             identity_init=False,
             bias=False,
             mu=0,
@@ -16,6 +17,8 @@ class RotationMatrix(torch.nn.Module):
         """
         size: int
             the height and width of the rotation matrix
+        rank: int
+            the rank of the rotation matrix
         identity_init: bool
             if true, will initialize the rotation matrix to the identity
             matrix.
@@ -30,6 +33,8 @@ class RotationMatrix(torch.nn.Module):
             identity. Used for debugging.
         """
         super().__init__()
+        if rank is None or not rank: rank = size
+        self.rank = rank
         self.identity_rot = identity_rot
         self.identity_init = identity_init
 
@@ -69,7 +74,17 @@ class RotationMatrix(torch.nn.Module):
               dtype=self.rot_module.weight.data.dtype,
               device=device_fxn(self.rot_module.weight.get_device()),
             )
-        return self.rot_module.weight
+        return self.rot_module.weight[:,:self.rank]
+
+    @property
+    def weight_inv(self):
+        if self.identity_rot:
+            self.rot_module.weight.data = torch.eye(
+              self.size,
+              dtype=self.rot_module.weight.data.dtype,
+              device=device_fxn(self.rot_module.weight.get_device()),
+            )
+        return self.rot_module.weight[:,:self.rank].T
 
     @property
     def size(self):
@@ -77,7 +92,7 @@ class RotationMatrix(torch.nn.Module):
 
     @property
     def shape(self):
-        return self.rot_module.weight.shape
+        return self.weight.shape
 
     def get_condition(self, p=None):
         return torch.linalg.cond(self.weight, p=p)
@@ -87,7 +102,7 @@ class RotationMatrix(torch.nn.Module):
         return torch.matmul(h+self.bias, self.weight)
 
     def rot_inv(self, h):
-        h = torch.matmul(h, self.weight.T)-self.bias
+        h = torch.matmul(h, self.weight_inv)-self.bias
         h = h*self.sigma + self.mu
         return h
 
@@ -95,23 +110,28 @@ class RotationMatrix(torch.nn.Module):
         if inverse: return self.rot_inv(h)
         return self.rot_forward(h)
 
-class ProjectionMatrix(RotationMatrix):
-    """
-    Creates a matrix that can be used to project a representation
-    into a higher dimensional space that can be inverted.
-    """
-    def __init__(self, bias=False, freeze_weight=True, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.rot_module.requires_grad_(not freeze_weight)
-        self.og_size = None
-
-    def rot_forward(self, h):
-        self.og_size = h.shape[-1]
-        return torch.matmul(h, self.weight[:h.shape[-1]])
-
-    def rot_inv(self, h):
-        h = torch.matmul(h, self.weight.T[:,:self.og_size])
-        return h
+class RotationMatrix(RankRotationMatrix):
+    def __init__(self, size, *args, **kwargs):
+        """
+        size: int
+            the height and width of the rotation matrix
+        rank: int
+            the number of dims to slice the rotation matrix
+        identity_init: bool
+            if true, will initialize the rotation matrix to the identity
+            matrix.
+        bias: bool
+            if true, will include a shifting term in the rotation matrix
+        mu: float or FloatTensor (size,)
+            Used to center each feature dim of the activations.
+        sigma: float or FloatTensor (size,)
+            Used to scale each feature dim of the activations.
+        identity_rot: bool
+            if true, will always reset the rotation matrix to the
+            identity. Used for debugging.
+        """
+        kwargs["rank"] = size
+        super().__init__(size=size, *args, **kwargs)
 
 class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
     def __init__(self, size, identity_init=False, *args, **kwargs):
@@ -163,7 +183,7 @@ class PSDRotationMatrix(RotationMatrix):
         h = h*self.sigma + self.mu
         return h
 
-class RelaxedRotationMatrix(RotationMatrix):
+class RelaxedRotationMatrix(RankRotationMatrix):
     """
     This module is similar to the RotationMatrix, it will however relax
     the orthonormal constraint on the rotation matrix, constraining it to
@@ -196,18 +216,18 @@ class RelaxedRotationMatrix(RotationMatrix):
 
     def get_condition(self, p="fro"):
         if self.rot_first:
-            m = torch.matmul(self.rot_module.weight, self.scale_mtx)
+            m = torch.matmul(self.weight, self.scale_mtx[:self.rank])
         else:
-            m = torch.matmul(self.scale_mtx, self.rot_module.weight)
+            m = torch.matmul(self.scale_mtx, self.weight)
         return torch.linalg.cond(m,p=p)
 
     def diag_forward(self, h):
-        diag = self.diag+self.eps*torch.sign(self.diag)
+        diag = (self.diag+self.eps*torch.sign(self.diag))[:h.shape[-1]]
         return torch.matmul(h,torch.diag(diag))
         #return torch.matmul(h,torch.diag(self.diag+self.eps))
 
     def diag_inv(self, h):
-        diag = self.diag+self.eps*torch.sign(self.diag)
+        diag = (self.diag+self.eps*torch.sign(self.diag))[:h.shape[-1]]
         return torch.matmul(h,torch.diag(1/diag))
         #return torch.matmul(h,torch.diag(1/(self.diag+self.eps)))
 
@@ -229,7 +249,7 @@ class RelaxedRotationMatrix(RotationMatrix):
         if inverse: return self.rot_inv(h)-self.bias
         return self.rot_forward(h+self.bias)
 
-class ScaledRotationMatrix(RotationMatrix):
+class ScaledRotationMatrix(RankRotationMatrix):
     """
     This module is similar to the RotationMatrix, it will however apply
     a scaling before the initial rotation.
@@ -303,6 +323,13 @@ class InvertibleMatrix(RotationMatrix):
         return self.rot_forward(h)
 
 class Mask(torch.nn.Module):
+    @property
+    def mask(self):
+        return self._mask
+
+    def get_boundary_mask(self):
+        return self.mask
+
     def forward(self, target, source):
         """
         target: torch tensor (B,H)
@@ -326,7 +353,6 @@ class Mask(torch.nn.Module):
             swapped = masked_target
             swapped[...,:masked_src.shape[-1]] += masked_src
         return swapped
-
 
 class FixedMask(Mask):
     def __init__(self,
@@ -353,14 +379,6 @@ class FixedMask(Mask):
             mask = torch.zeros(self.size).float()
             mask[:self.n_units] = 1
         self.register_buffer("_mask", mask)
-        
-    @property
-    def mask(self):
-        return self._mask
-
-    def get_boundary_mask(self):
-        return self.mask
-        
 
 class ZeroMask(Mask):
     def __init__(self,
@@ -391,14 +409,6 @@ class ZeroMask(Mask):
         add_size = self.size-self.n_units
         if self.learnable_add and add_size>0:
             self.add_vec = torch.nn.Parameter(0.01*torch.randn(add_size))
-        
-    @property
-    def mask(self):
-        return self._mask
-
-    def get_boundary_mask(self):
-        return self.mask
-        
 
 class BoundlessMask(FixedMask):
     def __init__(self,
@@ -451,7 +461,7 @@ class BoundlessMask(FixedMask):
         boundary_x, boundary_y = self.boundaries
         return (torch.sigmoid((self.indices - boundary_x) / self.temperature) * \
             torch.sigmoid((boundary_y - self.indices) / self.temperature))**2
-        
+
 class InterventionModule(torch.nn.Module):
     def __init__(self,
             sizes,
@@ -474,14 +484,27 @@ class InterventionModule(torch.nn.Module):
         """
         super().__init__()
         self.sizes = sizes
-        if type(self.sizes)==int: self.sizes = [self.sizes]
+        if type(self.sizes)==int:
+            self.sizes = [self.sizes]
         
         # Rotation Matrices
+        if type(mtx_types)==str:
+            mtx_types = [mtx_types]
+        if len(mtx_types)<len(self.sizes):
+            mtx_types = [mtx_types[0] for _ in self.sizes]
         if mtx_kwargs is None:
-            mtx_kwargs = [{} for _ in mtx_types]
+            mtx_kwargs = [{} for _ in self.sizes]
+        elif type(mtx_kwargs)==dict:
+            mtx_kwargs = [mtx_kwargs for _ in self.sizes]
         for i,d in enumerate(mtx_kwargs):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
+            if mtx_types[i] not in {"RotationMatrix", "PSDRotationMatrix"}:
+                d["rank"] = d.get("rank",
+                    d.get("n_units",
+                        mask_kwargs.get("n_units", None)
+                    )
+                )
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
@@ -510,11 +533,11 @@ class InterventionModule(torch.nn.Module):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        rot_target_h = self.rot_mtxs[target_idx](target)
+        rot_trg_h = self.rot_mtxs[target_idx](target)
         rot_src_h = self.rot_mtxs[source_idx](source)
 
         rot_swapped = self.swap_mask(
-            target=rot_target_h,
+            target=rot_trg_h,
             source=rot_src_h
         )
 
@@ -523,36 +546,28 @@ class InterventionModule(torch.nn.Module):
 
 
 if __name__=="__main__":
-    n_mtxs = 1
     seq_len = 10
     n_neurons=2
     proj_size = 100
     identity_init = False
-    identity_rot = True
-    bias = False
-    relaxed = False
-    scaled = False
-    rot_bias = False
-    rand_diag = False
-    rot_first = False
+    identity_rot = False
 
     x = torch.Tensor([[1,0,0]])
     y = torch.Tensor([[0,0,0]])
     size = 3
     #size = [x.shape[-1], y.shape[-1],]
     #size = [y.shape[-1], x.shape[-1], ]
-
     intr_modu = InterventionModule(
-            size=size,
-            proj_size=proj_size,
-            n_neurons=n_neurons,
-            relaxed=relaxed,
-            scaled=scaled,
-            rot_first=rot_first,
-            n_mtxs=n_mtxs,
-            rot_bias=rot_bias,
-            identity_init=identity_init,
-            identity_rot=identity_rot,)
+            sizes=size,
+            mtx_types=["RankRotationMatrix", "RankRotationMatrix"],
+            mtx_kwargs={
+                "rank": n_neurons,
+                "proj_size": proj_size,
+                "identity_init": identity_init,
+                "identity_rot": identity_rot,
+            },
+            mask_type="FixedMask", 
+            mask_kwargs=None,)
 
     print("x:", x)
     with torch.no_grad():

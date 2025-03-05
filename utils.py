@@ -3,6 +3,7 @@ import numpy as np
 import json
 import yaml
 import os
+from tqdm import tqdm
 
 def device_fxn(device):
     if device<0: return "cpu"
@@ -153,6 +154,7 @@ def collect_activations(
         outputs["attentions"] = []
     if ret_pred_ids: outputs["pred_ids"] = []
     rnge = range(0,len(input_ids), batch_size)
+    if verbose: rnge = tqdm(rnge)
     for batch in rnge:
         x = input_ids[batch:batch+batch_size]
         amask = None
@@ -242,10 +244,31 @@ def load_json(file_name):
         j = json.loads(s)
     return j
 
-def load_text(file_name):
+def default_to_list(val, n_el):
+    """
+    Simplifies extracting the appropriate type for parameters that
+    are lists.
+
+    Args:
+        val: list or anything else
+        n_el: int
+            desired number of elements in the final list
+    Returns:
+        list: length n_el
+            returns a list of length n_el
+    """
+    if type(val) != list:
+        return [val for _ in range(n_el)]
+    elif len(val)<n_el:
+        return val + [val[0] for _ in range(n_el-len(val))]
+    return val[:n_el]
+
+def load_text(file_name, strip=True):
     file_name = os.path.expanduser(file_name)
     with open(file_name, "r") as f:
         lines = f.readlines()
+    if strip:
+        lines = [line.strip() for line in lines]
     return lines
 
 def is_jsonable(x):
@@ -339,3 +362,18 @@ def get_command_line_args(args):
                 val = float(val)
             config[key] = val
     return config
+
+def extract_ids(string, tokenizer):
+    """
+    Args:
+        string: str
+        tokenizer: Tokenizer object
+    """
+    ids = tokenizer(string, return_tensors="pt")["input_ids"]
+    assert len(ids.shape)<=2
+    if len(ids.shape)==2: ids = ids[0]
+    if ids[0]==tokenizer.bos_token_id:
+        ids = ids[1:]
+    if ids[-1]==tokenizer.eos_token_id and len(ids)>1:
+        ids = ids[:-1]
+    return ids

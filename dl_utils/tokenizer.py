@@ -55,7 +55,8 @@ or
 
 def tokenize(main_string, delimeters={" "},
                           special_tokens={"\\newline",'\n'},
-                          split_digits=True,
+                          words=set(),
+                          split_digits=False,
                           lowercase=False):
     """
     Returns a list of tokens delimeted by the strings contained in the
@@ -83,7 +84,7 @@ def tokenize(main_string, delimeters={" "},
     tokens = []
     s = ""
     for i,char in enumerate(main_string):
-        if s in special_tokens:
+        if s in special_tokens or s in words:
             tokens.append(s)
             s = ""
         
@@ -246,14 +247,16 @@ class Tokenizer():
     """
     def __init__(self, word2id=None,
                        id2word=None,
-                       split_digits=True,
+                       split_digits=False,
                        pad_token="<PAD>",
                        bos_token="<BOS>",
                        eos_token="<EOS>",
                        unk_token="<UNK>",
                        strings=None,
                        words={"\\newline",'\n'},
-                       delimeters={" "}):
+                       delimeters={" "},
+                       padding_side="right",
+        ):
         """
         word2id: dict
             keys: str
@@ -294,6 +297,7 @@ class Tokenizer():
             strings to use as delimeters in the tokenization. if None,
             defaults to spaces.
         """
+        self.padding_side = padding_side
         self.pad_token = Tokenizer.pad_token
         self.bos_token = Tokenizer.bos_token
         self.eos_token = Tokenizer.eos_token
@@ -308,6 +312,7 @@ class Tokenizer():
             "bos_token": self.bos_token,
             "eos_token": self.eos_token,
         }
+        self.delimeters = delimeters
         if unk_token is not None:
             self.unk_token = unk_token
         else:
@@ -335,6 +340,9 @@ class Tokenizer():
         for k,v in self.special_tokens.items():
             splt = k.split("_")
             s = f"{splt[0]}_id"
+            setattr(self, s, word2id[v])
+            self.special_ids[s] = word2id[v]
+            s = f"{splt[0]}_token_id"
             setattr(self, s, word2id[v])
             self.special_ids[s] = word2id[v]
 
@@ -419,6 +427,9 @@ class Tokenizer():
                 print(f"Tokenizer key error using {string}")
             return self.unk_id
 
+    def convert_tokens_to_ids(self, string, verbose=False):
+        return self.convert2id(string, verbose=verbose)
+
     def convert2word(self, id_, verbose=False):
         """
         This function is useful for getting the string of individual ids.
@@ -457,7 +468,7 @@ class Tokenizer():
         special_tokens = {*special_tokens, *self.special_tokens.values()}
         max_len = 0
         toks = []
-        words = set()
+        words = set(self.word2id.keys())
         for i in range(len(lostr)):
             try:
                 toks.append(
@@ -466,6 +477,7 @@ class Tokenizer():
                         split_digits=self.split_digits,
                         delimeters=self.delimeters,
                         special_tokens=special_tokens,
+                        words=words,
                     )
                 )
             except:
@@ -483,11 +495,12 @@ class Tokenizer():
     def toks_to_ids(self,
                     toks,
                     seq_len,
-                    add_bos=True,
-                    add_eos=True,
+                    add_bos=False,
+                    add_eos=False,
                     as_tensor=True,
-                    truncate=False,
+                    truncation=False,
                     padding=None,
+                    padding_side=None,
                     verbose=False):
         """
         Used to convert tokens to ids
@@ -520,6 +533,7 @@ class Tokenizer():
         Returns:
             X: list of lists of ids | torch long tensor (N,seq_len)
         """
+        if not padding_side: padding_side = self.padding_side
         assert not as_tensor or (seq_len and as_tensor) 
         if seq_len is None: seq_len = np.inf
         assert seq_len>=int(add_eos)+int(add_bos)+1
@@ -528,16 +542,19 @@ class Tokenizer():
             ids.append([])
             if add_bos: ids[i].append(self.bos_id)
             for j,t in enumerate(samp):
-                if j==seq_len-1 and add_eos:
+                if j==seq_len-1 and add_eos and truncation:
                     ids[i].append(self.eos_id)
                     break
                 ids[i].append(self.convert2id(t, verbose=verbose))
             if add_eos and len(ids[i])<seq_len:
                 ids[i].append(self.eos_id)
             if seq_len<np.inf and (len(ids[i])<seq_len or padding):
-                for j in range(len(ids[i]),seq_len):
-                    ids[i].append(self.pad_id)
-            if seq_len<np.inf and truncate:
+                pad_list = [self.pad_id for _ in range(seq_len-len(ids[i]))]
+                if padding_side=="right":
+                    ids[i] = ids[i] + pad_list
+                else:
+                    ids[i] = pad_list + ids[i]
+            if seq_len<np.inf and truncation:
                 ids[i] = ids[i][:seq_len]
             if verbose:
                 print(round(float(i)/len(toks)*100),"%", end="    \r")
@@ -616,10 +633,12 @@ class Tokenizer():
                     strings,
                     as_tensor=True,
                     seq_len=None,
-                    add_eos=True,
-                    add_bos=True,
+                    add_eos=False,
+                    add_bos=False,
                     truncation=False,
-                    padding=True,):
+                    padding=True,
+                    padding_side="right",
+                    ):
         """
         Converts a list of strings to a list of token id lists or a
         single tensor of ids
@@ -646,8 +665,12 @@ class Tokenizer():
                 a list of the integer indices of each token in the
                 argued strings
         """
+        if not padding_side: padding_side = self.padding_side
         if type(strings)==str: strings = [strings]
-        toks,max_len,_ = self.tokenize(strings,ret_all=True)
+        toks,max_len,_ = self.tokenize(
+            strings,
+            ret_all=True,
+        )
         if seq_len is None and (as_tensor or padding):
             seq_len = max_len + add_eos + add_bos
         ids = self.toks_to_ids(
@@ -656,8 +679,9 @@ class Tokenizer():
             add_bos=add_bos,
             add_eos=add_eos,
             as_tensor=as_tensor,
-            truncate=truncate,
+            truncation=truncation,
             padding=padding,
+            padding_side=padding_side,
         )
         return ids
 
@@ -667,9 +691,10 @@ class Tokenizer():
              return_tensors=None,
              max_length=None,
              add_bos=True,
-             add_eos=True,
+             add_eos=False,
              truncation=False,
              padding=True,
+             padding_side=None,
         ):
         """
         Converts a list of strings to a list of tokens
@@ -692,6 +717,7 @@ class Tokenizer():
                 a list of the integer indices of each token in the
                 argued strings
         """
+        if not padding_side: padding_side = self.padding_side
         if return_tensors: as_tensor = True
         # I'll allow it
         if type(strings)==type(torch.zeros(0)):
@@ -704,6 +730,7 @@ class Tokenizer():
             add_bos=add_bos,
             truncation=truncation,
             padding=padding,
+            padding_side=padding_side,
         )
         attention_mask = ids!=self.pad_id
         return {
