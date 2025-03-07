@@ -172,6 +172,7 @@ def forward_pass(
         tokenizer=None,
         pad_mask=None,
         task_mask=None,
+        shuffle_targ_ids=False,
         verbose=False,
     ):
     ## Get batch
@@ -184,11 +185,15 @@ def forward_pass(
     comms_dict["intrv_module"].to(device)
     comms_dict["src_activations"] =\
         src_activations[batch_indices].to(device)
+    input_ids = batch["input_ids"]
     if "swap_idxs" in batch:
         ssm = src_swap_idxs[batch_indices].to(device)
         comms_dict["src_swap_idxs"] = ssm
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
+        if shuffle_targ_ids:
+            perm = torch.randperm(tsm.long().sum()).long()
+            input_ids[tsm] = input_ids[tsm][perm.to(device)]
 
     ## Run model
     outputs = model(
@@ -598,6 +603,7 @@ def main():
                         src_activations=all_src_activations["train"][sidx],
                         src_swap_idxs=all_src_swap_idxs["train"][sidx],
                         device=devices[tidx],
+                        shuffle_targ_ids=config.get("shuffle_targ_ids", False),
                     )
                     accum = config.get("grad_accumulation_steps", 1)
                     loss = loss/accum/4.0
