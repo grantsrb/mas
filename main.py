@@ -1,6 +1,7 @@
 import sys
 import os
 import torch
+import time
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset, Dataset, load_from_disk
@@ -158,6 +159,115 @@ def get_model_and_tokenizer(model_name, device=0, padding_side="left"):
     model.eval()
     return model, tokenizer
 
+def forward_pass(
+        sidx,
+        tidx,
+        model,
+        batch_indices,
+        dataset,
+        comms_dict,
+        src_activations,
+        src_swap_idxs,
+        device,
+        tokenizer=None,
+        pad_mask=None,
+        task_mask=None,
+        verbose=False,
+    ):
+    ## Get batch
+    batch = collate_fn( batch_indices, dataset, device=device)
+
+    ## Set Comms Dict Values
+    comms_dict["src_idx"] = sidx
+    comms_dict["trg_idx"] = tidx
+    comms_dict["loop_count"] = 0
+    comms_dict["intrv_module"].to(device)
+    comms_dict["src_activations"] =\
+        src_activations[batch_indices].to(device)
+    if "swap_idxs" in batch:
+        ssm = src_swap_idxs[batch_indices].to(device)
+        comms_dict["src_swap_idxs"] = ssm
+        tsm = batch["swap_idxs"].to(device)
+        comms_dict["trg_swap_idxs"] = tsm
+
+    ## Run model
+    outputs = model(
+        input_ids=batch["input_ids"],
+        attention_mask=batch["attention_mask"],)
+
+    # Calc Loss
+    if "logits" in outputs:
+        logits = outputs["logits"]
+    else:
+        logits = outputs.logits
+
+    V = logits.shape[-1]
+    flat = logits.reshape(-1,V)
+    labels = batch["labels"].reshape(-1)
+    tmask = batch["attention_mask"]
+
+    loss = F.cross_entropy(
+        flat[tmask.reshape(-1)],
+        labels[tmask.reshape(-1)]
+    )
+
+    if "task_mask" in batch:
+        tmask = batch["task_mask"].to(device)
+    else:
+        tmask = batch["attention_mask"]
+    trial = torch.ones_like(batch["labels"]).bool()
+    pids = torch.argmax(logits, dim=-1)
+    labels = batch["labels"]
+    eq = pids[tmask]==labels[tmask]
+    trial[tmask] = eq
+    trial_acc = trial.sum(-1)==trial.shape[-1]
+    trial_acc = trial_acc.float().mean()
+    tok_acc = eq.float().mean()
+
+    if verbose:
+        labels = batch["labels"]
+        inpts = batch["input_ids"]
+        outs = torch.argmax(logits, dim=-1)#[perm[:2]]
+        pmask = ~pad_mask[batch_indices]
+        input_mask = pmask
+        if task_mask is not None:
+            tmask = task_mask[batch_indices]
+            input_mask = pmask&(~tmask)
+        else:
+            tmask = pmask
+
+        trg_pad_id =  tokenizer.pad_token_id
+        trg_pad_tok = tokenizer.pad_token
+
+        for i in range(min(2,len(outs))):
+            # Input Text
+            input_text = tokenizer.decode(inpts[i][input_mask[i]])
+            if type(input_text)!=str:
+                input_text = input_text[0]
+            input_text = input_text.replace(trg_pad_tok, "")
+
+            # Target Text
+            target_text = tokenizer.decode(labels[i][tmask[i]])
+            if type(target_text)!=str:
+                target_text = target_text[0]
+            target_text = target_text.replace(trg_pad_tok, "")
+
+            # Generated Text
+            generated_text = tokenizer.decode(outs[i][tmask[i]])
+            if type(generated_text)!=str:
+                generated_text = generated_text[0]
+            generated_text = generated_text.replace(trg_pad_tok, "")
+
+            print("Input    :", input_text.replace("\n", "\\n"))
+            print("Target   :", target_text.replace("\n", "\\n"))
+            print("Generated:", generated_text.replace("\n", "\\n"))
+            print()
+            print("GenIds:", outs[i][tmask[i]])
+            print("TrgIds:", labels[i][tmask[i]])
+            print()
+
+    return loss, tok_acc, trial_acc
+
 def main():
     arg_config = get_command_line_args(sys.argv)
     ##########################
@@ -284,82 +394,50 @@ def main():
     #    Load the dataset
     ##########################
     print("Loading datasets...")
-    datasets = []
+    datasets = { "train": [], "valid": [], }
     for mi in range(len(config["dataset_names"])):
-        dkwargs = {**config["dataset_kwargs"][mi]}
-        dkwargs["split"] = "train"
-        dkwargs["data_path"] = config.get(
-            "train_data_paths",
-            ["./data/multiobj.json", "./data/multiobj.json"]
-        )[mi]
-        dataset = get_dataset(config["dataset_names"][mi], **dkwargs)
-        datasets.append(dataset)
-    #dkwargs["split"] = "valid"
-    #valid_dataset = get_dataset(config["dataset_name"], **dkwargs)
+        for k in datasets:
+            dkwargs = {**config["dataset_kwargs"][mi]}
+            dkwargs["split"] = k
+            dkwargs["data_path"] = config.get(
+                f"{k}_data_paths",
+                ["./data/multiobj.json", "./data/multiobj.json"]
+            )[mi]
+            dataset = get_dataset(config["dataset_names"][mi], **dkwargs)
+            datasets[k].append(dataset)
 
-    ##########################
-    #    Filter the dataset to keep examples that both models answer correctly.
-    #    Save the filtered dataset to disk so that future runs can reload it.
-    ##########################
-    if not config.get("filter_by_correct", True):
-        filtered_dataset = dataset
-    else:
-        filtered_dataset_path = config["filtered_dataset_path"]
-        if filtered_dataset_path and os.path.exists(filtered_dataset_path):
-            print(f"Loading filtered dataset from disk at {filtered_dataset_path} ...")
-            filtered_dataset = load_from_disk(filtered_dataset_path)
-        else:
-            print("Filtering dataset by correctness (this may take a while)...")
-            filtered_examples = []
-            num_examples = len(dataset)
-            eval_bs = config["eval_batch_size"]
-            for start in range(0, num_examples, eval_bs):
-                batch = dataset[start: start + eval_bs]
-                correct_mask1 = gsm8k_is_correct_batch(
-                    models[0], tokenizers[0], batch, devices[0], max_new_tokens=50)
-                correct_mask2 = gsm8k_is_correct_batch(
-                    models[1], tokenizers[1], batch, devices[1], max_new_tokens=50)
-                # Only keep examples where both models are correct.
-                answers = batch["answer"]
-                questions = batch["question"]
-                for ans, q, corr1, corr2 in zip(answers, questions, correct_mask1, correct_mask2):
-                    if corr1 and corr2:
-                        filtered_examples.append({"answer": ans, "question": q})
-                if start % (eval_bs * 5) == 0:
-                    print(f"Processed {start + len(batch)} examples; {len(filtered_examples)} kept so far.")
-            if len(filtered_examples) == 0:
-                print("WARNING: No examples passed the correctness filter. Using a small subset of the dataset instead.")
-                filtered_examples = dataset.select(range(min(10, len(dataset))))
-            filtered_dataset = Dataset.from_list(filtered_examples)
-            print(f"Saving filtered dataset to disk at {filtered_dataset_path} ...")
-            filtered_dataset.save_to_disk(filtered_dataset_path)
-    
     ##########################
     #    Tokenize the filtered dataset for autoregressive training.
     #    Here we form an input by concatenating the question and
     #    answer (with a newline and “Answer:” marker).
     ##########################
-    train_tokenized_datasets = []
+    tokenized_datasets = {k: [] for k in datasets}
     for mi,tokenizer in enumerate(tokenizers):
-        temp = {**config}
-        temp["dataset_name"] = temp["dataset_names"][mi]
-        temp["replacements"] = temp["replacements"][mi]
-        temp["prompt"] = temp["prompts"][mi]
-        train_tokenized_datasets.append(
-            tokenize_dataset(
-                dataset=filtered_dataset,
-                tokenizer=tokenizer,
-                config=temp,
+        for k in tokenized_datasets:
+            kwrgs = {**config}
+            kwrgs["dataset_name"] = kwrgs["dataset_names"][mi]
+            kwrgs["replacements"] = kwrgs["replacements"][mi]
+            kwrgs["prompt"] = kwrgs["prompts"][mi]
+            tokenized_datasets[k].append(
+                tokenize_dataset(
+                    dataset=datasets[k][mi],
+                    tokenizer=tokenizer,
+                    config=kwrgs,
+                )
             )
-        )
-    #train_tokenized_datasets = ensure_equal_length(
-    #    train_tokenized_datasets, pad_sides=padding_sides)
 
     # Create a DataLoader that iterates over indices of the filtered dataset.
-    indices = list(range(len(filtered_dataset)))
+    indices = list(range(len(datasets["train"][0])))
     train_loader = DataLoader(
         indices,
         batch_size=config["batch_size"],
+        shuffle=True
+    )
+
+    indices = list(range(len(datasets["valid"][0])))
+    valid_loader = DataLoader(
+        indices,
+        batch_size=config["eval_batch_size"],
         shuffle=True
     )
     
@@ -367,86 +445,75 @@ def main():
     #    Collect Source Activations
     ##########################
     with torch.no_grad():
-        src_activations = []
-        src_swap_idxs = []
-        src_task_masks = []
-        src_pred_ids = []
-        src_logits = []
-        src_probs = []
-        pad_masks = []
+        all_src_activations = {k:[] for k in datasets}
+        all_src_swap_idxs =   {k:[] for k in datasets}
+        all_src_task_masks =  {k:[] for k in datasets}
+        all_src_pred_ids =    {k:[] for k in datasets}
+        all_src_logits =      {k:[] for k in datasets}
+        all_src_probs =       {k:[] for k in datasets}
+        all_src_pad_masks =   {k:[] for k in datasets}
         print("Collecting Activations")
-        for mi,model in enumerate(models):
-            device = devices[mi]
-            print("Model", mi, config["model_names"][mi])
-            print("Device:", device)
-            vbsize = config.get("eval_batch_size", 128)
-            batch = collate_fn(
-                torch.arange(len(train_tokenized_datasets[mi])).long(),
-                train_tokenized_datasets[mi],
-                device="cpu")
+        for k in all_src_activations:
+            for mi,model in enumerate(models):
+                startt = time.time()
+                device = devices[mi]
+                print("Model", mi, config["model_names"][mi])
+                print("Device:", device)
+                vbsize = config.get("eval_batch_size", 128)
+                batch = collate_fn(
+                    torch.arange(len(tokenized_datasets[k][mi])).long(),
+                    tokenized_datasets[k][mi],
+                    device="cpu")
 
-            actvs = collect_activations(
-                model,
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                layers=[config["layers"][mi], "lm_head"],
-                ret_pred_ids=True,
-                batch_size=vbsize,
-                to_cpu=True,
-                verbose=True,
-            )
+                actvs = collect_activations(
+                    model,
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    layers=[config["layers"][mi], "lm_head"],
+                    ret_pred_ids=True,
+                    batch_size=vbsize,
+                    to_cpu=True,
+                    verbose=True,
+                )
 
-            src_activations.append(actvs[config["layers"][mi]])
-            src_activations[-1] = src_activations[-1].squeeze()
+                all_src_activations[k].append(actvs[config["layers"][mi]])
+                all_src_activations[k][-1] = all_src_activations[k][-1].squeeze()
 
-            logits = actvs["lm_head"].squeeze()
-            src_logits.append(logits)
+                logits = actvs["lm_head"].squeeze()
+                all_src_logits[k].append(logits)
 
-            src_probs.append(torch.softmax(logits, dim=-1))
-             
-            pad_id = tokenizers[mi].pad_token_id
-            eos_id = getattr(tokenizers[mi], "eos_id", -1)
-            pad_masks.append(
-              (batch["input_ids"]==pad_id)|(batch["input_ids"]==eos_id))
+                all_src_probs[k].append(torch.softmax(logits, dim=-1))
 
-            src_pred_ids.append(actvs["pred_ids"].squeeze())
-            src_pred_ids[-1][pad_masks[-1]] = pad_id
+                pad_id = tokenizers[mi].pad_token_id
+                eos_id = getattr(tokenizers[mi], "eos_id", -1)
+                all_src_pad_masks[k].append(
+                  (batch["input_ids"]==pad_id)|(batch["input_ids"]==eos_id))
 
-            if "swap_idxs" in batch:
-                src_swap_idxs.append(batch["swap_idxs"].cpu())
-            if "task_mask" in batch:
-                src_task_masks.append(batch["task_mask"].cpu())
+                all_src_pred_ids[k].append(actvs["pred_ids"].squeeze())
+                all_src_pred_ids[k][-1][all_src_pad_masks[k][-1]] = pad_id
 
-            if "task_mask" in batch:
-                tmask = batch["task_mask"].to(device)
-                flat_tmask = tmask.reshape(-1)
-            else:
-                tmask = pad_masks[-1].to(device)
-                flat_tmask = tmask.reshape(-1)
-            corrects = torch.ones_like(tmask)
-            pids = src_pred_ids[-1].to(device)[tmask]
-            tids = batch["labels"] .to(device)[tmask]
-            idx = pids==tids
-            corrects[tmask] = idx
-            corrects = corrects.float().sum(-1)==corrects.shape[-1]
-            tokacc = (idx).float().mean().item()
-            fullacc = corrects.float().mean().item()
-            print("TokAcc:", tokacc)
-            print("FullAcc:", fullacc)
-            ## TODO
-            #idxs = torch.arange(len(corrects)).long().to(device)[~corrects]
-            #for _ in idxs:
-            #    amask = ~batch["attention_mask"][_]
-            #    pmask = ~pad_masks[-1][_]
-            #    t = tmask[_].cpu()
-            #    print("Inpts:", batch["input_ids"][_][pmask])
-            #    print("Preds:", src_pred_ids[-1][_][pmask])
-            #    print("Targs:", batch["labels"][_][pmask])
-            #    print("TInpt:", batch["input_ids"][_][t])
-            #    print("TPred:", src_pred_ids[-1][_][t])
-            #    print("TTarg:", batch["labels"][_][t])
-            #break
+                if "swap_idxs" in batch:
+                    all_src_swap_idxs[k].append(batch["swap_idxs"].cpu())
+                if "task_mask" in batch:
+                    all_src_task_masks[k].append(batch["task_mask"].cpu())
 
+                if "task_mask" in batch:
+                    tmask = batch["task_mask"].to(device)
+                    flat_tmask = tmask.reshape(-1)
+                else:
+                    tmask = all_src_pad_masks[k][-1].to(device)
+                    flat_tmask = tmask.reshape(-1)
+                corrects = torch.ones_like(tmask)
+                pids = all_src_pred_ids[k][-1].to(device)[tmask]
+                tids = batch["labels"] .to(device)[tmask]
+                idx = pids==tids
+                corrects[tmask] = idx
+                corrects = corrects.float().sum(-1)==corrects.shape[-1]
+                tokacc = (idx).float().mean().item()
+                fullacc = corrects.float().mean().item()
+                print(k.capitalize(), "TokAcc:", tokacc)
+                print(k.capitalize(), "FullAcc:", fullacc)
+                print("Exec Time:", time.time()-startt)
 
     ##########################
     #    Define a single rotation matrix as a learnable parameter.
@@ -490,9 +557,12 @@ def main():
     models = [model.eval() for model in models]
     optimizer.zero_grad()
     df_dict = {
-        "loss": [],
-        "tok_acc": [],
-        "trial_acc": [],
+        "train_loss": [],
+        "train_tok_acc": [],
+        "train_trial_acc": [],
+        "valid_loss": [],
+        "valid_tok_acc": [],
+        "valid_trial_acc": [],
         "src_idx": [],
         "trg_idx": [],
     }
@@ -505,51 +575,30 @@ def main():
             tot_loss = 0
             tot_tok = 0
             tot_trial = 0
+
+            val_losses = []
+            val_trial_accs = []
+            val_tok_accs = []
+            startt = time.time()
             for sidx in range(len(models)):
                 losses.append([])
                 trial_accs.append([])
                 tok_accs.append([])
+                val_losses.append([])
+                val_trial_accs.append([])
+                val_tok_accs.append([])
                 for tidx in range(len(models)):
-                    ## Get batch
-                    batch = collate_fn(
-                        batch_indices,
-                        train_tokenized_datasets[tidx],
-                        device=devices[tidx])
-
-                    ## Model 1 -> Model 2
-                    comms_dict["src_idx"] = sidx
-                    comms_dict["trg_idx"] = tidx
-                    comms_dict["loop_count"] = 0
-                    comms_dict["intrv_module"].to(devices[tidx])
-                    comms_dict["src_activations"] =\
-                        src_activations[sidx][batch_indices].to(devices[tidx])
-                    if "swap_idxs" in batch:
-                        ssm = src_swap_idxs[sidx][batch_indices].to(devices[tidx])
-                        comms_dict["src_swap_idxs"] = ssm
-                        tsm = batch["swap_idxs"].to(devices[tidx])
-                        comms_dict["trg_swap_idxs"] = tsm
-
-                    ## Run model
-                    outputs = models[tidx](
-                        input_ids=batch["input_ids"],
-                        attention_mask=batch["attention_mask"],)
-
-                    # Calc Loss
-                    if "logits" in outputs:
-                        logits = outputs["logits"]
-                    else:
-                        logits = outputs.logits
-
-                    V = logits.shape[-1]
-                    flat = logits.reshape(-1,V)
-                    labels = batch["labels"].reshape(-1)
-                    tmask = batch["attention_mask"]
-
-                    loss = F.cross_entropy(
-                        flat[tmask.reshape(-1)],
-                        labels[tmask.reshape(-1)]
+                    loss, tok_acc, trial_acc = forward_pass(
+                        sidx=sidx,
+                        tidx=tidx,
+                        model=models[tidx],
+                        comms_dict=comms_dict,
+                        batch_indices=batch_indices,
+                        dataset=tokenized_datasets["train"][tidx],
+                        src_activations=all_src_activations["train"][sidx],
+                        src_swap_idxs=all_src_swap_idxs["train"][sidx],
+                        device=devices[tidx],
                     )
-
                     accum = config.get("grad_accumulation_steps", 1)
                     loss = loss/accum/4.0
                     if config["save_memory"]:
@@ -557,91 +606,44 @@ def main():
                     losses[-1].append(loss.item())
                     tot_loss += loss.to(devices[0])
 
-                    if "task_mask" in batch:
-                        tmask = batch["task_mask"].to(devices[tidx])
-                    else:
-                        tmask = batch["attention_mask"]
-                    trial = torch.ones_like(batch["labels"]).bool()
-                    pids = torch.argmax(logits, dim=-1)
-                    #print("Labels:", batch["labels"][0][tmask[0]])
-                    #print("\t", tokenizers[tidx].decode(batch["labels"][0][tmask[0]]))
-                    #print("Pids:", pids[0][tmask[0]])
-                    #print("\t", tokenizers[tidx].decode(pids[0][tmask[0]]))
-                    #print("Tids:", tids[0][smask[0]])
-                    #print("pids", pids.shape)
-                    #print("tmask", tmask.shape)
-                    #print("tids", tids.shape)
-                    #print("smask", smask.shape)
-                    labels = batch["labels"]
-                    eq = pids[tmask]==labels[tmask]
-                    trial[tmask] = eq
-                    trial_acc = trial.sum(-1)==trial.shape[-1]
-                    trial_acc = trial_acc.float().mean()
-                    tok_acc = eq.float().mean()
-
                     tot_trial += trial_acc.item()/4.0
                     tot_tok += tok_acc.item()/4.0
                     trial_accs[-1].append(trial_acc.item())
                     tok_accs[-1].append(tok_acc.item())
 
-                    df_dict["loss"].append(loss.item())
-                    df_dict["tok_acc"].append(tok_acc.item())
-                    df_dict["trial_acc"].append(trial_acc.item())
-                    df_dict["src_idx"].append(sidx)
-                    df_dict["trg_idx"].append(tidx)
-
                     # Print a sample generation every print_every steps.
                     if global_step % config["print_every"] == 0:
-
+                        ####################################################
+                        #### VALIDATION
+                        ####################################################
                         print("\n\nSource Model", sidx, "- Target Model", tidx)
-                        print(f"Step {global_step}, Loss: {loss.item()}")
-                        perm = torch.randperm(len(logits)).long()
-                        labels = batch["labels"]
-                        inpts = batch["input_ids"]
-                        outs = torch.argmax(logits, dim=-1)#[perm[:2]]
-                        pmask = ~pad_masks[tidx][batch_indices]
-                        input_mask = pmask
-                        if len(src_task_masks)>0:
-                            tmask = src_task_masks[tidx][batch_indices]
-                            input_mask = pmask&(~tmask)
-                        else:
-                            tmask = pmask
-
-                        trg_pad_id = tokenizers[tidx].pad_token_id
-                        trg_pad_tok = tokenizers[tidx].pad_token
-
-                        for i in range(min(2,len(outs))):
-                            # Input Text
-                            input_text = tokenizers[tidx].decode(inpts[i][input_mask[i]])
-                            if type(input_text)!=str:
-                                input_text = input_text[0]
-                            input_text = input_text.replace(trg_pad_tok, "")
-
-                            # Target Text
-                            target_text = tokenizers[tidx].decode(labels[i][tmask[i]])
-                            if type(target_text)!=str:
-                                target_text = target_text[0]
-                            target_text = target_text.replace(trg_pad_tok, "")
-
-                            # Generated Text
-                            generated_text = tokenizers[tidx].decode(outs[i][tmask[i]])
-                            if type(generated_text)!=str:
-                                generated_text = generated_text[0]
-                            generated_text = generated_text.replace(trg_pad_tok, "")
-
-                            print("Input    :", input_text.replace("\n", "\\n"))
-                            print("Target   :", target_text.replace("\n", "\\n"))
-                            print("Generated:", generated_text.replace("\n", "\\n"))
-                            print()
-                            print("GenIds:", outs[i][tmask[i]])
-                            print("TrgIds:", labels[i][tmask[i]])
-                            print()
-                        print("Mtx  Type:", config["mtx_types"][0])
-                        print("Mask Type:", config["mask_type"],
-                                "- Learn:", config["learnable_addition"],
-                                "- Units:", intrv_module.swap_mask.n_units)
-                        print()
-
+                        print("Validating...")
+                        val_loss = 0
+                        val_tok = 0
+                        val_trial = 0
+                        with torch.no_grad():
+                            for val_indices in valid_loader:
+                                vloss, vtok, vtrial = forward_pass(
+                                    sidx=sidx,
+                                    tidx=tidx,
+                                    model=models[tidx],
+                                    comms_dict=comms_dict,
+                                    batch_indices=val_indices,
+                                    dataset=tokenized_datasets["valid"][tidx],
+                                    src_activations=all_src_activations["valid"][sidx],
+                                    src_swap_idxs=all_src_swap_idxs["valid"][sidx],
+                                    device=devices[tidx],
+                                    tokenizer=tokenizers[tidx],
+                                    pad_mask=all_src_pad_masks["valid"][tidx],
+                                    task_mask=all_src_task_masks["valid"][tidx],
+                                    verbose=True,
+                                )
+                                val_loss  += vloss.item() /len(valid_loader)
+                                val_tok   += vtok.item()  /len(valid_loader)
+                                val_trial += vtrial.item()/len(valid_loader)
+                            val_losses[-1].append(val_loss)
+                            val_tok_accs[-1].append(val_tok)
+                            val_trial_accs[-1].append(val_trial)
 
             if not config["save_memory"]:
                 tot_loss.backward()
@@ -650,21 +652,53 @@ def main():
                 optimizer.zero_grad()
 
             if global_step % config["print_every"] == 0:
-                print("Step:", global_step)
-                print("Tot Loss:", tot_loss.item())
-                print("Tok Acc:",  tot_tok)
-                print("\tM1->M1:", tok_accs[0][0])
-                print("\tM1->M2:", tok_accs[0][1])
-                print("\tM2->M1:", tok_accs[1][0])
-                print("\tM2->M2:", tok_accs[1][1])
-                print("Trial Acc:",tot_trial)
-                print("\tM1->M1:", trial_accs[0][0])
-                print("\tM1->M2:", trial_accs[0][1])
-                print("\tM2->M1:", trial_accs[1][0])
-                print("\tM2->M2:", trial_accs[1][1])
+                print("Mtx  Type:", config["mtx_types"][0])
+                print("Mask Type:", config["mask_type"],
+                        "- Learn:", config["learnable_addition"],
+                        "- Units:", intrv_module.swap_mask.n_units)
+                print()
+
+                print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                print("Train Tok Acc:",  tot_tok)
+                print("\tM1->M1:", round(tok_accs[0][0], 5),
+                      "| M1->M2:", round(tok_accs[0][1],5))
+                print("\tM2->M1:", round(tok_accs[1][0], 5),
+                      "| M2->M2:", round(tok_accs[1][1],5))
+                print("Train Trial Acc:",tot_trial)
+                print("\tM1->M1:", round(trial_accs[0][0],5),
+                      "| M1->M2:", round(trial_accs[0][1], 5))
+                print("\tM2->M1:", round(trial_accs[1][0],5),
+                      "| M2->M2:", round(trial_accs[1][1],5))
+                print()
+                print("Valid Tok Acc:")
+                print("\tM1->M1:", round(val_tok_accs[0][0], 5),
+                      "| M1->M2:", round(val_tok_accs[0][1], 5))
+                print("\tM2->M1:", round(val_tok_accs[1][0], 5),
+                      "| M2->M2:", round(val_tok_accs[1][1], 5))
+                print("Valid Trial Acc:")
+                print("\tM1->M1:", round(val_trial_accs[0][0],5),
+                      "| M1->M2:", round(val_trial_accs[0][1],5))
+                print("\tM2->M1:", round(val_trial_accs[1][0],5),
+                      "| M2->M2:", round(val_trial_accs[1][1],5))
+                print("Saving To", os.path.join(save_folder, save_name))
+                print("Exec Time:", time.time()-startt)
+                print()
+
+                for s in range(len(models)):
+                    for t in range(len(models)):
+                        df_dict["train_loss"].append(float(losses[s][t]))
+                        df_dict["train_tok_acc"].append(float(tok_accs[s][t]))
+                        df_dict["train_trial_acc"].append(float(trial_accs[s][t]))
+                        df_dict["valid_loss"].append(float(val_losses[s][t]))
+                        df_dict["valid_tok_acc"].append(float(val_tok_accs[s][t]))
+                        df_dict["valid_trial_acc"].append(float(val_trial_accs[s][t]))
+                        df_dict["src_idx"].append(s)
+                        df_dict["trg_idx"].append(t)
+
             
             ### Save loss and state dict
             if global_step%config.get("save_every_steps", 100):
+                print("Saving To", os.path.join(save_folder, save_name))
                 csv = os.path.join(save_folder, save_name + ".csv")
                 df = pd.DataFrame(df_dict)
                 df.to_csv(csv, header=True, index=False)
