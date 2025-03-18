@@ -24,18 +24,30 @@ from interchange import InterventionModule
 
 import pandas as pd # import after transformers
 
-def fill_in_prompts_and_replacements(config, yaml_path="./prompts.yaml"):
-    prompts = load_yaml(yaml_path)
+def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
+    consts = load_yaml(yaml_path)
     config["prompts"] = []
     config["replacements"] = []
     for model_name in config["model_names"]:
-        config["prompts"].append(prompts["prompts"].get(model_name, ""))
-        config["replacements"].append(
-            prompts["replacements"].get(
+        # Get prompts
+        prompt = consts["prompts"].get(model_name, "")
+        if not prompt:
+            for k in consts["prompts"]:
+                if k in model_name:
+                    prompt = consts["prompts"][k]
+        config["prompts"].append(prompt)
+
+        # Get string replacement dict
+        replacements = consts["replacements"].get(
                 model_name,
-                [default_replacement_dict]
-            )[0]
-        )
+                None
+            )
+        if not replacements:
+            replacements = {**default_replacement_dict}
+            for k in consts["replacements"]:
+                if k in model_name:
+                    replacements = {**replacements, **consts["replacements"][k]}
+        config["replacements"].append(replacements)
     return config
 
 def gsm8k_is_correct_batch(model, tokenizer, examples, device, max_new_tokens=50):
@@ -192,8 +204,9 @@ def forward_pass(
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
         if shuffle_targ_ids:
-            perm = torch.randperm(tsm.long().sum()).long()
-            input_ids[tsm] = input_ids[tsm][perm.to(device)]
+            mask = tsm>-1
+            perm = torch.randperm(mask.long().sum()).long()
+            input_ids[mask] = input_ids[mask][perm.to(device)]
 
     ## Run model
     outputs = model(
@@ -516,6 +529,15 @@ def main():
                 corrects = corrects.float().sum(-1)==corrects.shape[-1]
                 tokacc = (idx).float().mean().item()
                 fullacc = corrects.float().mean().item()
+
+                # Generated Text
+                input_text = tokenizer.decode(batch["input_ids"])
+                if type(input_text)!=str:
+                    input_text = input_text[0]
+                input_text = input_text.replace(tokenizer.pad_token, "")
+                print("ExIds :", batch["input_ids"][0][:10])
+                print("ExInpt:", input_text.replace("\n", "\\n"))
+
                 print(k.capitalize(), "TokAcc:", tokacc)
                 print(k.capitalize(), "FullAcc:", fullacc)
                 print("Exec Time:", time.time()-startt)
@@ -642,6 +664,7 @@ def main():
                                     tokenizer=tokenizers[tidx],
                                     pad_mask=all_src_pad_masks["valid"][tidx],
                                     task_mask=all_src_task_masks["valid"][tidx],
+                                    shuffle_targ_ids=config.get("shuffle_targ_ids", False),
                                     verbose=True,
                                 )
                                 val_loss  += vloss.item() /len(valid_loader)
@@ -686,7 +709,7 @@ def main():
                       "| M1->M2:", round(val_trial_accs[0][1],5))
                 print("\tM2->M1:", round(val_trial_accs[1][0],5),
                       "| M2->M2:", round(val_trial_accs[1][1],5))
-                print("Saving To", os.path.join(save_folder, save_name))
+                print("Experiment:", os.path.join(save_folder, save_name))
                 print("Exec Time:", time.time()-startt)
                 print()
 
@@ -704,7 +727,7 @@ def main():
             
             ### Save loss and state dict
             if global_step%config.get("save_every_steps", 100):
-                print("Saving To", os.path.join(save_folder, save_name))
+                #print("Saving To", os.path.join(save_folder, save_name))
                 csv = os.path.join(save_folder, save_name + ".csv")
                 df = pd.DataFrame(df_dict)
                 df.to_csv(csv, header=True, index=False)

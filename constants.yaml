@@ -1,0 +1,44 @@
+# Store prompts that worked here
+prompts:
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": "user_word For each trial, I am going to say \"demo_word0\" some number of times and then I want you to respond bysaying \"resp_word\" the exact same number of times that I said \"demo_word0\" in that trial. Please say \"done_word\" at the end of your response to indicate that you are finished. Do not say or think anything else. 
+    Example: user_word demo_word0 trig_wordasst_word resp_word done_word 
+    Example: user_word demo_word0 demo_word0 trig_wordasst_word resp_word resp_word done_word 
+    Begin Trial: user_word "
+
+    "gpt2": "user_word For each trial, I am going to say \"demo_word0\" some number of times and then I want you to respond bysaying \"resp_word\" the exact same number of times that I said \"demo_word0\" in that trial. Please say \"done_word\" at the end of your response to indicate that you are finished. Do not say or think anything else. 
+    Example: user_word demo_word0 trig_wordasst_word resp_word done_word 
+    Example: user_word demo_word0 demo_word0 trig_wordasst_word resp_word resp_word done_word 
+    Begin Trial: user_word "
+
+    "sameobj": ""
+
+replacements:
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": 
+        demo_word0: "nut"
+        demo_word1: "nut"
+        demo_word2: "nut"
+        trig_word: ":"
+        asst_word: ""
+        user_word: "User:"
+        resp_word: "seed"
+        done_word: "stop"
+
+    "gpt2": 
+        demo_word0: "nut"
+        demo_word1: "nut"
+        demo_word2: "nut"
+        trig_word: ":"
+        asst_word: ""
+        user_word: "User:"
+        resp_word: "seed"
+        done_word: "stop"
+
+    "sameobj": 
+        demo_word0: "D"
+        demo_word1: "D"
+        demo_word2: "D"
+        trig_word: "T"
+        asst_word: ""
+        user_word: ""
+        resp_word: "D"
+        done_word: "<EOS>"
