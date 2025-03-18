@@ -131,9 +131,9 @@ def collate_fn(batch_indices, tokenized_dataset, device=0):
     """
     batch = tokenized_dataset.select(batch_indices)
     d = {
-        "input_ids": torch.tensor(batch["input_ids"])[...,:-1],
+        "input_ids":      torch.tensor(batch["input_ids"])[...,:-1],
         "attention_mask": torch.tensor(batch["attention_mask"])[...,:-1],
-        "labels": torch.tensor(batch["input_ids"])[...,1:],
+        "labels":         torch.tensor(batch["input_ids"])[...,1:],
     }
     try:
         d["task_mask"] = torch.tensor(batch["task_mask"])[...,1:].bool()
@@ -195,12 +195,21 @@ def tokenize_dataset(dataset, tokenizer, config):
 
         max_length = get_max_length(text[0], tokenizer)
         print("Tokenizing")
-        tok_dict = tokenizer(
-            text,
-            padding="max_length",
-            return_tensors="pt",
-            max_length=max_length,
-        )
+        try:
+            tok_dict = tokenizer(
+                text,
+                padding="max_length",
+                return_tensors="pt",
+                max_length=max_length,
+                add_bos=False,
+            )
+        except:
+            tok_dict = tokenizer(
+                text,
+                padding="max_length",
+                return_tensors="pt",
+                max_length=max_length,
+            )
         idx = tok_dict["input_ids"]==tokenizer.bos_token_id
         dupls = idx.long().sum(-1)>1
         idxs = torch.argmax(idx.long(), dim=-1)[dupls]
