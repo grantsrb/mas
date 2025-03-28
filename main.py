@@ -276,9 +276,20 @@ def forward_pass(
                 generated_text = generated_text[0]
             generated_text = generated_text.replace(trg_pad_tok, "")
 
-            print("Input    :", input_text.replace("\n", "\\n"))
-            print("Target   :", target_text.replace("\n", "\\n"))
-            print("Generated:", generated_text.replace("\n", "\\n"))
+            if shuffle_targ_ids:
+                print("Shuffled Input IDs")
+            print("Input    :", input_text.replace("\n", "\\n")\
+                .replace("<BOS>", "B")\
+                .replace("<EOS>", "E")
+            )
+            print("Target   :", target_text.replace("\n", "\\n")\
+                .replace("<BOS>", "B")\
+                .replace("<EOS>", "E")
+            )
+            print("Generated:", generated_text.replace("\n", "\\n")\
+                .replace("<BOS>", "B")\
+                .replace("<EOS>", "E")
+            )
             print()
             print("GenIds:", outs[i][tmask[i]])
             print("TrgIds:", labels[i][tmask[i]])
@@ -458,7 +469,7 @@ def main():
         batch_size=config["eval_batch_size"],
         shuffle=True
     )
-    
+
     ##########################
     #    Collect Source Activations
     ##########################
@@ -584,6 +595,7 @@ def main():
     models = [model.eval() for model in models]
     optimizer.zero_grad()
     df_dict = {
+        "global_step": [],
         "train_loss": [],
         "train_tok_acc": [],
         "train_trial_acc": [],
@@ -638,6 +650,7 @@ def main():
                     tot_tok += tok_acc.item()/4.0
                     trial_accs[-1].append(trial_acc.item())
                     tok_accs[-1].append(tok_acc.item())
+                    print("Loss:", round(loss.item(), 5), end="                \r")
 
                     # Print a sample generation every print_every steps.
                     if global_step % config["print_every"] == 0:
@@ -710,11 +723,15 @@ def main():
                 print("\tM2->M1:", round(val_trial_accs[1][0],5),
                       "| M2->M2:", round(val_trial_accs[1][1],5))
                 print("Experiment:", os.path.join(save_folder, save_name))
+                print("M1:", config["model_names"][0])
+                if len(config["model_names"])>1:
+                    print("M2:", config["model_names"][1])
                 print("Exec Time:", time.time()-startt)
                 print()
 
                 for s in range(len(models)):
                     for t in range(len(models)):
+                        df_dict["global_step"].append(global_step)
                         df_dict["train_loss"].append(float(losses[s][t]))
                         df_dict["train_tok_acc"].append(float(tok_accs[s][t]))
                         df_dict["train_trial_acc"].append(float(trial_accs[s][t]))
