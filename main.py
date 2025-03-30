@@ -195,6 +195,7 @@ def forward_pass(
     comms_dict["trg_idx"] = tidx
     comms_dict["loop_count"] = 0
     comms_dict["intrv_module"].to(device)
+    comms_dict["intrv_module"].reset()
     comms_dict["src_activations"] =\
         src_activations[batch_indices].to(device)
     input_ids = batch["input_ids"]
@@ -291,9 +292,9 @@ def forward_pass(
                 .replace("<EOS>", "E")
             )
             print()
-            print("GenIds:", outs[i][tmask[i]])
-            print("TrgIds:", labels[i][tmask[i]])
-            print()
+            #print("TrgIds:", labels[i][tmask[i]])
+            #print("GenIds:", outs[i][tmask[i]])
+            #print()
 
     return loss, tok_acc, trial_acc
 

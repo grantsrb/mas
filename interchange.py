@@ -1,6 +1,8 @@
 import math
 import torch
 import copy
+
+from fca import FunctionalComponentAnalysis
 from utils import device_fxn
 
 class RankRotationMatrix(torch.nn.Module):
@@ -94,6 +96,9 @@ class RankRotationMatrix(torch.nn.Module):
     def shape(self):
         return self.weight.shape
 
+    def reset(self):
+        pass
+
     def get_condition(self, p=None):
         return torch.linalg.cond(self.weight, p=p)
 
@@ -132,6 +137,49 @@ class RotationMatrix(RankRotationMatrix):
         """
         kwargs["rank"] = size
         super().__init__(size=size, *args, **kwargs)
+
+class FCARotationMatrix(RankRotationMatrix):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        size = self.rot_module.weight.shape[-1]
+        self.rot_module = FunctionalComponentAnalysis(
+            size=size,
+            means=self.mu if type(self.mu)==torch.Tensor else None,
+            stds=self.sigma if type(self.sigma)==torch.Tensor else None,
+        )
+        for _ in range(self.rank):
+            self.rot_module.add_component()
+        self.rot_module.set_fixed(True)
+
+    @property
+    def weight(self):
+        if self.identity_rot:
+            return torch.eye(
+              self.size, device=self.rot_module.get_device(),).float()
+        return self.rot_module.weight
+
+    @property
+    def size(self):
+        return self.rot_module.size
+
+    @property
+    def shape(self):
+        return self.rot_module.weight.shape
+
+    def reset(self):
+        self.rot_module.reset_fixed_weight()
+
+    def get_condition(self, p=None):
+        return torch.ones(1)
+
+    def rot_forward(self, h):
+        return self.rot_module(h)
+
+    def rot_inv(self, h):
+        return self.rot_module(h, inverse=True)
+
+    def forward(self, h, inverse=False):
+        return self.rot_module(h, inverse=inverse)
 
 class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
     def __init__(self, size, identity_init=False, *args, **kwargs):
@@ -465,10 +513,11 @@ class BoundlessMask(FixedMask):
 class InterventionModule(torch.nn.Module):
     def __init__(self,
             sizes,
-            mtx_types=["RotationMatrix", "RotationMatrix"],
+            mtx_types=["FCARotationMatrix", "FCARotationMatrix"],
             mtx_kwargs=None,
             mask_type="FixedMask", 
             mask_kwargs=None,
+            allow_reversal=True,
             *args, **kwargs):
         """
         Args:
@@ -481,6 +530,11 @@ class InterventionModule(torch.nn.Module):
                 the type of mask for doing the substitution
             mask_kargs: dict
                 keyword arguments for the mask object
+            allow_reversal: bool
+                if true, will allow for efficiency savings making the
+                assumption that there are only two relevant subspaces.
+                Only applies if using rotation matrices with specified
+                ranks
         """
         super().__init__()
         self.sizes = sizes
@@ -496,6 +550,7 @@ class InterventionModule(torch.nn.Module):
             mtx_kwargs = [{} for _ in self.sizes]
         elif type(mtx_kwargs)==dict:
             mtx_kwargs = [mtx_kwargs for _ in self.sizes]
+        self.do_reversal = False
         for i,d in enumerate(mtx_kwargs):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
@@ -505,6 +560,10 @@ class InterventionModule(torch.nn.Module):
                         mask_kwargs.get("n_units", None)
                     )
                 )
+                if allow_reversal and d["rank"]>d["size"]//2:
+                    self.do_reversal = self.do_reversal
+                    d["rank"] = d["size"]-d["rank"]
+                    assert mask_type in {"FixedMask"}
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
@@ -517,6 +576,11 @@ class InterventionModule(torch.nn.Module):
             mask_kwargs = {"n_units": n_units}
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
+
+    def reset(self):
+        for mtx in self.rot_mtxs:
+            if hasattr(mtx, "reset"):
+                mtx.reset()
 
     def forward(self, target, source, target_idx=0, source_idx=-1):
         """
@@ -533,17 +597,25 @@ class InterventionModule(torch.nn.Module):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        rot_trg_h = self.rot_mtxs[target_idx](target)
-        rot_src_h = self.rot_mtxs[source_idx](source)
 
-        rot_swapped = self.swap_mask(
-            target=rot_trg_h,
-            source=rot_src_h
-        )
+        if self.do_reversal:
+            # Instead of learning all components, learn fewer components
+            # by learning the lesser half of the components
+            mtx = self.rot_mtxs[target_idx]
+            new_h = base + mtx(mtx(base), inverse=True)
+            mtx = self.rot_mtxs[source_idx]
+            new_h = new_h - mtx(mtx(source), inverse=True)
+        else:
+            rot_trg_h = self.rot_mtxs[target_idx](target)
+            rot_src_h = self.rot_mtxs[source_idx](source)
 
-        new_h = self.rot_mtxs[target_idx](rot_swapped, inverse=True)
+            rot_swapped = self.swap_mask(
+                target=rot_trg_h,
+                source=rot_src_h
+            )
+
+            new_h = self.rot_mtxs[target_idx](rot_swapped, inverse=True)
         return new_h
-
 
 if __name__=="__main__":
     seq_len = 10
