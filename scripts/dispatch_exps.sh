@@ -4,8 +4,8 @@
 exp_name="mas_dispatch"
 gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_saves/"
-exp_folders1=( "big-sameobj" ) #"lstm_multiobj" "tformer_multiobj_unk_d40" "big-multiobj" "big-sameobj" "lstm_sameobj" )
-exp_folders2=( "lstm_multiobj" )
+exp_folders1=( "big-multiobj" "lstm_multiobj" "tformer_multiobj_unk_d40" ) #"big-multiobj" "lstm_multiobj" "tformer_multiobj_unk_d40" "big-sameobj" "lstm_sameobj" )
+exp_folders2=( "big-sameobj" )
 config="configs/numequiv.yaml"
 
 echo Dispatching
