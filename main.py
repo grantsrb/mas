@@ -706,6 +706,7 @@ def main():
                     tok_accs[-1].append(tok_acc.item())
                     print("Loss:", round(loss.item(), 5),
                         "- Time:", round(time.time()-runtime,5),
+                        "- Step:", round(global_step),
                         end="                  \r"
                     )
 
