@@ -544,7 +544,8 @@ class InterventionModule(torch.nn.Module):
         elif type(mtx_kwargs)==dict:
             mtx_kwargs = [mtx_kwargs for _ in self.sizes]
         self.do_reversal = False
-        default_rank = min([size for size in self.sizes])//2
+        max_rank = min([size for size in self.sizes])
+        default_rank = max_rank//2
         for i,d in enumerate(mtx_kwargs):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
@@ -555,6 +556,9 @@ class InterventionModule(torch.nn.Module):
                     )
                 )
                 if d["rank"] is None: d["rank"] = default_rank
+                elif d["rank"]>max_rank:
+                    print("Reducing Interchange Rank to", max_rank)
+                    d["rank"] = max_rank
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
