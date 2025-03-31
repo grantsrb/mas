@@ -14,12 +14,13 @@ from datas import (
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
-    default_to_list, get_git_revision_hash,
+    default_to_list,
 )
 import seq_models as smods
 from dl_utils.save_io import (
     get_save_name, load_checkpoint, get_folder_from_path, save_json, load_yaml,
 )
+from dl_utils.utils import get_git_revision_hash
 from dl_utils.tokenizer import Tokenizer
 from interchange import InterventionModule
 
