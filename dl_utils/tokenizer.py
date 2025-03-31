@@ -575,7 +575,8 @@ class Tokenizer():
                 a list of lists of the string values of the argued
                 ids
         """
-        if type(ids)==int: ids = [[ids]]
+        if type(ids)==int or (hasattr(ids, "shape") and len(ids.shape)==0):
+            ids = [[ids]]
         elif hasattr(ids, "shape") and len(ids.shape)==1: ids = [ids]
         elif type(ids)==list and type(ids[0])==int: ids = [ids]
         toks = []
