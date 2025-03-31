@@ -27,6 +27,7 @@ class FunctionalComponentAnalysis(nn.Module):
                  means=None,
                  stds=None,
                  orthogonalization_vectors=None,
+                 init_rank=None,
                  *args, **kwargs):
         """
         Args:
@@ -35,6 +36,9 @@ class FunctionalComponentAnalysis(nn.Module):
             max_rank: int or None
                 The maximum number of components to learn. If None,
                 the maximum rank is equal to the size.
+            init_rank: int or None
+                The initial number of components to learn. If None,
+                the rank is 1
             remove_components: bool
                 If True, the model will remove components from
                 the vectors in the forward hook.
@@ -68,7 +72,9 @@ class FunctionalComponentAnalysis(nn.Module):
         self.train_list = []
         self.fixed_list = []
         self.orthogonalization_mtx = None
-        self.add_component()
+        init_rank = 1 if init_rank is None else init_rank
+        for _ in range(init_rank):
+            self.add_component()
         self.is_fixed = False
         self.fixed_weight = None
         self.excl_ortho_list = []
