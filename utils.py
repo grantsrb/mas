@@ -365,15 +365,22 @@ def get_command_line_args(args):
 
 def extract_ids(string, tokenizer):
     """
+    Returns the token_ids for the string, but does so without the
+    bos_id and without the eos_id.
+
     Args:
         string: str
         tokenizer: Tokenizer object
     """
-    ids = tokenizer(string, return_tensors="pt")["input_ids"]
-    assert len(ids.shape)<=2
-    if len(ids.shape)==2: ids = ids[0]
-    if ids[0]==tokenizer.bos_token_id:
-        ids = ids[1:]
-    if ids[-1]==tokenizer.eos_token_id and len(ids)>1:
-        ids = ids[:-1]
+    ids = tokenizer.convert_tokens_to_ids(string)
+    if ids is None or (type(ids)==int and ids == 0):
+        ids = tokenizer(string, return_tensors="pt")["input_ids"]
+        assert len(ids.shape)<=2
+        if len(ids.shape)==2: ids = ids[0] # just removes wrapping
+        if ids[0]==tokenizer.bos_token_id:
+            ids = ids[1:]
+        if ids[-1]==tokenizer.eos_token_id and len(ids)>1:
+            ids = ids[:-1]
+    elif not hasattr(ids, "__len__"):
+        ids = torch.LongTensor([ids])
     return ids
