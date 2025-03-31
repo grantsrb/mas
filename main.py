@@ -1,6 +1,7 @@
 import sys
 import os
 import torch
+import numpy as np
 import time
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -310,7 +311,7 @@ def forward_pass(
 
     return loss, tok_acc, trial_acc
 
-def get_embedding_name(model):
+def get_embedding_name(model, layer=""):
     """
     This function serves to unify the layer naming amongst different
     model types.
@@ -318,14 +319,15 @@ def get_embedding_name(model):
     Args:
         model: torch Module
     """
-    longest_name = ""
-    long_len = 0
+    simplist_name = ""
+    shortest_len = np.inf
     for name, modu in model.named_modules():
         if type(modu)==torch.nn.Embedding or "Embedding" in str(type(modu)):
-            if len(name)>long_len:
-                long_len = len(name)
-                longest_name = name
-    return longest_name
+            if name==layer: return name
+            if len(name.split("."))<shortest_len:
+                shortest_len = len(name.split("."))
+                simplist_name = name
+    return simplist_name
 
 def main():
     arg_config = get_command_line_args(sys.argv)
