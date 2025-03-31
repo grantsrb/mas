@@ -162,7 +162,7 @@ def replace_text(text, replacement_dict=default_replacement_dict):
 
 def get_max_length(text, tokenizer):
     toks = tokenizer(text, return_tensors="pt")["input_ids"]
-    return toks.shape[-1] + 20*2
+    return toks.shape[-1] + 20*2 + 2
 
 def tokenize_dataset(dataset, tokenizer, config):
     prompt = config.get("prompt", "")
@@ -194,7 +194,7 @@ def tokenize_dataset(dataset, tokenizer, config):
 
 
         max_length = get_max_length(text[0], tokenizer)
-        print("Tokenizing")
+        print("Tokenizing - Max Len:", max_length)
         try:
             tok_dict = tokenizer(
                 text,
@@ -209,6 +209,7 @@ def tokenize_dataset(dataset, tokenizer, config):
                 padding="max_length",
                 return_tensors="pt",
                 max_length=max_length,
+                truncation=True,
             )
         idx = tok_dict["input_ids"]==tokenizer.bos_token_id
         dupls = idx.long().sum(-1)>1
@@ -254,10 +255,11 @@ def tokenize_dataset(dataset, tokenizer, config):
             # Quick Tests
             assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])
             tmask = torch.BoolTensor(tok_dict["task_mask"][0])
-            eos_ids = torch.LongTensor([
+            eos_ids = [e for e in [
                 tokenizer.convert_tokens_to_ids(reps["done_word"]),
                 tokenizer.convert_tokens_to_ids(" "+reps["done_word"]),
-            ])
+            ] if e is not None]
+            eos_ids = torch.LongTensor(eos_ids)
             assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
         tokenized = Dataset.from_dict(tok_dict)
     return tokenized
