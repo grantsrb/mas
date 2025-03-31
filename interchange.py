@@ -554,6 +554,7 @@ class InterventionModule(torch.nn.Module):
                         mask_kwargs.get("n_units", default_rank)
                     )
                 )
+                if d["rank"] is None: d["rank"] = default_rank
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
