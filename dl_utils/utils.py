@@ -637,6 +637,21 @@ def get_mask_between(shape, startx, endx):
     arr = arr.repeat(reps)
     return (arr>=startx[:,None])&(arr<endx[:,None])
 
+def get_mask_past_arglast(arr, inclusive=False):
+    """
+    Returns a binary mask that covers all indices past the arglast in
+    the argued arr along the last axis.
+
+    Args:
+        arr: torch tensor
+    Returns:
+        mask: bool tensor (shape)
+    """
+    arglasts = arglast(arr)
+    mask = get_mask_past_idx(
+        shape=arr.shape, idx=arglasts, inclusive=inclusive)
+    return mask.to(device_fxn(arr.get_device()))
+
 def package_versions(globals_dict=None, verbose=False):
     """
     Finds the versions of all packages used in this script
@@ -1076,16 +1091,23 @@ def rolling_window(array, window, time_axis=0):
 
 
 if __name__=="__main__":
-    shape = (5,6)
-    sz = 10
-    k = 4
-    for i in range(3):
-        window = k+i
-        mask = generate_ktoken_causal_mask(
-            sz=sz, k=window, dtype="float"
-        )
-        print("sz:", sz)
-        print("k:", window)
-        print(mask)
-        print(mask.long())
-        print()
+    arr = torch.Tensor([
+        [0,1,0,0],
+        [1,0,0,0],
+        [0,0,0,1],
+        [0,0,0,0],
+    ])
+    print(get_mask_past_arglast(arr, inclusive=True))
+    #shape = (5,6)
+    #sz = 10
+    #k = 4
+    #for i in range(3):
+    #    window = k+i
+    #    mask = generate_ktoken_causal_mask(
+    #        sz=sz, k=window, dtype="float"
+    #    )
+    #    print("sz:", sz)
+    #    print("k:", window)
+    #    print(mask)
+    #    print(mask.long())
+    #    print()

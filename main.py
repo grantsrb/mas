@@ -20,7 +20,7 @@ import seq_models as smods
 from dl_utils.save_io import (
     get_save_name, load_checkpoint, get_folder_from_path, save_json, load_yaml,
 )
-from dl_utils.utils import get_git_revision_hash
+from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast
 from dl_utils.tokenizer import Tokenizer
 from interchange import InterventionModule
 
@@ -218,16 +218,14 @@ def forward_pass(
         comms_dict["src_swap_idxs"] = ssm
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
+
         if shuffle_targ_ids:
             mask = tsm>-1
-
-            #perm = torch.randperm(mask.long().sum()).long()
-            # TODO Might be slow
+            # Shuffles the input ids
             msums = mask.long().sum(-1)
             perms = [torch.randperm(s).long() for s in msums]
             perm = [perms[i+1]+len(perms[i]) for i in range(len(perms)-1)]
             perm = torch.cat([perms[0]] + perm)
-
             input_ids[mask] = input_ids[mask][perm.to(device)]
 
     ## Run model
@@ -556,8 +554,8 @@ def main():
                     verbose=True,
                 )
 
-                all_src_activations[k].append(actvs[config["layers"][mi]])
-                all_src_activations[k][-1] = all_src_activations[k][-1].squeeze()
+                all_src_activations[k].append(
+                    actvs[config["layers"][mi]].squeeze())
 
                 logits = actvs["lm_head"].squeeze()
                 all_src_logits[k].append(logits)
@@ -565,9 +563,23 @@ def main():
                 all_src_probs[k].append(torch.softmax(logits, dim=-1))
 
                 pad_id = tokenizers[mi].pad_token_id
-                eos_id = getattr(tokenizers[mi], "eos_id", -1)
-                all_src_pad_masks[k].append(
-                  (batch["input_ids"]==pad_id)|(batch["input_ids"]==eos_id))
+                all_src_pad_masks[k].append( batch["input_ids"]==pad_id )
+                if "task_mask" in batch:
+                    dword = config["replacements"][mi].get("done_word",None)
+                    eos_ids = [tokenizers[mi].eos_token_id]
+                    if hasattr(tokenizers[mi], "eos_id"):
+                        eos_ids.append(tokenizers[mi].eos_id)
+                    try:
+                        eos_ids.append(int(tokenizers[mi](dword)["input_ids"][-1]))
+                    except: pass
+                    try:
+                        eos_ids.append(
+                            int(tokenizers[mi](" "+dword)["input_ids"][-1]))
+                    except: pass
+                    eos_ids = torch.LongTensor(eos_ids)
+                    in_eos_ids = torch.isin(batch["input_ids"].long(),eos_ids)
+                    eos_and_tmask = get_mask_past_arglast(in_eos_ids, inclusive=True)
+                    all_src_pad_masks[k][-1] = all_src_pad_masks[k][-1]|eos_and_tmask
 
                 all_src_pred_ids[k].append(actvs["pred_ids"].squeeze())
                 all_src_pred_ids[k][-1][all_src_pad_masks[k][-1]] = pad_id
@@ -594,12 +606,16 @@ def main():
 
                 # Generated Text
                 idx = 0
-                input_text = tokenizer.decode(batch["input_ids"][idx])
+                input_text = tokenizers[mi].decode(batch["input_ids"][idx])
                 if type(input_text)!=str:
                     input_text = input_text[0]
-                input_text = input_text.replace(tokenizer.pad_token, "")
+                input_text = input_text.replace(tokenizers[mi].pad_token, "")
                 print("ExIds :", batch["input_ids"][idx][:10])
-                print("ExInpt:", input_text.replace("\n", "\\n"))
+                print(
+                    "ExInpt:", input_text.replace("\n", "\\n")\
+                                         .replace("<BOS>", "B")\
+                                         .replace("<EOS>", "E")
+                )
 
                 print(k.capitalize(), "TokAcc:", tokacc)
                 print(k.capitalize(), "FullAcc:", fullacc)
