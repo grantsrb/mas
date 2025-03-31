@@ -517,7 +517,6 @@ class InterventionModule(torch.nn.Module):
             mtx_kwargs=None,
             mask_type="FixedMask", 
             mask_kwargs=None,
-            allow_reversal=True,
             *args, **kwargs):
         """
         Args:
@@ -530,11 +529,6 @@ class InterventionModule(torch.nn.Module):
                 the type of mask for doing the substitution
             mask_kargs: dict
                 keyword arguments for the mask object
-            allow_reversal: bool
-                if true, will allow for efficiency savings making the
-                assumption that there are only two relevant subspaces.
-                Only applies if using rotation matrices with specified
-                ranks
         """
         super().__init__()
         self.sizes = sizes
@@ -557,13 +551,9 @@ class InterventionModule(torch.nn.Module):
             if mtx_types[i] not in {"RotationMatrix", "PSDRotationMatrix"}:
                 d["rank"] = d.get("rank",
                     d.get("n_units",
-                        mask_kwargs.get("n_units", None)
+                        mask_kwargs.get("n_units", d["size"]//2)
                     )
                 )
-                if allow_reversal and d["rank"]>d["size"]//2:
-                    self.do_reversal = self.do_reversal
-                    d["rank"] = d["size"]-d["rank"]
-                    assert mask_type in {"FixedMask"}
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
@@ -598,23 +588,22 @@ class InterventionModule(torch.nn.Module):
                 the causally interchanged vector
         """
 
-        if self.do_reversal:
+        trg_mtx = self.rot_mtxs[target_idx]
+        src_mtx = self.rot_mtxs[source_idx]
+        if type(trg_mtx)==FCARotationMatrix or type(src_mtx)==FCARotationMatrix:
             # Instead of learning all components, learn fewer components
-            # by learning the lesser half of the components
-            mtx = self.rot_mtxs[target_idx]
-            new_h = base + mtx(mtx(base), inverse=True)
-            mtx = self.rot_mtxs[source_idx]
-            new_h = new_h - mtx(mtx(source), inverse=True)
+            new_h = target - trg_mtx(trg_mtx(target), inverse=True)
+            new_h = new_h + trg_mtx(src_mtx(source), inverse=True)
         else:
-            rot_trg_h = self.rot_mtxs[target_idx](target)
-            rot_src_h = self.rot_mtxs[source_idx](source)
+            rot_trg_h = trg_mtx(target)
+            rot_src_h = src_mtx(source)
 
             rot_swapped = self.swap_mask(
                 target=rot_trg_h,
                 source=rot_src_h
             )
 
-            new_h = self.rot_mtxs[target_idx](rot_swapped, inverse=True)
+            new_h = trg_mtx(rot_swapped, inverse=True)
         return new_h
 
 if __name__=="__main__":
