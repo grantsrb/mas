@@ -680,6 +680,7 @@ def main():
                 val_trial_accs.append([])
                 val_tok_accs.append([])
                 for tidx in range(len(models)):
+                    runtime = time.time()
                     loss, tok_acc, trial_acc = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
@@ -703,7 +704,10 @@ def main():
                     tot_tok += tok_acc.item()/4.0
                     trial_accs[-1].append(trial_acc.item())
                     tok_accs[-1].append(tok_acc.item())
-                    print("Loss:", round(loss.item(), 5), end="                \r")
+                    print("Loss:", round(loss.item(), 5),
+                        "- Time:", round(time.time()-runtime,5),
+                        end="                  \r"
+                    )
 
                     # Print a sample generation every print_every steps.
                     if global_step % config["print_every"] == 0:
