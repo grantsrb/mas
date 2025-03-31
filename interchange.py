@@ -146,9 +146,8 @@ class FCARotationMatrix(RankRotationMatrix):
             size=size,
             means=self.mu if type(self.mu)==torch.Tensor else None,
             stds=self.sigma if type(self.sigma)==torch.Tensor else None,
+            init_rank=self.rank,
         )
-        for _ in range(self.rank):
-            self.rot_module.add_component()
         self.rot_module.set_fixed(True)
 
     @property
@@ -545,13 +544,14 @@ class InterventionModule(torch.nn.Module):
         elif type(mtx_kwargs)==dict:
             mtx_kwargs = [mtx_kwargs for _ in self.sizes]
         self.do_reversal = False
+        default_rank = min([size for size in self.sizes])//2
         for i,d in enumerate(mtx_kwargs):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
-            if mtx_types[i] not in {"RotationMatrix", "PSDRotationMatrix"}:
+            if mtx_types[i] in {"RankRotationMatrix", "FCARotationMatrix"}:
                 d["rank"] = d.get("rank",
                     d.get("n_units",
-                        mask_kwargs.get("n_units", d["size"]//2)
+                        mask_kwargs.get("n_units", default_rank)
                     )
                 )
             mtx_kwargs[i] = d
