@@ -102,7 +102,7 @@ def get_swap_idxs(token_ids, replace_dict, tokenizer):
         )
     mask_keys = [
         "demo_word0", "demo_word1", "demo_word2",
-        "trig_word", "resp_word", "done_word",
+        "trig_word", "resp_word", 
     ]
     mask_vals = []
     for k in mask_keys:
