@@ -219,7 +219,14 @@ def forward_pass(
         comms_dict["trg_swap_idxs"] = tsm
         if shuffle_targ_ids:
             mask = tsm>-1
-            perm = torch.randperm(mask.long().sum()).long()
+
+            #perm = torch.randperm(mask.long().sum()).long()
+            # TODO Might be slow
+            msums = mask.long().sum(-1)
+            perms = [torch.randperm(s).long() for s in msums]
+            perm = [perms[i+1]+len(perms[i]) for i in range(len(perms)-1)]
+            perm = torch.cat([perms[0]] + perm)
+
             input_ids[mask] = input_ids[mask][perm.to(device)]
 
     ## Run model
