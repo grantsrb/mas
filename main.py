@@ -29,6 +29,7 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
     config["prompts"] = []
     config["replacements"] = []
     for model_name in config["model_names"]:
+        print("Model Name:", model_name)
         # Get prompts
         prompt = consts["prompts"].get(model_name, "")
         if not prompt:
@@ -36,6 +37,7 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
                 if k in model_name:
                     prompt = consts["prompts"][k]
         config["prompts"].append(prompt)
+        print("Prompt:", prompt)
 
         # Get string replacement dict
         replacements = consts["replacements"].get(
@@ -48,6 +50,10 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
                 if k in model_name:
                     replacements = {**replacements, **consts["replacements"][k]}
         config["replacements"].append(replacements)
+        print("Replacements:")
+        for k,v in replacements.items():
+            print(f"\t{k}: {v}")
+        print()
     return config
 
 def gsm8k_is_correct_batch(model, tokenizer, examples, device, max_new_tokens=50):
@@ -146,9 +152,9 @@ def get_hook_module(model, hook_layer):
     else:
         raise ValueError("Cannot locate hook layer in the model.")
 
-def get_model_and_tokenizer(model_name, device=0, padding_side="left"):
+def get_model_and_tokenizer(model_name, padding_side="left"):
     print(f"Loading model and tokenizer for {model_name}...")
-    if os.path.exists(model_name):
+    try:
         checkpt = load_checkpoint(model_name)
         mconfig = checkpt["config"]
         temp = smods.make_model(mconfig)
@@ -159,15 +165,21 @@ def get_model_and_tokenizer(model_name, device=0, padding_side="left"):
             unk_token=None,
             word2id=mconfig.get("word2id",{}),
             padding_side=padding_side)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            padding_side=padding_side)
+    except:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                padding_side=padding_side)
+        except:
+            model_name = "/".join(model_name.split("/")[-2:])
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                padding_side=padding_side)
         if not tokenizer.pad_token:
             tokenizer.pad_token = "<PAD>"
             tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("okay")
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device)
-    model.to(device)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, device_map="auto")
     model.eval()
     return model, tokenizer
 
@@ -298,6 +310,23 @@ def forward_pass(
 
     return loss, tok_acc, trial_acc
 
+def get_embedding_name(model):
+    """
+    This function serves to unify the layer naming amongst different
+    model types.
+
+    Args:
+        model: torch Module
+    """
+    longest_name = ""
+    long_len = 0
+    for name, modu in model.named_modules():
+        if type(modu)==torch.nn.Embedding or "Embedding" in str(type(modu)):
+            if len(name)>long_len:
+                long_len = len(name)
+                longest_name = name
+    return longest_name
+
 def main():
     arg_config = get_command_line_args(sys.argv)
     ##########################
@@ -356,13 +385,6 @@ def main():
     config["mask_kwargs"] = {**config}
     config = fill_in_prompts_and_replacements(config)
 
-    if torch.cuda.is_available():
-        if torch.cuda.device_count()>1:
-            devices = [0,1] 
-        else:
-            devices = [0,0] 
-    else:
-        devices = ["cpu","cpu"]
     config["padding_sides"] = default_to_list(
         config["padding_sides"],
         n_el=len(config["model_names"])
@@ -373,10 +395,10 @@ def main():
     if not os.path.exists(save_folder):
         save_folder = os.path.join(
             config.get("save_root", "./"),
-            config.get("exp_name", "myexperiment")
+            config["model_names"][0],
         )
     if not os.path.exists(save_folder):
-        os.mkdir(save_folder)
+        os.makedirs(save_folder, exist_ok=True)
     save_name = get_save_name(
         save_folder=save_folder,
         kwargs=arg_config,
@@ -389,16 +411,21 @@ def main():
     ##########################
     #    Load two models and tokenizers
     ##########################
+    poss_devices = ["cpu","cpu"]
+    if torch.cuda.is_available():
+        if torch.cuda.device_count()>1:
+            poss_devices = [0,1]
+        else:
+            poss_devices = [0,0]
     models = []
     tokenizers = []
     m_sizes = []
+    devices = []
     for mi,model_name in enumerate(config["model_names"]):
         model, tokenizer = get_model_and_tokenizer(
             model_name,
             padding_side=padding_sides[mi],
-            device=devices[mi]
         )
-        model.to(devices[mi])
         model.eval()
 
         # Freeze model parameters so that only our rotation matrix is trained.
@@ -408,7 +435,19 @@ def main():
         print(model)
         models.append(model)
         tokenizers.append(tokenizer)
-        
+        if config["layers"][mi] in {"embeddings", "inpt_identity"}:
+            config["layers"][mi] = get_embedding_name(model)
+            print("Decided Layer Name:", config["layers"][mi])
+
+        if hasattr(model, "hf_device_map"):
+            if config["layers"][mi] in model.hf_device_map:
+                devices.append(model.hf_device_map[config["layers"][mi]])
+            else:
+                devices.append(model.hf_device_map[""])
+        else:
+            devices.append(poss_devices[mi])
+            model.to(devices[-1])
+
         # Just collect a single step to determine the dimensionality of
         # the hooked layer
         with torch.no_grad():
@@ -543,16 +582,18 @@ def main():
                 fullacc = corrects.float().mean().item()
 
                 # Generated Text
-                input_text = tokenizer.decode(batch["input_ids"])
+                idx = 0
+                input_text = tokenizer.decode(batch["input_ids"][idx])
                 if type(input_text)!=str:
                     input_text = input_text[0]
                 input_text = input_text.replace(tokenizer.pad_token, "")
-                print("ExIds :", batch["input_ids"][0][:10])
+                print("ExIds :", batch["input_ids"][idx][:10])
                 print("ExInpt:", input_text.replace("\n", "\\n"))
 
                 print(k.capitalize(), "TokAcc:", tokacc)
                 print(k.capitalize(), "FullAcc:", fullacc)
                 print("Exec Time:", time.time()-startt)
+                print()
 
     ##########################
     #    Define a single rotation matrix as a learnable parameter.
