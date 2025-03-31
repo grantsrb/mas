@@ -14,7 +14,7 @@ from datas import (
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
-    default_to_list,
+    default_to_list, get_git_revision_hash,
 )
 import seq_models as smods
 from dl_utils.save_io import (
@@ -383,6 +383,7 @@ def main():
         "save_keys": ["mtx_types", "mask_type", "layers", "dataset_names"],
     }
     config = {**defaults}
+    config["git_hash"] = get_git_revision_hash()
     for k in arg_config: config[k] = arg_config[k]
     print("Config:")
     for k in sorted(list(config.keys())):
