@@ -108,8 +108,8 @@ def get_swap_idxs(token_ids, replace_dict, tokenizer):
     for k in mask_keys:
         k_ids = []
         text = replace_dict[k]
-        k_ids = [int(kid) for kid in extract_ids(string=text, tokenizer=tokenizer)]+\
-                [int(kid) for kid in extract_ids(string=" "+text, tokenizer=tokenizer)]
+        k_ids =[int(kid) for kid in extract_ids(string=text, tokenizer=tokenizer)]+\
+               [int(kid) for kid in extract_ids(string=" "+text,tokenizer=tokenizer)]
         mask_vals += k_ids
     mask_vals = torch.LongTensor(list(set(mask_vals)))
     isin = torch.isin(token_ids, mask_vals)
@@ -250,16 +250,24 @@ def tokenize_dataset(dataset, tokenizer, config):
                     fill_val=0,
                     side=tokenizer.padding_side,
                 ))
-            tok_dict["task_mask"] = tmasks
+            tok_dict["task_mask"] = torch.BoolTensor(tmasks)
+            eos_ids = [tokenizer.eos_token_id]
+            dword = reps["done_word"]
+            try:
+                eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
+            except: pass
+            try:
+                eos_ids.append(
+                    int(tokenizer(" "+dword)["input_ids"][-1]))
+            except: pass
+            eos_ids = torch.LongTensor(eos_ids)
+            in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
+            eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
+            tok_dict["attention_mask"] = tok_dict["attention_mask"]&~eos_and_tmask
 
             # Quick Tests
             assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])
-            tmask = torch.BoolTensor(tok_dict["task_mask"][0])
-            eos_ids = [e for e in [
-                tokenizer.convert_tokens_to_ids(reps["done_word"]),
-                tokenizer.convert_tokens_to_ids(" "+reps["done_word"]),
-            ] if e is not None]
-            eos_ids = torch.LongTensor(eos_ids)
+            tmask = tok_dict["task_mask"][0]
             assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
         tokenized = Dataset.from_dict(tok_dict)
     return tokenized
