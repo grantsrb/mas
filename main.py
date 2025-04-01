@@ -198,9 +198,11 @@ def forward_pass(
         tokenizer=None,
         pad_mask=None,
         task_mask=None,
-        shuffle_targ_ids=False,
+        config=dict(),
         verbose=False,
     ):
+    shuffle_targ_ids = config.get("shuffle_targ_ids", False)
+    consistent_targ_inpt_id = config.get("consistent_targ_inpt_id", False)
     ## Get batch
     batch = collate_fn( batch_indices, dataset, device=device)
 
@@ -219,7 +221,11 @@ def forward_pass(
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
 
-        if shuffle_targ_ids:
+        if consistent_targ_inpt_id:
+            resp_id = config.get("resp_id", 6)
+            mask = tsm>-1
+            input_ids[mask] = int(resp_id)
+        elif shuffle_targ_ids:
             mask = tsm>-1
             # Shuffles the input ids
             msums = mask.long().sum(-1)
@@ -370,6 +376,8 @@ def main():
         "mask_type":   "FixedMask", # BoundlessMask
         "n_units": None,
         "learnable_addition": False,
+        "consistent_targ_inpt_id": False, # If true, will use the resp_id for all target input ids
+        "fsr": False, # (Functionally sufficient representations) only applies if using fca. Discards the excess components. Equivalent to using a vector of 0s for all input embeddings
 
         "num_training_steps": 50000,
         "print_every": 100,
@@ -566,6 +574,10 @@ def main():
                 all_src_pad_masks[k].append( batch["input_ids"]==pad_id )
                 if "task_mask" in batch:
                     dword = config["replacements"][mi].get("done_word",None)
+                    config["resp_id"] = tokenizers[mi](
+                        config["replacements"][mi]["resp_word"])["input_ids"][-1]
+                    try: config["resp_id"] = config["resp_id"][-1]
+                    except: pass
                     eos_ids = [tokenizers[mi].eos_token_id]
                     if hasattr(tokenizers[mi], "eos_id"):
                         eos_ids.append(tokenizers[mi].eos_id)
@@ -707,7 +719,7 @@ def main():
                         src_activations=all_src_activations["train"][sidx],
                         src_swap_idxs=all_src_swap_idxs["train"][sidx],
                         device=devices[tidx],
-                        shuffle_targ_ids=config.get("shuffle_targ_ids", False),
+                        config=config,
                     )
                     accum = config.get("grad_accumulation_steps", 1)
                     loss = loss/accum/4.0
@@ -751,7 +763,7 @@ def main():
                                     tokenizer=tokenizers[tidx],
                                     pad_mask=all_src_pad_masks["valid"][tidx],
                                     task_mask=all_src_task_masks["valid"][tidx],
-                                    shuffle_targ_ids=config.get("shuffle_targ_ids", False),
+                                    config=config,
                                     verbose=True,
                                 )
                                 val_loss  += vloss.item() /len(valid_loader)
@@ -770,7 +782,8 @@ def main():
             if global_step % config["print_every"] == 0:
                 print("Mtx  Type:", config["mtx_types"][0])
                 print("Mask Type:", config["mask_type"],
-                        "- Learn:", config["learnable_addition"],
+                        "- FSR:", config["fsr"],
+                        "- Const Inpt:", config["consistent_trg_inpt_ids"],
                         "- Units:", intrv_module.swap_mask.n_units)
                 print()
 

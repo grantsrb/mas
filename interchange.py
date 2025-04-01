@@ -516,6 +516,7 @@ class InterventionModule(torch.nn.Module):
             mtx_kwargs=None,
             mask_type="FixedMask", 
             mask_kwargs=None,
+            fsr=False,
             *args, **kwargs):
         """
         Args:
@@ -528,12 +529,17 @@ class InterventionModule(torch.nn.Module):
                 the type of mask for doing the substitution
             mask_kargs: dict
                 keyword arguments for the mask object
+            fsr: bool
+                (functionally sufficient representations)
+                if true, will zero out the orthogonal complement of the
+                rotation matrix.
         """
         super().__init__()
         self.sizes = sizes
         if type(self.sizes)==int:
             self.sizes = [self.sizes]
-        
+        self.fsr = fsr
+
         # Rotation Matrices
         if type(mtx_types)==str:
             mtx_types = [mtx_types]
@@ -546,6 +552,7 @@ class InterventionModule(torch.nn.Module):
         self.do_reversal = False
         max_rank = min([size for size in self.sizes])
         default_rank = max_rank//2
+        rank = None
         for i,d in enumerate(mtx_kwargs):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
@@ -559,6 +566,7 @@ class InterventionModule(torch.nn.Module):
                 elif d["rank"]>max_rank:
                     print("Reducing Interchange Rank to", max_rank)
                     d["rank"] = max_rank
+                rank = d["rank"] if rank is None else min(rank, d["rank"])
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
@@ -566,9 +574,12 @@ class InterventionModule(torch.nn.Module):
 
         # Swap Mask
         size = max(self.sizes)
-        if mask_kwargs is None or mask_kwargs.get("n_units", None) is None:
-            n_units = min(self.sizes)//2
-            mask_kwargs = {"n_units": n_units}
+        if mask_kwargs is None:
+            mask_kwargs = dict()
+        if mask_kwargs.get("n_units", None) is None:
+            n_units = default_rank if rank is None else rank
+            mask_kwargs["n_units"] = n_units
+        assert rank is None or mask_kwargs["n_units"] == rank
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
 
@@ -595,7 +606,7 @@ class InterventionModule(torch.nn.Module):
 
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]
-        if type(trg_mtx)==FCARotationMatrix or type(src_mtx)==FCARotationMatrix:
+        if not self.fsr and (type(trg_mtx)==FCARotationMatrix or type(src_mtx)==FCARotationMatrix):
             # Instead of learning all components, learn fewer components
             new_h = target - trg_mtx(trg_mtx(target), inverse=True)
             new_h = new_h + trg_mtx(src_mtx(source), inverse=True)
