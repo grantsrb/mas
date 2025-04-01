@@ -54,3 +54,8 @@ replacements:
         user_word: ""
         resp_word: "D"
         done_word: "<EOS>"
+
+padding_sides:
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": "left"
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": "left"
+    "gpt2": "left"

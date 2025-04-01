@@ -30,8 +30,13 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
     consts = load_yaml(yaml_path)
     config["prompts"] = []
     config["replacements"] = []
+    config["padding_sides"] = []
     for model_name in config["model_names"]:
         print("Model Name:", model_name)
+        # Get padding side
+        padding_side = consts["padding_sides"].get(model_name, "right")
+        config["padding_sides"].append(padding_side)
+
         # Get prompts
         prompt = consts["prompts"].get(model_name, "")
         if not prompt:
@@ -401,11 +406,6 @@ def main():
     ]
     config["mask_kwargs"] = {**config}
     config = fill_in_prompts_and_replacements(config)
-
-    config["padding_sides"] = default_to_list(
-        config["padding_sides"],
-        n_el=len(config["model_names"])
-    )
     padding_sides = config["padding_sides"]
 
     save_folder = get_folder_from_path(config["model_names"][0])
@@ -475,7 +475,7 @@ def main():
                 batch_size=500,
                 to_cpu=True,)
         m_sizes.append(actvs[config["layers"][mi]].shape[-1])
-    
+
     ##########################
     #    Load the dataset
     ##########################
