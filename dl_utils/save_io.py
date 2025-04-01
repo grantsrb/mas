@@ -3,7 +3,7 @@ import pickle
 import os
 import json
 import yaml
-from .utils import get_git_revision_hash, package_versions, get_datetime_str
+from .utils import get_git_revision_hash, package_versions, get_datetime_str, remove_ending_slash
 import numpy as np
 
 BEST_CHECKPT_NAME = "best_checkpt_0.pt.best"
@@ -346,7 +346,7 @@ def load_checkpoint(path, use_best=False):
             checkpts = get_checkpoints(path)
             if len(checkpts)==0: return None
             path = checkpts[-1]
-    data = torch.load(path, map_location=torch.device("cpu"))
+    data = torch.load(path, map_location=torch.device("cpu"), weights_only=False)
     data["loaded_path"] = path
     if "config" in data:
         data["hyps"] = data["config"]
@@ -750,10 +750,10 @@ def get_folder_from_path(path):
     if os.path.isdir(path): return path
     return "/".join(path.split("/")[:-1])
 
-def get_num_duplicates(folder, fname, sep="_v"):
+def get_num_duplicates(folder, fname, ext=".csv"):
     n_dupls = 0
     for f in os.listdir(folder):
-        if fname in f: n_dupls += 1
+        if fname in f and ext in f: n_dupls += 1
     return n_dupls
 
 def get_save_name(
@@ -790,10 +790,8 @@ def get_save_name(
 
     # always add model names to save name
     kwargs["model_names"] = kwargs.get("model_names", config["model_names"])
-    m1 = "".join([x[:3] for x in kwargs["model_names"][0].split("/")[-1].split("_")])
-    m2 = "".join([x[:3] for x in kwargs["model_names"][-1].split("/")[-1].split("_")])
-    mnames = f"{m1}-{m2}"
-    save_name = save_name + abbrevs["model_names"] + "-" + mnames
+    m2 = "".join([x[:3] for x in remove_ending_slash(kwargs["model_names"][-1]).split("/")[-1].split("_")])
+    save_name = save_name + abbrevs["model_names"] + "-" + m2
 
     # add key value pairs to folder name
     if "save_keys" in kwargs:
@@ -803,7 +801,7 @@ def get_save_name(
         d = set(kwargs.keys()).symmetric_difference(set(config.keys()))
         if len(s)==0 or len(d)==0: s = config.get("save_keys", set())
     if len(s)==0:
-        n_dupls = get_num_duplicates(folder=save_folder, fname=save_name)
+        n_dupls = get_num_duplicates(folder=save_folder, fname=save_name, ext=".csv")
         return save_name + f"_v{n_dupls}"
     for k in sorted(list(s)):
         if k in ignores: continue
@@ -835,9 +833,10 @@ def get_save_name(
         .replace("nepochs","neps")\
         .replace("ntrains","ntrn")\
         .replace("relaxed","rlxd")\
+        .replace("layers","lyrs")\
         .replace("True","T")\
         .replace("False","F")\
         .replace("auto","ato")\
         .replace("encoder","enc")
-    n_dupls = get_num_duplicates(save_folder, save_name)
+    n_dupls = get_num_duplicates(save_folder, save_name, ext=".csv")
     return save_name + f"_v{n_dupls}"

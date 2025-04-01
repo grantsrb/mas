@@ -29,6 +29,18 @@ def try_key(d, key, val):
 def get_datetime_str():
     return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
+def remove_ending_slash(path):
+    """
+    Removes the slash from the end of the path if it exists.
+
+    Args:
+        path: str
+    Returns:
+        new_path: str
+    """
+    if path[-1]=="/": return path[:-1]
+    return path
+
 def resize2Square(img, size):
     """
     resizes image to a square with the argued size. Preserves the aspect
