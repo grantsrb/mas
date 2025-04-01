@@ -753,8 +753,7 @@ def get_folder_from_path(path):
 def get_num_duplicates(folder, fname, sep="_v"):
     n_dupls = 0
     for f in os.listdir(folder):
-        if sep.join(f.split("_")[:-1])==fname:
-            n_dupls += 1
+        if fname in f: n_dupls += 1
     return n_dupls
 
 def get_save_name(
