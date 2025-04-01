@@ -202,7 +202,7 @@ def forward_pass(
         verbose=False,
     ):
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
-    consistent_targ_inpt_id = config.get("consistent_targ_inpt_id", False)
+    const_targ_inpt_id = config.get("const_targ_inpt_id", False)
     ## Get batch
     batch = collate_fn( batch_indices, dataset, device=device)
 
@@ -221,7 +221,7 @@ def forward_pass(
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
 
-        if consistent_targ_inpt_id:
+        if const_targ_inpt_id:
             resp_id = config.get("resp_id", 6)
             mask = tsm>-1
             input_ids[mask] = int(resp_id)
@@ -376,7 +376,7 @@ def main():
         "mask_type":   "FixedMask", # BoundlessMask
         "n_units": None,
         "learnable_addition": False,
-        "consistent_targ_inpt_id": False, # If true, will use the resp_id for all target input ids
+        "const_targ_inpt_id": False, # If true, will use the resp_id for all target input ids
         "fsr": False, # (Functionally sufficient representations) only applies if using fca. Discards the excess components. Equivalent to using a vector of 0s for all input embeddings
 
         "num_training_steps": 50000,
@@ -781,9 +781,9 @@ def main():
 
             if global_step % config["print_every"] == 0:
                 print("Mtx  Type:", config["mtx_types"][0])
-                print("Mask Type:", config["mask_type"],
+                print("Mask Type:", type(intrv_module.swap_mask).__name__,
                         "- FSR:", config["fsr"],
-                        "- Const Inpt:", config["consistent_trg_inpt_ids"],
+                        "- Const Inpt:", config["const_targ_inpt_id"],
                         "- Units:", intrv_module.swap_mask.n_units)
                 print()
 
