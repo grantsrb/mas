@@ -567,6 +567,8 @@ class InterventionModule(torch.nn.Module):
                     print("Reducing Interchange Rank to", max_rank)
                     d["rank"] = max_rank
                 rank = d["rank"] if rank is None else min(rank, d["rank"])
+            elif self.fsr:
+                mask_type = "ZeroMask"
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
             globals()[t](**kwrg) for t,kwrg in zip(mtx_types, mtx_kwargs)
@@ -576,10 +578,10 @@ class InterventionModule(torch.nn.Module):
         size = max(self.sizes)
         if mask_kwargs is None:
             mask_kwargs = dict()
-        if mask_kwargs.get("n_units", None) is None:
+        n_units = mask_kwargs.get("n_units", None)
+        if n_units is None or n_units>max_rank:
             n_units = default_rank if rank is None else rank
             mask_kwargs["n_units"] = n_units
-        assert rank is None or mask_kwargs["n_units"] == rank
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
 
