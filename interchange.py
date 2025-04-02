@@ -138,17 +138,46 @@ class RotationMatrix(RankRotationMatrix):
         kwargs["rank"] = size
         super().__init__(size=size, *args, **kwargs)
 
-class FCARotationMatrix(RankRotationMatrix):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        size = self.rot_module.weight.shape[-1]
+class FCARotationMatrix(torch.nn.Module):
+    def __init__(self, 
+            size,
+            rank=None,
+            identity_init=False,
+            bias=False,
+            mu=None,
+            sigma=None,
+            identity_rot=False,
+            **kwargs):
+        """
+        size: int
+            the height and width of the rotation matrix
+        rank: int
+            the rank of the rotation matrix
+        identity_init: bool
+            if true, will initialize the rotation matrix to the identity
+            matrix.
+        bias: bool
+            if true, will include a shifting term in the rotation matrix
+        mu: FloatTensor (size,)
+            Used to center each feature dim of the activations.
+        sigma: FloatTensor (size,)
+            Used to scale each feature dim of the activations.
+        identity_rot: bool
+            if true, will always reset the rotation matrix to the
+            identity. Used for debugging.
+        """
+        super().__init__()
         self.rot_module = FunctionalComponentAnalysis(
             size=size,
-            means=self.mu if type(self.mu)==torch.Tensor else None,
-            stds=self.sigma if type(self.sigma)==torch.Tensor else None,
-            init_rank=self.rank,
+            means=mu,
+            stds=self.sigma,
+            init_rank=rank,
         )
         self.rot_module.set_fixed(True)
+
+    @property
+    def weight_inv(self):
+        return self.weight.T
 
     @property
     def weight(self):
@@ -567,7 +596,11 @@ class InterventionModule(torch.nn.Module):
                     print("Reducing Interchange Rank to", max_rank)
                     d["rank"] = max_rank
                 rank = d["rank"] if rank is None else min(rank, d["rank"])
-            elif self.fsr:
+        for i,d in enumerate(mtx_kwargs):
+            d = copy.deepcopy(d)
+            d["size"] = self.sizes[i]
+            d["rank"] = rank
+            if self.fsr:
                 mask_type = "ZeroMask"
             mtx_kwargs[i] = d
         self.rot_mtxs = torch.nn.ModuleList([
@@ -579,9 +612,10 @@ class InterventionModule(torch.nn.Module):
         if mask_kwargs is None:
             mask_kwargs = dict()
         n_units = mask_kwargs.get("n_units", None)
-        if n_units is None or n_units>max_rank:
-            n_units = default_rank if rank is None else rank
-            mask_kwargs["n_units"] = n_units
+        if rank is not None: n_units = rank
+        elif n_units is None or n_units>max_rank:
+            n_units = default_rank
+        mask_kwargs["n_units"] = n_units
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
 
@@ -608,10 +642,9 @@ class InterventionModule(torch.nn.Module):
 
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]
-        if not self.fsr and (type(trg_mtx)==FCARotationMatrix or type(src_mtx)==FCARotationMatrix):
+        if not self.fsr and type(trg_mtx)==FCARotationMatrix and type(src_mtx)==FCARotationMatrix:
             # Instead of learning all components, learn fewer components
-            new_h = target - trg_mtx(trg_mtx(target), inverse=True)
-            new_h = new_h + trg_mtx(src_mtx(source), inverse=True)
+            new_h = target + trg_mtx(src_mtx(source) - trg_mtx(target), inverse=True)
         else:
             rot_trg_h = trg_mtx(target)
             rot_src_h = src_mtx(source)
