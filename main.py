@@ -21,6 +21,7 @@ from dl_utils.save_io import (
     get_save_name, load_checkpoint, get_folder_from_path, save_json, load_yaml,
 )
 from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast
+from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
 from interchange import InterventionModule
 
@@ -391,6 +392,8 @@ def main():
         "lr": 1e-3,
         "max_length": 128,                 # max token length for our (toy) examples
         "eval_batch_size": 16,             # batch size for correctness evaluation
+        "patience": 500,
+        "plateau": 0.0001,
 
         "save_keys": ["mtx_types", "mask_type", "layers", "dataset_names"],
     }
@@ -635,8 +638,7 @@ def main():
                 print()
 
     ##########################
-    #    Define a single rotation matrix as a learnable parameter.
-    #    (We then “force” it to be orthogonal after each optimizer step.)
+    #    Define the intervention object, optimizer, and plateau tracker
     ##########################
     intrv_module = InterventionModule(
         sizes=m_sizes,
@@ -646,7 +648,8 @@ def main():
     optimizer = torch.optim.Adam(
         intrv_module.parameters(),
         lr=config["lr"])
-    
+    plateau_tracker = PlateauTracker(**config)
+
     ##########################
     #    Define and attach forward hooks to a specified layer in each model.
     #    The hook for model 1 applies the rotation (matrix multiplication);
@@ -779,6 +782,7 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
 
+            end_training = False
             if global_step % config["print_every"] == 0:
                 print("Mtx  Type:", config["mtx_types"][0])
                 print("Mask Type:", type(intrv_module.swap_mask).__name__,
@@ -827,10 +831,21 @@ def main():
                         df_dict["valid_trial_acc"].append(float(val_trial_accs[s][t]))
                         df_dict["src_idx"].append(s)
                         df_dict["trg_idx"].append(t)
+                val_loss = np.mean(
+                    [float(l) for l in val_losses[0]] +\
+                    [float(l) for l in val_losses[1]]
+                )
+                vals = [float(l) for l in val_trial_accs[0]] +\
+                    [float(l) for l in val_trial_accs[1]]
+                val_acc = np.mean(vals)
+                end_training = plateau_tracker.update(
+                    val_loss=val_loss, 
+                    val_acc=val_acc)
+                end_training = end_training or np.min(val_acc)>=0.999
 
             
             ### Save loss and state dict
-            if global_step%config.get("save_every_steps", 100):
+            if end_training or global_step%config.get("save_every_steps", 100):
                 #print("Saving To", os.path.join(save_folder, save_name))
                 csv = os.path.join(save_folder, save_name + ".csv")
                 df = pd.DataFrame(df_dict)
@@ -846,6 +861,9 @@ def main():
             ### Stop training
             global_step += 1
             if global_step >= config["num_training_steps"]:
+                break
+            if end_training:
+                print("Early stopping due to performance plateau!!")
                 break
 
     ##########################
