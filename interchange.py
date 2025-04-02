@@ -170,7 +170,7 @@ class FCARotationMatrix(torch.nn.Module):
         self.rot_module = FunctionalComponentAnalysis(
             size=size,
             means=mu,
-            stds=self.sigma,
+            stds=sigma,
             init_rank=rank,
         )
         self.rot_module.set_fixed(True)
