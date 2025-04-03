@@ -395,7 +395,7 @@ def main():
         "patience": 500,
         "plateau": 0.0001,
 
-        "save_keys": ["mtx_types", "mask_type", "layers", "dataset_names"],
+        "save_keys": ["mtx_types", "mask_type", "layers", "learning_rate", "fsr"],
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
@@ -689,7 +689,8 @@ def main():
         "src_idx": [],
         "trg_idx": [],
     }
-    while global_step < config["num_training_steps"]:
+    end_training = False
+    while global_step < config["num_training_steps"] and not end_training:
         for batch_indices in train_loader:
             # Forward passes. The hook functions will transform activations at the chosen layer.
             losses = []
@@ -841,7 +842,13 @@ def main():
                 end_training = plateau_tracker.update(
                     val_loss=val_loss, 
                     val_acc=val_acc)
-                end_training = end_training or np.min(val_acc)>=0.999
+
+                trns = [float(l) for l in trial_accs[0]] +\
+                    [float(l) for l in trial_accs[1]]
+                trn_min = np.min(trns)
+                val_min = np.min(vals)
+                m = 0.999
+                end_training = end_training or (val_min>=m and trn_min>=m)
 
             
             ### Save loss and state dict
