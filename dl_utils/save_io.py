@@ -777,6 +777,7 @@ def get_save_name(
             "grad_accumulation_steps": "gradstps",
             "max_length": "mxln",
             "eval_batch_size": "vlbsz",
+            "learning_rate": "lr",
         },
         ignores = {
             "print_every",
@@ -791,7 +792,7 @@ def get_save_name(
     # always add model names to save name
     kwargs["model_names"] = kwargs.get("model_names", config["model_names"])
     m2 = "".join([x[:3] for x in remove_ending_slash(kwargs["model_names"][-1]).split("/")[-1].split("_")])
-    save_name = save_name + abbrevs["model_names"] + "-" + m2
+    save_name = save_name + abbrevs["model_names"] + "-" + m2 + "_"
 
     # add key value pairs to folder name
     if "save_keys" in kwargs:
