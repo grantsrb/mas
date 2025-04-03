@@ -421,12 +421,12 @@ class Mask(torch.nn.Module):
                 a causal interchange
         """
         mask = self.mask
-        masked_target = (1-mask)[:target.shape[-1]]*target
+        masked_trg = (1-mask)[:target.shape[-1]]*target
         masked_src = mask[:source.shape[-1]]*source
-        if masked_target.shape[-1]<masked_src.shape[-1]:
-            swapped = masked_target + masked_src[...,:masked_target.shape[-1]]
+        if masked_trg.shape[-1]<masked_src.shape[-1]:
+            swapped = masked_trg + masked_src[...,:masked_trg.shape[-1]]
         else:
-            swapped = masked_target
+            swapped = masked_trg
             swapped[...,:masked_src.shape[-1]] += masked_src
         return swapped
 
@@ -643,7 +643,6 @@ class InterventionModule(torch.nn.Module):
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]
         if not self.fsr and type(trg_mtx)==FCARotationMatrix and type(src_mtx)==FCARotationMatrix:
-            # Instead of learning all components, learn fewer components
             new_h = target + trg_mtx(src_mtx(source) - trg_mtx(target), inverse=True)
         else:
             rot_trg_h = trg_mtx(target)
