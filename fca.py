@@ -94,12 +94,12 @@ class FunctionalComponentAnalysis(nn.Module):
                  size,
                  max_rank=None,
                  remove_components=False,
-                 initialization_vector=None,
                  component_mask=None,
                  means=None,
                  stds=None,
                  orthogonalization_vectors=None,
                  init_rank=None,
+                 init_vectors=None,
                  *args, **kwargs):
         """
         Args:
@@ -114,9 +114,6 @@ class FunctionalComponentAnalysis(nn.Module):
             remove_components: bool
                 If True, the model will remove components from
                 the vectors in the forward hook.
-            initialization_vector: optional tensor
-                optionally initialize all new parameters from the
-                same initialization_vector
             component_mask: tensor
                 optionally argue a mask or index tensor to select
                 specific components when constructing the matrix
@@ -130,12 +127,14 @@ class FunctionalComponentAnalysis(nn.Module):
                 Adds a list of vectors to the list of vectors that are
                 excluded from the functional components but are
                 included for orthogonality calculations.
+            init_vectors: None or list-like of tensors [(S,), ...]
+                Adds a list of vectors to the parameters list
+                without orthogonalizing them.
         """
         super().__init__()
         self.size = size
         self.max_rank = max_rank if max_rank is not None else size
         self.remove_components = remove_components
-        self.initialization_vector = initialization_vector
         self.component_mask = component_mask
         self.set_means(means)
         self.set_stds(stds)
@@ -144,8 +143,11 @@ class FunctionalComponentAnalysis(nn.Module):
         self.frozen_list = []
         self.orthogonalization_mtx = None
         init_rank = 1 if init_rank is None else init_rank
-        for _ in range(init_rank):
-            self.add_component()
+        for i in range(init_rank):
+            vec = None
+            if init_vectors is not None and i < len(init_vectors):
+                    vec = init_vectors[i]
+            self.add_component(vec)
         self.is_fixed = False
         self.fixed_weight = None
         self.excl_ortho_list = []
@@ -158,12 +160,18 @@ class FunctionalComponentAnalysis(nn.Module):
     def set_stds(self, stds):
         self.register_buffer("stds", stds)
 
-    def add_new_axis_parameter(self):
+    def add_new_axis_parameter(self, init_vector=None):
+        """
+        Adds a new axis parameter to the parameter list.
+        The new parameter is orthogonalized to all previous
+        parameters. The new parameter is initialized from a
+        random vector.
+        """
         if len(self.parameters_list) >= self.max_rank:
             return None
         # Sample a new axis and add it to the parameter list
-        if self.initialization_vector is not None:
-            new_axis = self.initialization_vector.data.clone()
+        if init_vector is not None:
+            new_axis = init_vector.clone()
         else:
             new_axis = torch.randn(self.size)
         p = nn.Parameter(new_axis).to(self.get_device())
@@ -171,8 +179,8 @@ class FunctionalComponentAnalysis(nn.Module):
         self.train_list.append(p)
         return self.parameters_list[-1]
 
-    def add_component(self):
-        self.add_new_axis_parameter()
+    def add_component(self, init_vector=None):
+        self.add_new_axis_parameter(init_vector=init_vector)
 
     def remove_component(self, idx=None):
         if idx is None: idx = -1
