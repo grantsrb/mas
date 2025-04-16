@@ -115,5 +115,15 @@ class TestFunctionalComponentAnalysis(unittest.TestCase):
         result = self.fca.interchange_intervention(trg, src)
         self.assertEqual(result.shape, trg.shape)
 
+    def test_forward(self):
+        self.fca.add_component()
+        x = torch.randn(5, self.size)
+        output = self.fca(x)
+        inv = self.fca(output, inverse=True)
+        z = x - inv
+        y = self.fca(z)
+        self.assertAlmostEqual((y-torch.zeros_like(y)).abs().max().item(), 0.0, places=5)
+        
+
 if __name__ == '__main__':
     unittest.main()
