@@ -212,17 +212,22 @@ class FCARotationMatrix(torch.nn.Module):
 class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
     def __init__(self, size, identity_init=False, *args, **kwargs):
         super().__init__()
+        self.eps = 1e-1
         self.size = size
         self.core_mtx = torch.nn.Parameter(torch.randn(size,size)/math.sqrt(size))
         if identity_init:
             self.core_mtx.data = torch.eye(size)
 
+    def get_psd_mtx(self):
+        return torch.mm(self.core_mtx, self.core_mtx.T) +\
+            self.eps*torch.eye(
+                self.core_mtx.shape[-1],
+                device=device_fxn(self.core_mtx.get_device()),
+            )
+
     @property
     def weight(self):
-        psd = torch.mm(self.core_mtx, self.core_mtx.T)
-        return psd + torch.eye(
-            psd.shape[-1],
-            device=device_fxn(psd.get_device()),)
+        return self.get_psd_mtx()
 
     def inv(self):
         """
@@ -231,6 +236,30 @@ class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
         """
         L = torch.linalg.cholesky(self.weight)
         return torch.cholesky_inverse(L)
+
+class SymmetricDefiniteMatrix(PositiveSymmetricDefiniteMatrix):
+    """
+    Similar to a PSD matrix, but learns signs to multiply rows of the
+    PSD matrix to allow it to be negative
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.signs = torch.nn.Parameter(0.01*torch.randn(self.size))
+
+    @property
+    def weight(self):
+        psd = self.get_psd_mtx()
+        signs = torch.nn.functional.tanh(self.signs)
+        signs = signs + self.eps*torch.sign(signs) # offset to ensure nonzero
+        return psd*signs
+
+    def inv(self):
+        """
+        Computes the inverse of a positive symmetric-definite matrix using Cholesky
+        decomposition.
+        """
+        return torch.linalg.inv(self.weight)
+
 
 class PSDRotationMatrix(RotationMatrix):
     """
@@ -258,6 +287,29 @@ class PSDRotationMatrix(RotationMatrix):
         h = torch.matmul(h, self.rot_module.inv())
         h = h*self.sigma + self.mu
         return h
+
+class SDRotationMatrix(PSDRotationMatrix):
+    """
+    Creates a Symmetric Definite rotation matrix
+    """
+    def __init__(self,
+            size,
+            identity_init=False,
+            **kwargs):
+        """
+        size: int
+            the height and width of the rotation matrix
+        identity_init: bool
+            if true, will initialize the rotation matrix to the identity
+            matrix.
+        bias: bool
+            if true, will include a shifting term in the rotation matrix
+        """
+        super().__init__(size=size, **kwargs)
+        self.rot_module = SymmetricDefiniteMatrix(
+            size=size,
+            identity_init=identity_init)
+
 
 class RelaxedRotationMatrix(RankRotationMatrix):
     """
