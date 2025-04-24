@@ -676,7 +676,13 @@ class InterventionModule(torch.nn.Module):
             if hasattr(mtx, "reset"):
                 mtx.reset()
 
-    def forward(self, target, source, target_idx=0, source_idx=-1):
+    def forward(self,
+            target,
+            source,
+            target_idx=0,
+            source_idx=-1,
+            varb_idx=None,
+        ):
         """
         target: torch tensor (B,H)
             the vector that will receive new neurons
@@ -686,11 +692,16 @@ class InterventionModule(torch.nn.Module):
             the index of the target rotation matrix
         source_idx: int
             the index of the source rotation matrix
+        varb_idx: None or int or torch long tensor
+            indicates the subspace to use for the
+            intervention.
 
         Returns:
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
+        if varb_idx is not None:
+            raise NotImplemented
 
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]

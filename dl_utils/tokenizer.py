@@ -687,15 +687,15 @@ class Tokenizer():
         return ids
 
     def __call__(self,
-             strings,
-             as_tensor=True,
-             return_tensors=None,
-             max_length=None,
-             add_bos=True,
-             add_eos=False,
-             truncation=False,
-             padding=True,
-             padding_side=None,
+            strings,
+            as_tensor=True,
+            return_tensors=None,
+            max_length=None,
+            add_bos=True,
+            add_eos=False,
+            truncation=False,
+            padding=True,
+            padding_side=None,
         ):
         """
         Converts a list of strings to a list of tokens

@@ -164,112 +164,150 @@ def get_max_length(text, tokenizer):
     toks = tokenizer(text, return_tensors="pt")["input_ids"]
     return toks.shape[-1] + 20*2 + 2
 
+def make_tokenized_info(replacements, tokenizer, config):
+    """
+    This func adds token ids to the info that only contains
+    token strings. Any key that has the word "token" in it will
+    be converted.
+
+    Args:
+        kwrgs: dict
+            str: str
+        tokenizer: Tokenizer
+        config: dict
+    Returns:
+        info: dict
+    """
+    info = dict()
+    repls = replacements
+    for k in repls:
+        info_key = "_tokens"
+        if "demo" in k:
+            info_key = "demo" + info_key
+        elif "resp" in k:
+            info_key = "demo" + info_key
+        elif "done" in k:
+            info_key = "eos_token"
+        elif "trig" in k:
+            info_key = "trig" + info_key
+        if info_key not in info:
+            info[info_key] = []
+        info[info_key].append(repls[k])
+    info["bos_token"] = tokenizer.bos_token_id
+    info["eos_token"] = tokenizer.eos_token_id
+    info["pad_token"] = tokenizer.pad_token_id
+    
+    keys = list(info.keys())
+    for k in keys:
+        if "token" in k and not "_id" in k:
+            key_id = k + "_id"
+            try:
+                token_id = int(tokenizer(info[k])["input_ids"][-1])
+            except: token_id = tokenizer.unk_token_id
+            info[key_id] = token_id
+    info["eos_token_id"] = tokenizer.eos_token_id
+    info["bos_token_id"] = tokenizer.bos_token_id
+    info["pad_token_id"] = tokenizer.pad_token_id
+    return info
+
 def tokenize_dataset(dataset, tokenizer, config):
     prompt = config.get("prompt", "")
-    if config["dataset_names"]=="gsm8k":
-        raise NotImplemented
-        # Needs swap mask and ideally task mask
-        tokenized = dataset.map(
-            lambda ex: gsm8k_tokenize_training(
-                ex, tokenizer, config=config, prompt=prompt,
-            ),
-            batched=False)
-    else:
-        bos = tokenizer.bos_token
-        reps = config.get("replacements", default_replacement_dict)
-        prompt = replace_text(text=prompt, replacement_dict=reps)
-        text = dataset.map(
-            lambda ex: {
-                "text": replace_text(
-                    text=bos+" "+prompt+ex["text"],
-                    replacement_dict=reps
-                )
-            },
-            batched=False,
+
+    bos = tokenizer.bos_token
+    reps = config.get("replacements", default_replacement_dict)
+    prompt = replace_text(text=prompt, replacement_dict=reps)
+    text = dataset.map(
+        lambda ex: {
+            "text": replace_text(
+                text=bos+" "+prompt+ex["text"],
+                replacement_dict=reps
+            )
+        },
+        batched=False,
+    )
+    text = text["text"]
+    add_eos = tokenizer.eos_token != reps["done_word"]
+    for i,t in enumerate(text):
+        if add_eos: text[i] = text[i] + tokenizer.eos_token
+
+
+    max_length = get_max_length(text[0], tokenizer)
+    print("Tokenizing - Max Len:", max_length)
+    try:
+        tok_dict = tokenizer(
+            text,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=max_length,
+            add_bos=False,
         )
-        text = text["text"]
-        add_eos = tokenizer.eos_token != reps["done_word"]
-        for i,t in enumerate(text):
-            if add_eos: text[i] = text[i] + tokenizer.eos_token
+    except:
+        tok_dict = tokenizer(
+            text,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=max_length,
+            truncation=True,
+        )
+    idx = tok_dict["input_ids"]==tokenizer.bos_token_id
+    dupls = idx.long().sum(-1)>1
+    idxs = torch.argmax(idx.long(), dim=-1)[dupls]
+    arng = torch.arange(len(idx)).long()[dupls]
+    tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
+    tok_dict["attention_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
 
+    swap_idxs = get_swap_idxs(
+        token_ids=tok_dict["input_ids"],
+        replace_dict=reps,
+        tokenizer=tokenizer)
+    tok_dict["swap_idxs"] = swap_idxs
 
-        max_length = get_max_length(text[0], tokenizer)
-        print("Tokenizing - Max Len:", max_length)
+    #try:
+    #    print()
+    #    print("Swaps:")
+    #    for i in range(3):
+    #        print("Full:", tok_dict["input_ids"][i][-20:])
+    #        print("Swap:", tok_dict["input_ids"][i][swap_idxs[i]])
+    #        print("Full:", [tokenizer.decode(t) for t in tok_dict["input_ids"][i][-20:]])
+    #        print("Swap:", tokenizer.decode(tok_dict["input_ids"][i][swap_idxs[i]]))
+    #        print()
+    #    print()
+    #except: pass
+
+    if "task_mask" in dataset.column_names:
+        max_len = tok_dict["input_ids"].shape[-1]
+        tmasks = []
+        for i,tmask in enumerate(dataset["task_mask"]):
+            # two 0s for annoying HF BOS business...
+            bos_zeros = [0,0] if dupls[i] else [0]
+            eos_zero = [0] if add_eos else []
+            tmask = bos_zeros + tmask + eos_zero
+            tmasks.append(pad_to(
+                arr=tmask,
+                tot_len=max_len,
+                fill_val=0,
+                side=tokenizer.padding_side,
+            ))
+        tok_dict["task_mask"] = torch.BoolTensor(tmasks)
+        eos_ids = [tokenizer.eos_token_id]
+        dword = reps["done_word"]
         try:
-            tok_dict = tokenizer(
-                text,
-                padding="max_length",
-                return_tensors="pt",
-                max_length=max_length,
-                add_bos=False,
-            )
-        except:
-            tok_dict = tokenizer(
-                text,
-                padding="max_length",
-                return_tensors="pt",
-                max_length=max_length,
-                truncation=True,
-            )
-        idx = tok_dict["input_ids"]==tokenizer.bos_token_id
-        dupls = idx.long().sum(-1)>1
-        idxs = torch.argmax(idx.long(), dim=-1)[dupls]
-        arng = torch.arange(len(idx)).long()[dupls]
-        tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
-        tok_dict["attention_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
+            eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
+        except: pass
+        try:
+            eos_ids.append(
+                int(tokenizer(" "+dword)["input_ids"][-1]))
+        except: pass
+        eos_ids = torch.LongTensor(eos_ids)
+        in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
+        eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
+        tok_dict["attention_mask"] = tok_dict["attention_mask"]&~eos_and_tmask
 
-        swap_idxs = get_swap_idxs(
-            token_ids=tok_dict["input_ids"],
-            replace_dict=reps,
-            tokenizer=tokenizer)
-        tok_dict["swap_idxs"] = swap_idxs
-
-        #try:
-        #    print()
-        #    print("Swaps:")
-        #    for i in range(3):
-        #        print("Full:", tok_dict["input_ids"][i][-20:])
-        #        print("Swap:", tok_dict["input_ids"][i][swap_idxs[i]])
-        #        print("Full:", [tokenizer.decode(t) for t in tok_dict["input_ids"][i][-20:]])
-        #        print("Swap:", tokenizer.decode(tok_dict["input_ids"][i][swap_idxs[i]]))
-        #        print()
-        #    print()
-        #except: pass
-
-        if "task_mask" in dataset.column_names:
-            max_len = tok_dict["input_ids"].shape[-1]
-            tmasks = []
-            for i,tmask in enumerate(dataset["task_mask"]):
-                # two 0s for annoying HF BOS business...
-                bos_zeros = [0,0] if dupls[i] else [0]
-                eos_zero = [0] if add_eos else []
-                tmask = bos_zeros + tmask + eos_zero
-                tmasks.append(pad_to(
-                    arr=tmask,
-                    tot_len=max_len,
-                    fill_val=0,
-                    side=tokenizer.padding_side,
-                ))
-            tok_dict["task_mask"] = torch.BoolTensor(tmasks)
-            eos_ids = [tokenizer.eos_token_id]
-            dword = reps["done_word"]
-            try:
-                eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
-            except: pass
-            try:
-                eos_ids.append(
-                    int(tokenizer(" "+dword)["input_ids"][-1]))
-            except: pass
-            eos_ids = torch.LongTensor(eos_ids)
-            in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
-            eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
-            tok_dict["attention_mask"] = tok_dict["attention_mask"]&~eos_and_tmask
-
-            # Quick Tests
-            assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])
-            tmask = tok_dict["task_mask"][0]
-            assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
-        tokenized = Dataset.from_dict(tok_dict)
+        # Quick Tests
+        assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])
+        tmask = tok_dict["task_mask"][0]
+        assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
+    tokenized = Dataset.from_dict(tok_dict)
     return tokenized
 
 if __name__=="__main__":

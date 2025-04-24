@@ -270,12 +270,34 @@ class FunctionalComponentAnalysis(nn.Module):
         matrix = torch.vstack(params)
         self.fixed_weight = matrix
 
-    def orthogonalize_vector(self, new_vector, prev_vectors, prev_is_cov_mtx=False):
+    def orthogonalize_vector(self,
+                            new_vector,
+                            prev_vectors,
+                            prev_is_cov_mtx=False,
+                            norm=True):
+        """
+        Orthogonalize a new vector to a list of previous vectors.
+        Tracks gradients.
+        Args:
+            new_vector: tensor (S,)
+                The new vector to be orthogonalized.
+            prev_vectors: list of tensors [(S,), ...]
+                The previous vectors to orthogonalize against. Assumes they
+                are all orthogonal to one another.
+            prev_is_cov_mtx: bool
+                If True, the previous vectors are assumed to be a covariance
+                matrix. Otherwise, they are assumed to be a list of vectors.
+            norm: bool
+                If True, the new vector is normalized after orthogonalization.
+        Returns:
+            new_vector: tensor (S,)
+                The orthogonalized vector.
+        """
         return orthogonalize_vector(
             new_vector,
             prev_vectors=prev_vectors,
             prev_is_cov_mtx=prev_is_cov_mtx,
-            norm=True
+            norm=norm,
         )
 
     def update_parameters(self):
@@ -473,6 +495,83 @@ class FunctionalComponentAnalysis(nn.Module):
     
     def interchange_intervention(self, trg, src):
         return trg-self(self(trg),inverse=True)+self(self(src),inverse=True)
+
+class UnnormedFCA(FunctionalComponentAnalysis):
+    """
+    A version of FCA that does not normalize the vectors.
+    This is useful for debugging and testing.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def orthogonalize_vector(self,
+                            new_vector,
+                            prev_vectors,
+                            prev_is_cov_mtx=False,
+                            norm=False):
+        """
+        Orthogonalize a new vector to a list of previous vectors.
+        Tracks gradients.
+        Args:
+            new_vector: tensor (S,)
+                The new vector to be orthogonalized.
+            prev_vectors: list of tensors [(S,), ...]
+                The previous vectors to orthogonalize against. Assumes they
+                are all orthogonal to one another.
+            prev_is_cov_mtx: bool
+                If True, the previous vectors are assumed to be a covariance
+                matrix. Otherwise, they are assumed to be a list of vectors.
+            norm: bool
+                If True, the new vector is normalized after orthogonalization.
+        Returns:
+            new_vector: tensor (S,)
+                The orthogonalized vector.
+        """
+        return orthogonalize_vector(
+            new_vector,
+            prev_vectors=prev_vectors,
+            prev_is_cov_mtx=prev_is_cov_mtx,
+            norm=norm,
+        )
+
+    def orthogonalize_parameters(self):
+        """
+        Only orthogonalize the parameters that require gradients.
+        Does track gradients. Assumes frozen_list and
+        orthogonalization_mtx are already orthogonalized.
+        """
+        device = self.get_device()
+        if self.orthogonalization_mtx is None:
+            self.update_orthogonalization_mtx()
+        # Fixed vectors and excluded vectors are both included
+        # in the orthogonalization matrix
+        if len(self.orthogonalization_mtx)>0:
+            orth = self.orthogonalization_mtx.to(device)
+            cov_mtx = self.ortho_cov_mtx.to(device)
+        else:
+            orth = []
+            cov_mtx = []
+        params = []
+        for i,p in enumerate(self.parameters_list):
+            if p.requires_grad==True:
+                if len(params)==0 and len(cov_mtx)>0:
+                    p = self.orthogonalize_vector(
+                        p,
+                        prev_vectors=cov_mtx,
+                        prev_is_cov_mtx=True
+                    )
+                elif len(orth)>0:
+                    p = self.orthogonalize_vector(
+                        p, prev_vectors=[orth] + params
+                    )
+                else:
+                    p = self.orthogonalize_vector(
+                        p, prev_vectors=params
+                    )
+                params.append(p)
+        return self.frozen_list + params
+
+
 
 def load_fcas_from_path(file_path):
     fca_checkpoint = torch.load(file_path)

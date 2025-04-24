@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from datas import (
     get_dataset, tokenize_dataset, ensure_equal_length,
     collate_fn, default_replacement_dict,
+    make_tokenized_info,
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
@@ -23,9 +24,26 @@ from dl_utils.save_io import (
 from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast
 from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
-from interchange import InterventionModule
+from intrv_modules import InterventionModule
+from filters import default_filter
+from intrv_datas import make_intrv_data_from_seqs
 
-import pandas as pd # import after transformers
+import pandas as pd # import after transformers to avoid versioning bug
+
+def config_prep(config):
+    n_models = len(config["model_names"])
+    config["mtx_kwargs"] = [ {**config} for _ in range(n_models) ]
+    config["mask_kwargs"] = {**config}
+    config["filters"] = config.get(
+        "filters",
+        [default_filter for _ in range(n_models)]
+    )
+    if config["train_directions"] in {None, "all"}:
+        config["train_directions"] = []
+        for s in range(n_models):
+            for t in range(n_models):
+                config["train_directions"].append((s,t))
+    return config
 
 def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
     consts = load_yaml(yaml_path)
@@ -64,24 +82,6 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
         print()
     return config
 
-def gsm8k_is_correct_batch(model, tokenizer, examples, device, max_new_tokens=50):
-    """
-    Given a list of examples (each with a "question" and "answer"), tokenizes the questions,
-    runs batch generation, and returns a list of booleans indicating whether the answer appears
-    in the generated text for each example.
-    """
-    questions = examples["question"]
-    answers = examples["answer"]
-    # Tokenize the entire batch; we use padding so that each example is the same length.
-    inputs = tokenizer(
-        questions, return_tensors="pt", padding=True, truncation=True).to(device)
-    with torch.no_grad():
-        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
-    generated_texts = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-    # For each example, check whether its answer appears in the generated text.
-    return [ans.split("####")[-1] in gen for ans, gen in zip(answers, generated_texts)]
-
-
 def get_hook(comms_dict):
     def hook_fn(module, input, output):
         if "loop_count" not in comms_dict:
@@ -89,6 +89,7 @@ def get_hook(comms_dict):
         # output is assumed to be of shape (batch, seq_length, hidden_size)
         src_idx = comms_dict.get("src_idx",0)
         trg_idx = comms_dict.get("trg_idx",1)
+        varb_idx = comms_dict.get("varb_idx",None)
 
         if hasattr(output,"hidden_states"):
             trg_actvs = output["hidden_states"]
@@ -99,7 +100,11 @@ def get_hook(comms_dict):
         src_actvs = comms_dict["src_activations"]
 
         # Handle case where we have a specific swap mask
-        if comms_dict.get("trg_swap_idxs", None) is not None:
+        trg_swap_mask = None
+        if comms_dict.get("trg_swap_mask", None) is not None:
+            trg_swap_mask = comms_dict["trg_swap_mask"]
+            src_swap_mask = comms_dict["src_swap_mask"]
+        elif comms_dict.get("trg_swap_idxs", None) is not None:
             trg_swap_idxs = comms_dict["trg_swap_idxs"]
             src_swap_idxs = comms_dict["src_swap_idxs"]
             i = comms_dict["loop_count"]
@@ -111,6 +116,7 @@ def get_hook(comms_dict):
             else:
                 trg_swap_mask = trg_swap_idxs>-1
                 src_swap_mask = src_swap_idxs>-1
+        if trg_swap_mask is not None:
             placeholder = torch.empty_like(trg_actvs)
             placeholder[~trg_swap_mask] = trg_actvs[~trg_swap_mask]
             src_actvs = src_actvs[src_swap_mask]
@@ -132,9 +138,11 @@ def get_hook(comms_dict):
             target=trg_actvs,
             source=src_actvs,
             target_idx=trg_idx,
-            source_idx=src_idx,)
+            source_idx=src_idx,
+            varb_idx=varb_idx,
+        )
 
-        if comms_dict.get("trg_swap_idxs", None) is not None:
+        if trg_swap_mask is not None:
             placeholder[trg_swap_mask] = outs
             outs = placeholder
 
@@ -206,6 +214,7 @@ def forward_pass(
         task_mask=None,
         config=dict(),
         verbose=False,
+        vidx=None,
     ):
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
     const_targ_inpt_id = config.get("const_targ_inpt_id", False)
@@ -215,24 +224,30 @@ def forward_pass(
     ## Set Comms Dict Values
     comms_dict["src_idx"] = sidx
     comms_dict["trg_idx"] = tidx
+    comms_dict["varb_idx"] = vidx
     comms_dict["loop_count"] = 0
     comms_dict["intrv_module"].to(device)
     comms_dict["intrv_module"].reset()
     comms_dict["src_activations"] =\
         src_activations[batch_indices].to(device)
     input_ids = batch["input_ids"]
-    if "swap_idxs" in batch:
+
+    mask = None
+    if "trg_swap_mask" in batch:
+        comms_dict["trg_swap_mask"] = batch["trg_swap_mask"]
+        comms_dict["src_swap_mask"] = batch["src_swap_mask"]
+        mask = batch["trg_swap_mask"]
+    elif "swap_idxs" in batch:
         ssm = src_swap_idxs[batch_indices].to(device)
         comms_dict["src_swap_idxs"] = ssm
         tsm = batch["swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
-
+        mask = tsm>-1
+    if mask is not None:
         if const_targ_inpt_id:
             resp_id = config.get("resp_id", 6)
-            mask = tsm>-1
             input_ids[mask] = int(resp_id)
         elif shuffle_targ_ids:
-            mask = tsm>-1
             # Shuffles the input ids
             msums = mask.long().sum(-1)
             perms = [torch.randperm(s).long() for s in msums]
@@ -355,27 +370,35 @@ def main():
     defaults = {
         "save_root": "/data2/grantsrb/icml_mas/",
         "exp_name": "myexp",
-        "save_memory": True,
+        "conserve_memory": True,
+
         # Use two identical models by default (replace with real LLaMA repo names as needed)
         "model_names": [
             #"meta-llama/Llama-3.2-1B",
             "gpt2",
             "gpt2",
         ], #[, "gpt2"], #
-        "dataset_names": ["gsm8k", "gsm8k"],           # gsm8k dataset
+
+        "dataset_names": [
+            "data/multiobj.json", "data/multiobj.json"
+        ],
         "dataset_kwargs": [
             {"name": "main", "split":"train", } for _ in range(2)
         ],
         "filter_by_correct": False,
-        "padding_sides": ["left", "left"],
         "filtered_dataset_paths": [
             "./data/filtered_gsm8k",  # where to save/load the filtered dataset
             "./data/filtered_gsm8k",  # where to save/load the filtered dataset
         ],
         "layers": [ # layers at which to attach the hooks
-            "model.embed_tokens",
-            "transformer.wte"
+            "embeddings",
+            "embeddings"
         ],  
+        "swap_keys": [ ["count"], ["count"] ], # argue a list of
+            # keys for each model.
+        "incl_empty_varbs": False, # if true, includes an explicit
+            # training of the extraneous information, encouraging
+            # it to be a null operation.
         "mtx_types": ["RotationMatrix", "RotationMatrix"],
         "identity_init": False,
         "identity_rot": False,
@@ -394,6 +417,12 @@ def main():
         "eval_batch_size": 16,             # batch size for correctness evaluation
         "patience": 500,
         "plateau": 0.0001,
+        
+        "stepwise": False,
+        "train_directions": None, # None and "all" do the same thing. Can
+            # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
+            # the first index in the tuple specifies the src idx, and the second
+            # specifies the target.
 
         "save_keys": ["mtx_types", "mask_type", "layers", "learning_rate", "fsr"],
     }
@@ -404,10 +433,7 @@ def main():
     for k in sorted(list(config.keys())):
         print(k, config[k])
 
-    config["mtx_kwargs"] = [
-        {**config} for _ in range(len(config["model_names"]))
-    ]
-    config["mask_kwargs"] = {**config}
+    config = config_prep(config) # general error catching
     config = fill_in_prompts_and_replacements(config)
     padding_sides = config["padding_sides"]
 
@@ -479,11 +505,12 @@ def main():
                 to_cpu=True,)
         m_sizes.append(actvs[config["layers"][mi]].shape[-1])
 
-    ##########################
-    #    Load the dataset
-    ##########################
+    ####################################################
+    #    Load the datasets
+    ####################################################
     print("Loading datasets...")
     datasets = { "train": [], "valid": [], }
+    infos = []
     for mi in range(len(config["dataset_names"])):
         for k in datasets:
             dkwargs = {**config["dataset_kwargs"][mi]}
@@ -492,15 +519,18 @@ def main():
                 f"{k}_data_paths",
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
-            dataset = get_dataset(config["dataset_names"][mi], **dkwargs)
+            dataset, info = get_dataset(
+                config["dataset_names"][mi], **dkwargs)
             datasets[k].append(dataset)
+        infos.append(info)
 
-    ##########################
+    ####################################################
     #    Tokenize the filtered dataset for autoregressive training.
     #    Here we form an input by concatenating the question and
     #    answer (with a newline and “Answer:” marker).
-    ##########################
-    tokenized_datasets = {k: [] for k in datasets}
+    ####################################################
+    tokenized_datasets = {k: dict() for k in datasets}
+    infos = []
     for mi,tokenizer in enumerate(tokenizers):
         for k in tokenized_datasets:
             kwrgs = {**config}
@@ -514,6 +544,45 @@ def main():
                     config=kwrgs,
                 )
             )
+            info = make_tokenized_info(
+                replacements=kwrgs["replacements"],
+                tokenizer=tokenizer,
+                config=config)
+        infos.append(info)
+    config["infos"] = infos
+    print("Tok Dataset:", tokenized_datasets[0])
+    print("Tok Info:", infos[0])
+
+    ####################################################
+    #    Make/Get Intervention Data
+    ####################################################
+    intrv_datasets = {k: dict() for k in tokenized_datasets }
+    n_subspaces = 0
+    for k in tokenized_datasets:
+        for tidx in range(len(tokenized_datasets[k])):
+            for sidx in range(len(tokenized_datasets[k])):
+                incl_empty = config("incl_empty_varbs", False)
+                skeys = config["swap_keys"][sidx] + incl_empty*[]
+                tkeys = config["swap_keys"][tidx] + incl_empty*[]
+                n_varbs = len(skeys)
+                z = enumerate(zip(skeys,tkeys))
+                for vidx,(src_swap_keys, trg_swap_keys) in z:
+                    intrv_data = make_intrv_data_from_seqs(
+                        trg_data=tokenized_datasets[k][tidx],
+                        src_data=tokenized_datasets[k][sidx],
+                        src_swap_keys=src_swap_keys,
+                        trg_swap_keys=trg_swap_keys,
+                        src_cmodel=config["cmodels"][sidx],
+                        src_info=config["infos"][sidx],
+                        src_filter=config["filters"][sidx],
+                        trg_cmodel=config["cmodels"][tidx],
+                        trg_info=config["infos"][tidx],
+                        trg_filter=config["filters"][tidx],
+                        stepwise=config.get("stepwise", False),
+                    )
+                    intrv_datasets[k][(sidx,tidx,vidx)] =\
+                        Dataset.from_dict(intrv_data)
+    tokenized_datasets = intrv_datasets
 
     # Create a DataLoader that iterates over indices of the filtered dataset.
     indices = list(range(len(datasets["train"][0])))
@@ -534,112 +603,100 @@ def main():
     #    Collect Source Activations
     ##########################
     with torch.no_grad():
-        all_src_activations = {k:[] for k in datasets}
-        all_src_swap_idxs =   {k:[] for k in datasets}
-        all_src_task_masks =  {k:[] for k in datasets}
-        all_src_pred_ids =    {k:[] for k in datasets}
-        all_src_logits =      {k:[] for k in datasets}
-        all_src_probs =       {k:[] for k in datasets}
-        all_src_pad_masks =   {k:[] for k in datasets}
+        all_src_activations = {k:dict() for k in datasets}
         print("Collecting Activations")
         for k in all_src_activations:
-            for mi,model in enumerate(models):
-                startt = time.time()
-                device = devices[mi]
-                print("Model", mi, config["model_names"][mi])
-                print("Device:", device)
-                vbsize = config.get("eval_batch_size", 128)
-                batch = collate_fn(
-                    torch.arange(len(tokenized_datasets[k][mi])).long(),
-                    tokenized_datasets[k][mi],
-                    device="cpu")
+            for src_idx,src_model in enumerate(models):
+                for trg_idx,trg_model in enumerate(models):
+                    startt = time.time()
+                    device = devices[src_idx]
+                    model_pair = (src_idx, trg_idx)
+                    print("Trg Model", trg_idx, config["model_names"][trg_idx])
+                    print("Src Model", src_idx, config["model_names"][src_idx])
+                    print("Device:", device)
+                    vbsize = config.get("eval_batch_size", 128)
+                    batch = collate_fn(
+                        torch.arange(len(tokenized_datasets[k][model_pair])).long(),
+                        tokenized_datasets[k][model_pair],
+                        device="cpu")
 
-                actvs = collect_activations(
-                    model,
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    layers=[config["layers"][mi], "lm_head"],
-                    ret_pred_ids=True,
-                    batch_size=vbsize,
-                    to_cpu=True,
-                    verbose=True,
-                )
+                    actvs = collect_activations(
+                        src_model,
+                        input_ids=batch["src_input_ids"],
+                        attention_mask=batch["src_attention_mask"],
+                        layers=[config["layers"][src_idx], "lm_head"],
+                        ret_pred_ids=True,
+                        batch_size=vbsize,
+                        to_cpu=True,
+                        verbose=True,
+                    )
 
-                all_src_activations[k].append(
-                    actvs[config["layers"][mi]].squeeze())
+                    all_src_activations[k][model_pair] =\
+                        actvs[config["layers"][src_idx]].squeeze()
 
-                logits = actvs["lm_head"].squeeze()
-                all_src_logits[k].append(logits)
+                    pad_id = tokenizers[src_idx].pad_token_id
+                    pad_mask = batch["input_ids"]==pad_id 
+                    if "src_task_mask" in batch:
+                        dword = config["replacements"][src_idx].get("done_word",None)
+                        config["resp_id"] = tokenizers[src_idx](
+                            config["replacements"][src_idx]["resp_word"])["input_ids"][-1]
+                        try: config["resp_id"] = config["resp_id"][-1]
+                        except: pass
+                        eos_ids = [tokenizers[src_idx].eos_token_id]
+                        if hasattr(tokenizers[src_idx], "eos_id"):
+                            eos_ids.append(tokenizers[src_idx].eos_id)
+                        try:
+                            eos_ids.append(int(tokenizers[src_idx](dword)["input_ids"][-1]))
+                        except: pass
+                        try:
+                            eos_ids.append(
+                                int(tokenizers[src_idx](" "+dword)["input_ids"][-1]))
+                        except: pass
+                        eos_ids = torch.LongTensor(eos_ids)
+                        in_eos_ids = torch.isin(batch["input_ids"].long(),eos_ids)
+                        eos_and_tmask = get_mask_past_arglast(in_eos_ids, inclusive=True)
+                        pad_mask = pad_mask|eos_and_tmask
 
-                all_src_probs[k].append(torch.softmax(logits, dim=-1))
+                    pred_ids = actvs["pred_ids"].squeeze()
+                    pred_ids[pad_mask] = pad_id
 
-                pad_id = tokenizers[mi].pad_token_id
-                all_src_pad_masks[k].append( batch["input_ids"]==pad_id )
-                if "task_mask" in batch:
-                    dword = config["replacements"][mi].get("done_word",None)
-                    config["resp_id"] = tokenizers[mi](
-                        config["replacements"][mi]["resp_word"])["input_ids"][-1]
-                    try: config["resp_id"] = config["resp_id"][-1]
-                    except: pass
-                    eos_ids = [tokenizers[mi].eos_token_id]
-                    if hasattr(tokenizers[mi], "eos_id"):
-                        eos_ids.append(tokenizers[mi].eos_id)
-                    try:
-                        eos_ids.append(int(tokenizers[mi](dword)["input_ids"][-1]))
-                    except: pass
-                    try:
-                        eos_ids.append(
-                            int(tokenizers[mi](" "+dword)["input_ids"][-1]))
-                    except: pass
-                    eos_ids = torch.LongTensor(eos_ids)
-                    in_eos_ids = torch.isin(batch["input_ids"].long(),eos_ids)
-                    eos_and_tmask = get_mask_past_arglast(in_eos_ids, inclusive=True)
-                    all_src_pad_masks[k][-1] = all_src_pad_masks[k][-1]|eos_and_tmask
+                    if "src_task_mask" in batch:
+                        tmask = batch["src_task_mask"].to(device)
+                        flat_tmask = tmask.reshape(-1)
+                    else:
+                        tmask = batch["src_pad_mask"].to(device)
+                        flat_tmask = tmask.reshape(-1)
+                    corrects = torch.ones_like(tmask)
+                    pids = pred_ids.to(device)[tmask]
+                    tids = batch["labels"] .to(device)[tmask]
+                    idx = pids==tids
+                    corrects[tmask] = idx
+                    corrects = corrects.float().sum(-1)==corrects.shape[-1]
+                    tokacc = (idx).float().mean().item()
+                    fullacc = corrects.float().mean().item()
 
-                all_src_pred_ids[k].append(actvs["pred_ids"].squeeze())
-                all_src_pred_ids[k][-1][all_src_pad_masks[k][-1]] = pad_id
+                    # Generated Text
+                    idx = 0
+                    input_text = tokenizers[src_idx].decode(batch["input_ids"][idx])
+                    if type(input_text)!=str:
+                        input_text = input_text[0]
+                    input_text = input_text.replace(tokenizers[src_idx].pad_token, "")
+                    print("ExIds :", batch["input_ids"][idx][:10])
+                    print(
+                        "ExInpt:", input_text.replace("\n", "\\n")\
+                                             .replace("<BOS>", "B")\
+                                             .replace("<EOS>", "E")
+                    )
 
-                if "swap_idxs" in batch:
-                    all_src_swap_idxs[k].append(batch["swap_idxs"].cpu())
-                if "task_mask" in batch:
-                    all_src_task_masks[k].append(batch["task_mask"].cpu())
-
-                if "task_mask" in batch:
-                    tmask = batch["task_mask"].to(device)
-                    flat_tmask = tmask.reshape(-1)
-                else:
-                    tmask = all_src_pad_masks[k][-1].to(device)
-                    flat_tmask = tmask.reshape(-1)
-                corrects = torch.ones_like(tmask)
-                pids = all_src_pred_ids[k][-1].to(device)[tmask]
-                tids = batch["labels"] .to(device)[tmask]
-                idx = pids==tids
-                corrects[tmask] = idx
-                corrects = corrects.float().sum(-1)==corrects.shape[-1]
-                tokacc = (idx).float().mean().item()
-                fullacc = corrects.float().mean().item()
-
-                # Generated Text
-                idx = 0
-                input_text = tokenizers[mi].decode(batch["input_ids"][idx])
-                if type(input_text)!=str:
-                    input_text = input_text[0]
-                input_text = input_text.replace(tokenizers[mi].pad_token, "")
-                print("ExIds :", batch["input_ids"][idx][:10])
-                print(
-                    "ExInpt:", input_text.replace("\n", "\\n")\
-                                         .replace("<BOS>", "B")\
-                                         .replace("<EOS>", "E")
-                )
-
-                print(k.capitalize(), "TokAcc:", tokacc)
-                print(k.capitalize(), "FullAcc:", fullacc)
-                print("Exec Time:", time.time()-startt)
-                print()
+                    print(k.capitalize(), "TokAcc:", tokacc)
+                    print(k.capitalize(), "FullAcc:", fullacc)
+                    print("Exec Time:", time.time()-startt)
+                    print()
 
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker
     ##########################
+    config["n_subspaces"] = n_subspaces
     intrv_module = InterventionModule(
         sizes=m_sizes,
         **config,
@@ -660,6 +717,7 @@ def main():
         "src_activations": None,
         "src_idx": 0,
         "trg_idx": 1,
+        "varb_idx": None,
     }
     hook_fn_model1 = get_hook(comms_dict)
     hook_fn_model2 = get_hook(comms_dict)
@@ -688,96 +746,105 @@ def main():
         "valid_trial_acc": [],
         "src_idx": [],
         "trg_idx": [],
+        "varb_idx": [],
     }
     end_training = False
     while global_step < config["num_training_steps"] and not end_training:
         for batch_indices in train_loader:
             # Forward passes. The hook functions will transform activations at the chosen layer.
-            losses = []
-            trial_accs = []
-            tok_accs = []
+            losses = dict()
+            trial_accs = dict()
+            tok_accs = dict()
             tot_loss = 0
             tot_tok = 0
             tot_trial = 0
 
-            val_losses = []
-            val_trial_accs = []
-            val_tok_accs = []
+            val_losses = dict()
+            val_trial_accs = dict()
+            val_tok_accs = dict()
             startt = time.time()
-            for sidx in range(len(models)):
-                losses.append([])
-                trial_accs.append([])
-                tok_accs.append([])
-                val_losses.append([])
-                val_trial_accs.append([])
-                val_tok_accs.append([])
-                for tidx in range(len(models)):
-                    runtime = time.time()
+            for dirvar_tup in tokenized_datasets["train"]:
+                runtime = time.time()
+                (sidx,tidx,vidx) = dirvar_tup
+                accum = config.get("grad_accumulation_steps", 1)
+                if (sidx,tidx) in config["train_directions"]:
                     loss, tok_acc, trial_acc = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
+                        vidx=vidx,
                         model=models[tidx],
                         comms_dict=comms_dict,
                         batch_indices=batch_indices,
-                        dataset=tokenized_datasets["train"][tidx],
-                        src_activations=all_src_activations["train"][sidx],
-                        src_swap_idxs=all_src_swap_idxs["train"][sidx],
+                        dataset=tokenized_datasets["train"][dirvar_tup],
+                        src_activations=all_src_activations["train"][dirvar_tup],
                         device=devices[tidx],
                         config=config,
                     )
-                    accum = config.get("grad_accumulation_steps", 1)
                     loss = loss/accum/4.0
-                    if config["save_memory"]:
+                    if config["conserve_memory"]:
                         loss.backward()
-                    losses[-1].append(loss.item())
-                    tot_loss += loss.to(devices[0])
+                else:
+                    with torch.no_grad():
+                        loss, tok_acc, trial_acc = forward_pass(
+                            sidx=sidx,
+                            tidx=tidx,
+                            vidx=vidx,
+                            model=models[tidx],
+                            comms_dict=comms_dict,
+                            batch_indices=batch_indices,
+                            dataset=tokenized_datasets["train"][dirvar_tup],
+                            src_activations=all_src_activations["train"][dirvar_tup],
+                            device=devices[tidx],
+                            config=config,
+                        )
+                        loss = loss/accum/4.0
+                losses[dirvar_tup] = loss.item()
+                tot_loss += loss.to(devices[0])
 
-                    tot_trial += trial_acc.item()/4.0
-                    tot_tok += tok_acc.item()/4.0
-                    trial_accs[-1].append(trial_acc.item())
-                    tok_accs[-1].append(tok_acc.item())
-                    print("Loss:", round(loss.item(), 5),
-                        "- Time:", round(time.time()-runtime,5),
-                        "- Step:", round(global_step),
-                        end="                  \r"
-                    )
+                tot_trial += trial_acc.item()/4.0
+                tot_tok += tok_acc.item()/4.0
+                trial_accs[dirvar_tup] = trial_acc.item()
+                tok_accs[dirvar_tup] = tok_acc.item()
+                print("Loss:", round(loss.item(), 5),
+                    "- Time:", round(time.time()-runtime,5),
+                    "- Step:", round(global_step),
+                    end="                  \r"
+                )
 
-                    # Print a sample generation every print_every steps.
-                    if global_step % config["print_every"] == 0:
-                        ####################################################
-                        #### VALIDATION
-                        ####################################################
-                        print("\n\nSource Model", sidx, "- Target Model", tidx)
-                        print("Validating...")
-                        val_loss = 0
-                        val_tok = 0
-                        val_trial = 0
-                        with torch.no_grad():
-                            for val_indices in valid_loader:
-                                vloss, vtok, vtrial = forward_pass(
-                                    sidx=sidx,
-                                    tidx=tidx,
-                                    model=models[tidx],
-                                    comms_dict=comms_dict,
-                                    batch_indices=val_indices,
-                                    dataset=tokenized_datasets["valid"][tidx],
-                                    src_activations=all_src_activations["valid"][sidx],
-                                    src_swap_idxs=all_src_swap_idxs["valid"][sidx],
-                                    device=devices[tidx],
-                                    tokenizer=tokenizers[tidx],
-                                    pad_mask=all_src_pad_masks["valid"][tidx],
-                                    task_mask=all_src_task_masks["valid"][tidx],
-                                    config=config,
-                                    verbose=True,
-                                )
-                                val_loss  += vloss.item() /len(valid_loader)
-                                val_tok   += vtok.item()  /len(valid_loader)
-                                val_trial += vtrial.item()/len(valid_loader)
-                            val_losses[-1].append(val_loss)
-                            val_tok_accs[-1].append(val_tok)
-                            val_trial_accs[-1].append(val_trial)
+                # Print a sample generation every print_every steps.
+                if global_step % config["print_every"] == 0:
+                    ####################################################
+                    #### VALIDATION
+                    ####################################################
+                    print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
+                    print("Validating...")
+                    val_loss = 0
+                    val_tok = 0
+                    val_trial = 0
+                    with torch.no_grad():
+                        for val_indices in valid_loader:
+                            vloss, vtok, vtrial = forward_pass(
+                                sidx=sidx,
+                                tidx=tidx,
+                                tidx=vidx,
+                                model=models[tidx],
+                                comms_dict=comms_dict,
+                                batch_indices=val_indices,
+                                dataset=tokenized_datasets["valid"][dirvar_tup],
+                                src_activations=all_src_activations["valid"][dirvar_tup],
+                                device=devices[tidx],
+                                tokenizer=tokenizers[tidx],
+                                config=config,
+                                verbose=True,
+                            )
+                            val_loss  += vloss.item() /len(valid_loader)
+                            val_tok   += vtok.item()  /len(valid_loader)
+                            val_trial += vtrial.item()/len(valid_loader)
+                        val_losses[dirvar_tup] = val_loss
+                        val_tok_accs[dirvar_tup] = val_tok
+                        val_trial_accs[dirvar_tup] = val_trial
 
-            if not config["save_memory"]:
+            if not config["conserve_memory"]:
                 tot_loss.backward()
             if global_step % accum==0:
                 optimizer.step()
@@ -785,66 +852,65 @@ def main():
 
             end_training = False
             if global_step % config["print_every"] == 0:
-                print("Mtx  Type:", config["mtx_types"][0])
-                print("Mask Type:", type(intrv_module.swap_mask).__name__,
-                        "- FSR:", config["fsr"],
-                        "- Const Inpt:", config["const_targ_inpt_id"],
-                        "- Units:", intrv_module.swap_mask.n_units)
-                print()
+                for vidx in range(n_varbs):
+                    print("Varbl", vidx)
+                    print("Mtx  Type:", config["mtx_types"][0])
+                    print("Mask Type:", type(intrv_module.swap_mask).__name__,
+                            "- FSR:", config["fsr"],
+                            "- Const Inpt:", config["const_targ_inpt_id"],
+                            "- Units:", intrv_module.swap_mask.n_units)
+                    print()
 
-                print("Step:", global_step, "| Train Loss:", tot_loss.item())
-                print("Train Tok Acc:",  tot_tok)
-                print("\tM1->M1:", round(tok_accs[0][0], 5),
-                      "| M1->M2:", round(tok_accs[0][1],5))
-                print("\tM2->M1:", round(tok_accs[1][0], 5),
-                      "| M2->M2:", round(tok_accs[1][1],5))
-                print("Train Trial Acc:",tot_trial)
-                print("\tM1->M1:", round(trial_accs[0][0],5),
-                      "| M1->M2:", round(trial_accs[0][1], 5))
-                print("\tM2->M1:", round(trial_accs[1][0],5),
-                      "| M2->M2:", round(trial_accs[1][1],5))
-                print()
-                print("Valid Tok Acc:")
-                print("\tM1->M1:", round(val_tok_accs[0][0], 5),
-                      "| M1->M2:", round(val_tok_accs[0][1], 5))
-                print("\tM2->M1:", round(val_tok_accs[1][0], 5),
-                      "| M2->M2:", round(val_tok_accs[1][1], 5))
-                print("Valid Trial Acc:")
-                print("\tM1->M1:", round(val_trial_accs[0][0],5),
-                      "| M1->M2:", round(val_trial_accs[0][1],5))
-                print("\tM2->M1:", round(val_trial_accs[1][0],5),
-                      "| M2->M2:", round(val_trial_accs[1][1],5))
-                print("Experiment:", os.path.join(save_folder, save_name))
-                print("M1:", config["model_names"][0])
-                if len(config["model_names"])>1:
-                    print("M2:", config["model_names"][1])
-                print("Exec Time:", time.time()-startt)
-                print()
+                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                    print("Train Tok Acc:",  tot_tok)
+                    print("\tM1->M1:", round(tok_accs[0][0], 5),
+                          "| M1->M2:", round(tok_accs[0][1],5))
+                    print("\tM2->M1:", round(tok_accs[1][0], 5),
+                          "| M2->M2:", round(tok_accs[1][1],5))
+                    print("Train Trial Acc:",tot_trial)
+                    print("\tM1->M1:", round(trial_accs[0][0],5),
+                          "| M1->M2:", round(trial_accs[0][1], 5))
+                    print("\tM2->M1:", round(trial_accs[1][0],5),
+                          "| M2->M2:", round(trial_accs[1][1],5))
+                    print()
+                    print("Valid Tok Acc:")
+                    print("\tM1->M1:", round(val_tok_accs[0][0], 5),
+                          "| M1->M2:", round(val_tok_accs[0][1], 5))
+                    print("\tM2->M1:", round(val_tok_accs[1][0], 5),
+                          "| M2->M2:", round(val_tok_accs[1][1], 5))
+                    print("Valid Trial Acc:")
+                    print("\tM1->M1:", round(val_trial_accs[0][0],5),
+                          "| M1->M2:", round(val_trial_accs[0][1],5))
+                    print("\tM2->M1:", round(val_trial_accs[1][0],5),
+                          "| M2->M2:", round(val_trial_accs[1][1],5))
+                    print("Experiment:", os.path.join(save_folder, save_name))
+                    print("M1:", config["model_names"][0])
+                    if len(config["model_names"])>1:
+                        print("M2:", config["model_names"][1])
+                    print("Exec Time:", time.time()-startt)
+                    print()
 
-                for s in range(len(models)):
-                    for t in range(len(models)):
-                        df_dict["global_step"].append(global_step)
-                        df_dict["train_loss"].append(float(losses[s][t]))
-                        df_dict["train_tok_acc"].append(float(tok_accs[s][t]))
-                        df_dict["train_trial_acc"].append(float(trial_accs[s][t]))
-                        df_dict["valid_loss"].append(float(val_losses[s][t]))
-                        df_dict["valid_tok_acc"].append(float(val_tok_accs[s][t]))
-                        df_dict["valid_trial_acc"].append(float(val_trial_accs[s][t]))
-                        df_dict["src_idx"].append(s)
-                        df_dict["trg_idx"].append(t)
+                for (s,t,v) in tokenized_datasets["train"]:
+                    tup = (s,t,v)
+                    df_dict["global_step"].append(global_step)
+                    df_dict["train_loss"].append(float(losses[tup]))
+                    df_dict["train_tok_acc"].append(float(tok_accs[tup]))
+                    df_dict["train_trial_acc"].append(float(trial_accs[tup]))
+                    df_dict["valid_loss"].append(float(val_losses[tup]))
+                    df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
+                    df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
+                    df_dict["src_idx"].append(s)
+                    df_dict["trg_idx"].append(t)
+                    df_dict["varb_idx"].append(v)
                 val_loss = np.mean(
-                    [float(l) for l in val_losses[0]] +\
-                    [float(l) for l in val_losses[1]]
-                )
-                vals = [float(l) for l in val_trial_accs[0]] +\
-                    [float(l) for l in val_trial_accs[1]]
+                    [float(l) for l in val_losses.values()])
+                vals = [float(l) for l in val_trial_accs.values()]
                 val_acc = np.mean(vals)
                 end_training = plateau_tracker.update(
                     val_loss=val_loss, 
                     val_acc=val_acc)
 
-                trns = [float(l) for l in trial_accs[0]] +\
-                    [float(l) for l in trial_accs[1]]
+                trns = [float(l) for l in trial_accs.values()]
                 trn_min = np.min(trns)
                 val_min = np.min(vals)
                 m = 0.999
