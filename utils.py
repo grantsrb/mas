@@ -360,9 +360,10 @@ def get_command_line_args(args):
                 val = True
             elif val.lower()=="false":
                 val = False
-            elif val.isdigit():
+            elif val.isnumeric():
                 val = int(val)
-            elif val.isdecimal() or val.isnumeric():
+            elif val.replace(".", "").isnumeric():
+                print("Decimal!!!!!!", key)
                 val = float(val)
             config[key] = val
     return config
