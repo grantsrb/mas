@@ -15,6 +15,7 @@ class CausalModel:
         self.ignore_keys = {} # optionally specify variable names to
             # ignore for interventions. Allows us to use "full" as a
             # variable name to swap multiple specific variables
+        self.swap_varbs = None
 
     @property
     def init_varbs(self):
@@ -33,7 +34,7 @@ class CausalModel:
         if self.swap_varbs:
             for key in self.swap_varbs:
                 if key not in self.ignore_keys:
-                    varbs[key] = self.swap_varbs
+                    varbs[key] = self.swap_varbs[key]
         return varbs
 
     def clear_intervention(self):
@@ -55,7 +56,7 @@ class CausalModel:
         outp_token, tmask = self.get_token(varbs, info=info)
         return outp_token, varbs, tmask
 
-def CountUpDown(CausalModel):
+class CountUpDown(CausalModel):
     def __init__(self, obj_count=None, max_count=20, min_count=1):
         super().__init__()
         self.max_count = max_count
@@ -65,7 +66,8 @@ def CountUpDown(CausalModel):
             "phase": -1,
             "count": 0,
         }
-        self.ignore_keys = { "obj_count", }
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
 
     @property
     def init_varbs(self):
@@ -87,7 +89,7 @@ def CountUpDown(CausalModel):
             varbs["phase"] = 1
             return varbs
         if varbs["phase"]==-1:
-            if token_id in info["trig_token_idss"]:
+            if token_id in info["trig_token_ids"]:
                 varbs["phase"] = 1
             elif token_id in info["demo_token_ids"]:
                 varbs["count"] += 1
@@ -112,7 +114,7 @@ def CountUpDown(CausalModel):
         ridx = int(np.random.randint(len(info["resp_token_ids"])))
         return info["resp_token_ids"][ridx], tmask
 
-def CountUpUp(CountUpDown):
+class CountUpUp(CountUpDown):
     def __init__(self, obj_count=None, max_count=20, min_count=1):
         super().__init__()
         self.max_count = max_count
@@ -123,7 +125,8 @@ def CountUpUp(CountUpDown):
             "demo_count": 0,
             "resp_count": 0,
         }
-        self.ignore_keys = { "obj_count", }
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
 
     def update_varbs(self,
             token_id,
