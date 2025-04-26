@@ -31,8 +31,7 @@ def get_dataset(dataset_name, data_path=None, **kwargs):
                 data_path = "./data/multiobj_systematic_1000.json"
             path = os.path.abspath(os.path.expanduser(data_path))
         d = load_json(path) #[{"text": t} for t in load_text(file_name=path)]
-        dset = Dataset.from_dict(d)
-        return dset
+        return Dataset.from_dict(d)
 
 def extend_example(ex, seq_len, pad_side="left"):
     for k in ex:
@@ -125,21 +124,43 @@ def get_swap_idxs(token_ids, replace_dict, tokenizer):
     #except: pass
     return idxs
 
-def collate_fn(batch_indices, tokenized_dataset, device=0):
+def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     """
     A simple collate function that “batches” the tokenized examples.
+
+    Attention masks use 1 to denote not padding tokens
     """
     batch = tokenized_dataset.select(batch_indices)
     d = {
-        "input_ids":      torch.tensor(batch["input_ids"])[...,:-1],
-        "attention_mask": torch.tensor(batch["attention_mask"])[...,:-1],
-        "labels":         torch.tensor(batch["input_ids"])[...,1:],
+        "input_ids":      torch.tensor(batch["trg_input_ids"])[...,:-1],
+        "inpt_attn_mask": torch.tensor(batch["trg_inpt_attn_masks"])[...,:-1],
+        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"])[...,1:],
+        "labels":         torch.tensor(batch["trg_input_ids"])[...,1:],
+        "src_input_ids":  torch.tensor(batch["src_input_ids"])[...,:-1],
     }
+    if incl_src:
+        d = {
+          **d,
+          "src_attention_mask": torch.tensor(batch["src_inpt_attn_masks"])[...,:-1],
+          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"])[...,1:],
+          "src_labels":         torch.tensor(batch["src_input_ids"])[...,1:],
+        }
     try:
-        d["task_mask"] = torch.tensor(batch["task_mask"])[...,1:].bool()
+        d["input_tmask"] = torch.tensor(batch["trg_task_masks"])[...,:-1].bool()
+        d["outp_tmask"] = torch.tensor(batch["trg_task_masks"])[...,1:].bool()
+        if incl_src:
+            d["src_input_tmask"] = torch.tensor(
+                batch["src_task_masks"])[...,:-1].bool()
+            d["src_outp_tmask"] = torch.tensor(
+                batch["src_task_masks"])[...,1:].bool()
     except: pass
     try:
-        d["swap_idxs"] = torch.tensor(batch["swap_idxs"])[...,:-1]
+        d["trg_swap_masks"] = torch.tensor(batch["trg_swap_masks"])[...,:-1]
+        d["src_swap_masks"] = torch.tensor(batch["src_swap_masks"])[...,:-1]
+    except: pass
+    try:
+        d["trg_swap_idxs"] = torch.tensor(batch["trg_swap_idxs"])[...,:-1]
+        d["src_swap_idxs"] = torch.tensor(batch["src_swap_idxs"])[...,:-1]
     except: pass
     # In a standard LM objective the labels are the input_ids (shifted internally by the model)
     return {k:v.to(device) for k,v in d.items()}
@@ -179,35 +200,48 @@ def make_tokenized_info(replacements, tokenizer, config):
         info: dict
     """
     info = dict()
-    repls = replacements
-    for k in repls:
+    info["bos_token"] = tokenizer.bos_token
+    info["eos_token"] = tokenizer.eos_token
+    info["pad_token"] = tokenizer.pad_token
+    for k in replacements:
         info_key = "_tokens"
         if "demo" in k:
             info_key = "demo" + info_key
         elif "resp" in k:
-            info_key = "demo" + info_key
+            info_key = "resp" + info_key
         elif "done" in k:
             info_key = "eos_token"
+            info[info_key] = replacements[k]
+            continue
         elif "trig" in k:
             info_key = "trig" + info_key
+        else:
+            continue
         if info_key not in info:
             info[info_key] = []
-        info[info_key].append(repls[k])
-    info["bos_token"] = tokenizer.bos_token_id
-    info["eos_token"] = tokenizer.eos_token_id
-    info["pad_token"] = tokenizer.pad_token_id
+        if replacements[k]:
+            info[info_key].append(replacements[k])
     
     keys = list(info.keys())
     for k in keys:
-        if "token" in k and not "_id" in k:
+        if not info[k]: continue
+        if "tokens" in k and not "_id" in k:
+            key_id = k[:-1] + "_ids"
+            try:
+                token_ids = [
+                    int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
+                ]
+            except:
+                token_ids = [
+                    int(tokenizer.word2id[tok]) for tok in info[k]
+                ]
+            info[key_id] = token_ids
+        elif "token" in k and not "_id" in k:
             key_id = k + "_id"
             try:
-                token_id = int(tokenizer(info[k])["input_ids"][-1])
-            except: token_id = tokenizer.unk_token_id
-            info[key_id] = token_id
-    info["eos_token_id"] = tokenizer.eos_token_id
-    info["bos_token_id"] = tokenizer.bos_token_id
-    info["pad_token_id"] = tokenizer.pad_token_id
+                info[key_id] = int(tokenizer(info[k])["input_ids"][-1])
+            except:
+                info[key_id] = int(tokenizer.word2id[info[k]])
     return info
 
 def tokenize_dataset(dataset, tokenizer, config):
@@ -254,7 +288,7 @@ def tokenize_dataset(dataset, tokenizer, config):
     idxs = torch.argmax(idx.long(), dim=-1)[dupls]
     arng = torch.arange(len(idx)).long()[dupls]
     tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
-    tok_dict["attention_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
+    tok_dict["inpt_attn_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
 
     swap_idxs = get_swap_idxs(
         token_ids=tok_dict["input_ids"],
@@ -301,7 +335,7 @@ def tokenize_dataset(dataset, tokenizer, config):
         eos_ids = torch.LongTensor(eos_ids)
         in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
         eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
-        tok_dict["attention_mask"] = tok_dict["attention_mask"]&~eos_and_tmask
+        tok_dict["inpt_attn_mask"] = tok_dict["inpt_attn_mask"]&~eos_and_tmask
 
         # Quick Tests
         assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])

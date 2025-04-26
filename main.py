@@ -15,17 +15,18 @@ from datas import (
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
-    default_to_list,
+    default_to_list, tensor2str
 )
 import seq_models as smods
 from dl_utils.save_io import (
     get_save_name, load_checkpoint, get_folder_from_path, save_json, load_yaml,
 )
-from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast
+from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast, arglast
 from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
 from intrv_modules import InterventionModule
-from filters import default_filter
+import filters
+from causal_models.causal_models import CountUpDown, CountUpUp
 from intrv_datas import make_intrv_data_from_seqs
 
 import pandas as pd # import after transformers to avoid versioning bug
@@ -34,10 +35,16 @@ def config_prep(config):
     n_models = len(config["model_names"])
     config["mtx_kwargs"] = [ {**config} for _ in range(n_models) ]
     config["mask_kwargs"] = {**config}
-    config["filters"] = config.get(
-        "filters",
-        [default_filter for _ in range(n_models)]
-    )
+    config["filters"] = [
+        getattr(filters, fname) for fname in config["filter_names"]
+    ]
+    config["cmodels"] = [globals()[cname]() for cname in config["cmodel_names"]]
+    if config["swap_keys"] is None:
+        config["swap_keys"] = [["full"], ["full"]]
+    for si,sks in enumerate(config["swap_keys"]):
+        if sks[0] is None:
+            config["swap_keys"][si] = ["full"]
+    
     if config["train_directions"] in {None, "all"}:
         config["train_directions"] = []
         for s in range(n_models):
@@ -101,9 +108,16 @@ def get_hook(comms_dict):
 
         # Handle case where we have a specific swap mask
         trg_swap_mask = None
-        if comms_dict.get("trg_swap_mask", None) is not None:
-            trg_swap_mask = comms_dict["trg_swap_mask"]
-            src_swap_mask = comms_dict["src_swap_mask"]
+        if comms_dict.get("trg_swap_masks", None) is not None:
+            trg_swap_mask = comms_dict["trg_swap_masks"]
+            src_swap_mask = comms_dict["src_swap_masks"]
+            # print()
+            # print("Hooked Print")
+            # idx_range = torch.arange(trg_swap_mask.shape[-1]).long()
+            # for i in range(3):
+            #     print("Idx:  ", tensor2str(idx_range))
+            #     print("SSwap:", tensor2str(src_swap_mask[i].long()))
+            #     print("TSwap:", tensor2str(trg_swap_mask[i].long()))
         elif comms_dict.get("trg_swap_idxs", None) is not None:
             trg_swap_idxs = comms_dict["trg_swap_idxs"]
             src_swap_idxs = comms_dict["src_swap_idxs"]
@@ -116,23 +130,33 @@ def get_hook(comms_dict):
             else:
                 trg_swap_mask = trg_swap_idxs>-1
                 src_swap_mask = src_swap_idxs>-1
+
+        comms_dict["loop_count"] += 1
+
+        ## TODO
+        #device = trg_actvs.get_device()
+        #p = torch.nn.Parameter(torch.ones_like(trg_actvs))
+        #trg_actvs[trg_swap_mask] = src_actvs[src_swap_mask].to(device)
+        #return trg_actvs*p
+
+        # DEBUGGING
+        #device = src_actvs.get_device()
+        #p = torch.nn.Parameter(torch.ones_like(src_actvs))
+        #return src_actvs.to(device) * p.to(device)
+        #return output * p.to(device)
+        ## DEBUGGING
+
         if trg_swap_mask is not None:
             placeholder = torch.empty_like(trg_actvs)
             placeholder[~trg_swap_mask] = trg_actvs[~trg_swap_mask]
             src_actvs = src_actvs[src_swap_mask]
             trg_actvs = trg_actvs[trg_swap_mask]
 
-        comms_dict["loop_count"] += 1
-
         ## DEBUGGING
-        #device = src_actvs.get_device()
-        #p = torch.nn.Parameter(torch.ones_like(trg_actvs))
-        #return output * p.to(device)
-        ## DEBUGGING
-
         # Perform causal interchange
         #p = torch.nn.Parameter(torch.ones_like(src_actvs))
         #outs = src_actvs.to(device)*p
+        ## DEBUGGING
         intrv_module = comms_dict["intrv_module"]
         outs = intrv_module(
             target=trg_actvs,
@@ -207,11 +231,9 @@ def forward_pass(
         dataset,
         comms_dict,
         src_activations,
-        src_swap_idxs,
         device,
         tokenizer=None,
         pad_mask=None,
-        task_mask=None,
         config=dict(),
         verbose=False,
         vidx=None,
@@ -233,14 +255,14 @@ def forward_pass(
     input_ids = batch["input_ids"]
 
     mask = None
-    if "trg_swap_mask" in batch:
-        comms_dict["trg_swap_mask"] = batch["trg_swap_mask"]
-        comms_dict["src_swap_mask"] = batch["src_swap_mask"]
-        mask = batch["trg_swap_mask"]
-    elif "swap_idxs" in batch:
-        ssm = src_swap_idxs[batch_indices].to(device)
+    if "trg_swap_masks" in batch:
+        comms_dict["trg_swap_masks"] = batch["trg_swap_masks"]
+        comms_dict["src_swap_masks"] = batch["src_swap_masks"]
+        mask = batch["trg_swap_masks"]
+    elif "trg_swap_idxs" in batch:
+        ssm = batch["src_swap_idxs"].to(device)
         comms_dict["src_swap_idxs"] = ssm
-        tsm = batch["swap_idxs"].to(device)
+        tsm = batch["trg_swap_idxs"].to(device)
         comms_dict["trg_swap_idxs"] = tsm
         mask = tsm>-1
     if mask is not None:
@@ -258,7 +280,9 @@ def forward_pass(
     ## Run model
     outputs = model(
         input_ids=batch["input_ids"],
-        attention_mask=batch["attention_mask"],)
+        attention_mask=batch["inpt_attn_mask"],
+        #task_mask=batch.get("input_tmask", None),
+    )
 
     # Calc Loss
     if "logits" in outputs:
@@ -269,17 +293,17 @@ def forward_pass(
     V = logits.shape[-1]
     flat = logits.reshape(-1,V)
     labels = batch["labels"].reshape(-1)
-    tmask = batch["attention_mask"]
+    tmask = batch["outp_attn_mask"]
 
     loss = F.cross_entropy(
         flat[tmask.reshape(-1)],
         labels[tmask.reshape(-1)]
     )
 
-    if "task_mask" in batch:
-        tmask = batch["task_mask"].to(device)
+    if "outp_tmask" in batch:
+        tmask = batch["outp_tmask"].to(device)
     else:
-        tmask = batch["attention_mask"]
+        tmask = batch["outp_attn_mask"]
     trial = torch.ones_like(batch["labels"]).bool()
     pids = torch.argmax(logits, dim=-1)
     labels = batch["labels"]
@@ -293,32 +317,53 @@ def forward_pass(
         labels = batch["labels"]
         inpts = batch["input_ids"]
         outs = torch.argmax(logits, dim=-1)#[perm[:2]]
-        pmask = ~pad_mask[batch_indices]
-        input_mask = pmask
-        if task_mask is not None:
-            tmask = task_mask[batch_indices]
-            input_mask = pmask&(~tmask)
+        if pad_mask is None and "inpt_attn_mask" in batch:
+            pmask = batch["inpt_attn_mask"]
         else:
-            tmask = pmask
+            pmask = ~pad_mask[batch_indices]
+        input_mask = pmask
+        if "input_tmask" in batch:
+            input_mask = pmask&(~batch["input_tmask"])
+        if "outp_tmask" in batch:
+            tmask = batch["outp_tmask"]
+        else:
+            tmask = batch["outp_attn_mask"]
 
         trg_pad_id =  tokenizer.pad_token_id
         trg_pad_tok = tokenizer.pad_token
 
         for i in range(min(2,len(outs))):
+            idx_range = torch.arange(len(inpts[i]))
+            src_swap = arglast(batch["src_swap_masks"][i])
+            trg_swap = arglast(batch["trg_swap_masks"][i])
+            print("Src Swap", int(src_swap), "- Trg Swap", int(trg_swap))
+            print("Idx:  ", tensor2str(idx_range))
+            print("Src  :", tensor2str(batch["src_input_ids"][i]))
+            print("Trg  :", tensor2str(inpts[i]))
+            print("Preds:", tensor2str(outs[i]))
+            print("Lbls :", tensor2str(labels[i]))
+            print("ITmsk:", tensor2str(batch["input_tmask"][i].long()))
+            print("OTmsk:", tensor2str(batch["outp_tmask"][i].long()))
+            print("SSwap:", tensor2str(batch["src_swap_masks"][i].long()))
+            print("TSwap:", tensor2str(batch["trg_swap_masks"][i].long()))
+            print()
+            print("Inpts:", tensor2str(inpts[i][:trg_swap]))
+            print("Gtrth:", tensor2str(labels[i][trg_swap:]))
+            print("Preds:", tensor2str(outs[i][trg_swap:]))
             # Input Text
-            input_text = tokenizer.decode(inpts[i][input_mask[i]])
+            input_text = tokenizer.decode(inpts[i][:trg_swap+1])
             if type(input_text)!=str:
                 input_text = input_text[0]
             input_text = input_text.replace(trg_pad_tok, "")
 
             # Target Text
-            target_text = tokenizer.decode(labels[i][tmask[i]])
+            target_text = tokenizer.decode(labels[i][trg_swap:])
             if type(target_text)!=str:
                 target_text = target_text[0]
             target_text = target_text.replace(trg_pad_tok, "")
 
             # Generated Text
-            generated_text = tokenizer.decode(outs[i][tmask[i]])
+            generated_text = tokenizer.decode(outs[i][trg_swap:])
             if type(generated_text)!=str:
                 generated_text = generated_text[0]
             generated_text = generated_text.replace(trg_pad_tok, "")
@@ -394,7 +439,15 @@ def main():
             "embeddings",
             "embeddings"
         ],  
-        "swap_keys": [ ["count"], ["count"] ], # argue a list of
+        "cmodel_names": [
+            "CountUpDown",
+            "CountUpDown",
+        ],
+        "filter_names": [
+            "default_filter",
+            "default_filter",
+        ],
+        "swap_keys": [ ["full"], ["full"] ], # argue a list of
             # keys for each model.
         "incl_empty_varbs": False, # if true, includes an explicit
             # training of the extraneous information, encouraging
@@ -424,7 +477,7 @@ def main():
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
 
-        "save_keys": ["mtx_types", "mask_type", "layers", "learning_rate", "fsr"],
+        "save_keys": ["mtx_types", "mask_type", "layers", "lr", "fsr"],
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
@@ -510,7 +563,6 @@ def main():
     ####################################################
     print("Loading datasets...")
     datasets = { "train": [], "valid": [], }
-    infos = []
     for mi in range(len(config["dataset_names"])):
         for k in datasets:
             dkwargs = {**config["dataset_kwargs"][mi]}
@@ -519,17 +571,16 @@ def main():
                 f"{k}_data_paths",
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
-            dataset, info = get_dataset(
+            dataset = get_dataset(
                 config["dataset_names"][mi], **dkwargs)
             datasets[k].append(dataset)
-        infos.append(info)
 
     ####################################################
     #    Tokenize the filtered dataset for autoregressive training.
     #    Here we form an input by concatenating the question and
     #    answer (with a newline and “Answer:” marker).
     ####################################################
-    tokenized_datasets = {k: dict() for k in datasets}
+    tokenized_datasets = {k: [] for k in datasets}
     infos = []
     for mi,tokenizer in enumerate(tokenizers):
         for k in tokenized_datasets:
@@ -550,7 +601,7 @@ def main():
                 config=config)
         infos.append(info)
     config["infos"] = infos
-    print("Tok Dataset:", tokenized_datasets[0])
+    print("Tok Dataset:", tokenized_datasets["train"][0])
     print("Tok Info:", infos[0])
 
     ####################################################
@@ -561,7 +612,7 @@ def main():
     for k in tokenized_datasets:
         for tidx in range(len(tokenized_datasets[k])):
             for sidx in range(len(tokenized_datasets[k])):
-                incl_empty = config("incl_empty_varbs", False)
+                incl_empty = config.get("incl_empty_varbs", False)
                 skeys = config["swap_keys"][sidx] + incl_empty*[]
                 tkeys = config["swap_keys"][tidx] + incl_empty*[]
                 n_varbs = len(skeys)
@@ -606,97 +657,123 @@ def main():
         all_src_activations = {k:dict() for k in datasets}
         print("Collecting Activations")
         for k in all_src_activations:
-            for src_idx,src_model in enumerate(models):
-                for trg_idx,trg_model in enumerate(models):
-                    startt = time.time()
-                    device = devices[src_idx]
-                    model_pair = (src_idx, trg_idx)
-                    print("Trg Model", trg_idx, config["model_names"][trg_idx])
-                    print("Src Model", src_idx, config["model_names"][src_idx])
-                    print("Device:", device)
-                    vbsize = config.get("eval_batch_size", 128)
-                    batch = collate_fn(
-                        torch.arange(len(tokenized_datasets[k][model_pair])).long(),
-                        tokenized_datasets[k][model_pair],
-                        device="cpu")
+            for model_pair in tokenized_datasets[k].keys():
+                src_idx,trg_idx,varb_idx = model_pair
+                src_model = models[src_idx]
+                trg_model = models[trg_idx]
+                startt = time.time()
+                device = devices[src_idx]
+                model_pair = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
+                print("Trg Model", trg_idx, config["model_names"][trg_idx])
+                print("Src Model", src_idx, config["model_names"][src_idx])
+                print("Device:", device)
+                vbsize = config.get("eval_batch_size", 128)
+                batch = collate_fn(
+                    torch.arange(len(tokenized_datasets[k][model_pair])).long(),
+                    tokenized_datasets[k][model_pair],
+                    incl_src=True,
+                    device="cpu")
 
-                    actvs = collect_activations(
-                        src_model,
-                        input_ids=batch["src_input_ids"],
-                        attention_mask=batch["src_attention_mask"],
-                        layers=[config["layers"][src_idx], "lm_head"],
-                        ret_pred_ids=True,
-                        batch_size=vbsize,
-                        to_cpu=True,
-                        verbose=True,
-                    )
 
-                    all_src_activations[k][model_pair] =\
-                        actvs[config["layers"][src_idx]].squeeze()
+                ### TODO:
+                ##print("Varbl", varb_idx)
+                ##for i in range(3):
+                ##    indices = torch.arange(len(batch["input_ids"][i])).long()
+                ##    print(tensor2str(indices))
+                ##    for kk in batch:
+                ##        print((kk+" "*(10-len(kk)))[:10], tensor2str(batch[kk][i].long()))
+                ##    print()
 
-                    pad_id = tokenizers[src_idx].pad_token_id
-                    pad_mask = batch["input_ids"]==pad_id 
-                    if "src_task_mask" in batch:
-                        dword = config["replacements"][src_idx].get("done_word",None)
-                        config["resp_id"] = tokenizers[src_idx](
-                            config["replacements"][src_idx]["resp_word"])["input_ids"][-1]
-                        try: config["resp_id"] = config["resp_id"][-1]
-                        except: pass
-                        eos_ids = [tokenizers[src_idx].eos_token_id]
-                        if hasattr(tokenizers[src_idx], "eos_id"):
-                            eos_ids.append(tokenizers[src_idx].eos_id)
-                        try:
-                            eos_ids.append(int(tokenizers[src_idx](dword)["input_ids"][-1]))
-                        except: pass
-                        try:
-                            eos_ids.append(
-                                int(tokenizers[src_idx](" "+dword)["input_ids"][-1]))
-                        except: pass
-                        eos_ids = torch.LongTensor(eos_ids)
-                        in_eos_ids = torch.isin(batch["input_ids"].long(),eos_ids)
-                        eos_and_tmask = get_mask_past_arglast(in_eos_ids, inclusive=True)
-                        pad_mask = pad_mask|eos_and_tmask
 
-                    pred_ids = actvs["pred_ids"].squeeze()
-                    pred_ids[pad_mask] = pad_id
+                actvs = collect_activations(
+                    src_model,
+                    input_ids=batch["src_input_ids"],
+                    attention_mask=batch["src_attention_mask"],
+                    task_mask=batch["src_input_tmask"],
+                    layers=[config["layers"][src_idx], "lm_head"],
+                    tforce=True,
+                    ret_pred_ids=True,
+                    batch_size=vbsize,
+                    to_cpu=True,
+                    verbose=True,
+                )
 
-                    if "src_task_mask" in batch:
-                        tmask = batch["src_task_mask"].to(device)
-                        flat_tmask = tmask.reshape(-1)
-                    else:
-                        tmask = batch["src_pad_mask"].to(device)
-                        flat_tmask = tmask.reshape(-1)
-                    corrects = torch.ones_like(tmask)
-                    pids = pred_ids.to(device)[tmask]
-                    tids = batch["labels"] .to(device)[tmask]
-                    idx = pids==tids
-                    corrects[tmask] = idx
-                    corrects = corrects.float().sum(-1)==corrects.shape[-1]
-                    tokacc = (idx).float().mean().item()
-                    fullacc = corrects.float().mean().item()
+                all_src_activations[k][model_pair] =\
+                    actvs[config["layers"][src_idx]].squeeze()
 
-                    # Generated Text
-                    idx = 0
-                    input_text = tokenizers[src_idx].decode(batch["input_ids"][idx])
-                    if type(input_text)!=str:
-                        input_text = input_text[0]
-                    input_text = input_text.replace(tokenizers[src_idx].pad_token, "")
-                    print("ExIds :", batch["input_ids"][idx][:10])
-                    print(
-                        "ExInpt:", input_text.replace("\n", "\\n")\
-                                             .replace("<BOS>", "B")\
-                                             .replace("<EOS>", "E")
-                    )
+                pad_id = tokenizers[src_idx].pad_token_id
+                pad_mask = batch["src_input_ids"]==pad_id 
+                if "src_outp_tmask" in batch:
+                    dword = config["replacements"][src_idx].get("done_word",None)
+                    config["resp_id"] = tokenizers[src_idx](
+                        config["replacements"][src_idx]["resp_word"])["input_ids"][-1]
+                    try: config["resp_id"] = config["resp_id"][-1]
+                    except: pass
+                    eos_ids = [tokenizers[src_idx].eos_token_id]
+                    if hasattr(tokenizers[src_idx], "eos_id"):
+                        eos_ids.append(tokenizers[src_idx].eos_id)
+                    try:
+                        eos_ids.append(int(tokenizers[src_idx](dword)["input_ids"][-1]))
+                    except: pass
+                    try:
+                        eos_ids.append(
+                            int(tokenizers[src_idx](" "+dword)["input_ids"][-1]))
+                    except: pass
+                    eos_ids = torch.LongTensor(eos_ids)
+                    in_eos_ids = torch.isin(batch["src_input_ids"].long(),eos_ids)
+                    eos_and_tmask = get_mask_past_arglast(in_eos_ids, inclusive=True)
+                    pad_mask = pad_mask|eos_and_tmask
 
-                    print(k.capitalize(), "TokAcc:", tokacc)
-                    print(k.capitalize(), "FullAcc:", fullacc)
-                    print("Exec Time:", time.time()-startt)
-                    print()
+                pred_ids = actvs["pred_ids"].squeeze()
+                pred_ids[pad_mask] = pad_id
+
+                if "src_outp_tmask" in batch:
+                    tmask = batch["src_outp_tmask"].to(device)
+                    flat_tmask = tmask.reshape(-1)
+                else:
+                    tmask = batch["src_outp_attn_mask"].to(device)
+                    flat_tmask = tmask.reshape(-1)
+                corrects = torch.ones_like(tmask)
+                pids = pred_ids.to(device)[tmask]
+                tids = batch["src_labels"] .to(device)[tmask]
+                idx = pids==tids
+                corrects[tmask] = idx
+                corrects = corrects.float().sum(-1)==corrects.shape[-1]
+                tokacc = (idx).float().mean().item()
+                fullacc = corrects.float().mean().item()
+
+                # Generated Text
+                idx = 0
+                input_text = tokenizers[src_idx].decode(batch["src_input_ids"][idx])
+                if type(input_text)!=str:
+                    input_text = input_text[0]
+                input_text = input_text.replace(tokenizers[src_idx].pad_token, "")
+                print("ExIds :", batch["src_input_ids"][idx][:10])
+                print(
+                    "ExInpt:", input_text.replace("\n", "\\n")\
+                                         .replace("<BOS>", "B")\
+                                         .replace("<EOS>", "E")
+                )
+
+                print(k.capitalize(), "TokAcc:", tokacc)
+                print(k.capitalize(), "FullAcc:", fullacc)
+                print("Exec Time:", time.time()-startt)
+                print()
 
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker
     ##########################
     config["n_subspaces"] = n_subspaces
+    if config.get("mtx_kwargs", None) is None:
+        mtx_kwarg_keys = {
+            "rank", "identity_init", "bias", "mu",
+            "sigma", "identity_rot", "orthogonal_map",
+        }
+        mtx_kwargs = dict()
+        for key in mtx_kwarg_keys:
+            if key in config:
+                mtx_kwargs[key] = config[key]
+        config["mtx_kwargs"] = [mtx_kwargs for _ in models]
     intrv_module = InterventionModule(
         sizes=m_sizes,
         **config,
@@ -719,13 +796,12 @@ def main():
         "trg_idx": 1,
         "varb_idx": None,
     }
-    hook_fn_model1 = get_hook(comms_dict)
-    hook_fn_model2 = get_hook(comms_dict)
-    
-    hook_module_model1 = get_hook_module(models[0], config["layers"][0])
-    hook_module_model2 = get_hook_module(models[1], config["layers"][1])
-    hook_handle1 = hook_module_model1.register_forward_hook(hook_fn_model1)
-    hook_handle2 = hook_module_model2.register_forward_hook(hook_fn_model2)
+    hook_fns = [get_hook(comms_dict) for _ in models]
+    hook_modules = [
+        get_hook_module(model, config["layers"][mi])
+            for mi,model in enumerate(models)
+    ]
+    hook_handles = [hmod.register_forward_hook(hfn) for hmod,hfn in zip(hook_modules,hook_fns)]
     
     ##########################
     #    Training loop: adjust the rotation matrix so that the models (with hooked activations)
@@ -780,9 +856,10 @@ def main():
                         device=devices[tidx],
                         config=config,
                     )
-                    loss = loss/accum/4.0
+                    loss = loss/accum/(len(models)**2)
                     if config["conserve_memory"]:
-                        loss.backward()
+                        n_tups = len(list(tokenized_datasets["train"].keys()))
+                        (loss/float(n_tups)).backward()
                 else:
                     with torch.no_grad():
                         loss, tok_acc, trial_acc = forward_pass(
@@ -797,12 +874,12 @@ def main():
                             device=devices[tidx],
                             config=config,
                         )
-                        loss = loss/accum/4.0
+                        loss = loss/accum/(len(models)**2)
                 losses[dirvar_tup] = loss.item()
                 tot_loss += loss.to(devices[0])
 
-                tot_trial += trial_acc.item()/4.0
-                tot_tok += tok_acc.item()/4.0
+                tot_trial += trial_acc.item()/(len(models)**2)
+                tot_tok += tok_acc.item()/(len(models)**2)
                 trial_accs[dirvar_tup] = trial_acc.item()
                 tok_accs[dirvar_tup] = tok_acc.item()
                 print("Loss:", round(loss.item(), 5),
@@ -826,7 +903,7 @@ def main():
                             vloss, vtok, vtrial = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
-                                tidx=vidx,
+                                vidx=vidx,
                                 model=models[tidx],
                                 comms_dict=comms_dict,
                                 batch_indices=val_indices,
@@ -863,26 +940,37 @@ def main():
 
                     print("Step:", global_step, "| Train Loss:", tot_loss.item())
                     print("Train Tok Acc:",  tot_tok)
-                    print("\tM1->M1:", round(tok_accs[0][0], 5),
-                          "| M1->M2:", round(tok_accs[0][1],5))
-                    print("\tM2->M1:", round(tok_accs[1][0], 5),
-                          "| M2->M2:", round(tok_accs[1][1],5))
+                    s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
+                    if len(models)>1:
+                        s += "| M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
+                        s += "\n\tM2->M1:" + str(round(tok_accs[(1,0,vidx)], 5))
+                        s += "| M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
+                    print(s)
+
                     print("Train Trial Acc:",tot_trial)
-                    print("\tM1->M1:", round(trial_accs[0][0],5),
-                          "| M1->M2:", round(trial_accs[0][1], 5))
-                    print("\tM2->M1:", round(trial_accs[1][0],5),
-                          "| M2->M2:", round(trial_accs[1][1],5))
+                    s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
+                    if len(models)>1:
+                        s += "| M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
+                        s += "\n\tM2->M1:" + str(round(trial_accs[(1,0,vidx)], 5))
+                        s += "| M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
+                    print(s)
                     print()
+
                     print("Valid Tok Acc:")
-                    print("\tM1->M1:", round(val_tok_accs[0][0], 5),
-                          "| M1->M2:", round(val_tok_accs[0][1], 5))
-                    print("\tM2->M1:", round(val_tok_accs[1][0], 5),
-                          "| M2->M2:", round(val_tok_accs[1][1], 5))
+                    s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
+                    if len(models)>1:
+                        s += "| M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
+                        s += "\n\tM2->M1:" + str(round(val_tok_accs[(1,0,vidx)], 5))
+                        s += "| M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
+                    print(s)
+
                     print("Valid Trial Acc:")
-                    print("\tM1->M1:", round(val_trial_accs[0][0],5),
-                          "| M1->M2:", round(val_trial_accs[0][1],5))
-                    print("\tM2->M1:", round(val_trial_accs[1][0],5),
-                          "| M2->M2:", round(val_trial_accs[1][1],5))
+                    s = "\tM1->M1: " + str(round(val_trial_accs[(0,0,vidx)], 5))
+                    if len(models)>1:
+                        s += "| M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
+                        s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
+                        s += "| M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
+                    print(s)
                     print("Experiment:", os.path.join(save_folder, save_name))
                     print("M1:", config["model_names"][0])
                     if len(config["model_names"])>1:
@@ -942,8 +1030,8 @@ def main():
     ##########################
     # 9. Clean up: remove hooks.
     ##########################
-    hook_handle1.remove()
-    hook_handle2.remove()
+    for handle in hook_handles:
+        handle.remove()
     print("Training complete.")
 
 if __name__ == "__main__":

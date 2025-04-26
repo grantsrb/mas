@@ -9,11 +9,20 @@ filter: python_function(df_row, info)
     like to sample from)
 """
 default_info = {
-    "eos_token": "<EOS>",
+    "pad_token": "<PAD>",
     "bos_token": "<BOS>",
+    "eos_token": "<EOS>",
+    "pad_token_id": 0,
+    "bos_token_id": 1,
+    "eos_token_id": 2,
 }
 
 def default_filter(df_row, info=None):
     if info is None: info = default_info
-    bad_tokens = {info.get("eos_token", "<EOS>"), info.get("bos_token", "<BOS>")}
-    return dict(df_row)["outp_token"] not in bad_tokens
+    bad_token_ids = {
+        info.get("pad_token_id", 0),
+        info.get("bos_token_id", 1),
+        info.get("eos_token_id", 2),
+        *info.get("trig_token_ids", [7]),
+    }
+    return df_row.inpt_token_id not in bad_token_ids

@@ -164,7 +164,7 @@ def collect_activations(
             amask = attention_mask[batch:batch+batch_size].to(device)
         if pad_mask is not None:
             pmask = pad_mask[batch:batch+batch_size].to(device)
-        if task_mask is not None:
+        if task_mask is not None and not tforce:
             tmask = task_mask[batch:batch+batch_size].to(device)
         try:
             out_dict = model(
@@ -194,7 +194,11 @@ def collect_activations(
                     print(k, "isn't producing")
                     assert False
                 if len(output[0].shape)<=4:
-                    output = torch.stack(output, dim=1)
+                    try:
+                        output = torch.stack(output, dim=1)
+                    except:
+                        print("Failed for", k)
+                        output = torch.stack(output, dim=1)
                 elif len(output)==1:
                     raise NotImplemented
                     #output = output[0]
@@ -358,7 +362,7 @@ def get_command_line_args(args):
                 val = False
             elif val.isdigit():
                 val = int(val)
-            elif val.isdecimal():
+            elif val.isdecimal() or val.isnumeric():
                 val = float(val)
             config[key] = val
     return config
@@ -384,3 +388,11 @@ def extract_ids(string, tokenizer):
     elif not hasattr(ids, "__len__"):
         ids = torch.LongTensor([ids])
     return ids
+
+def tensor2str(seq, n=2, delim=","):
+    """
+    seq: tensor
+        must have numeric values
+    """
+    t = float if "float" in str(seq.dtype) else int
+    return delim.join( ["{:2}".format(str(t(s))[:n]) for s in seq] )

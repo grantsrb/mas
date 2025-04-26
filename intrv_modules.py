@@ -475,7 +475,7 @@ class Mask(torch.nn.Module):
         mask = self.mask
         masked_trg = (1-mask)[:target.shape[-1]]*target
         masked_src = mask[:source.shape[-1]]*source
-        if masked_trg.shape[-1]<masked_src.shape[-1]:
+        if masked_trg.shape[-1]<=masked_src.shape[-1]:
             swapped = masked_trg + masked_src[...,:masked_trg.shape[-1]]
         else:
             swapped = masked_trg
@@ -598,6 +598,7 @@ class InterventionModule(torch.nn.Module):
             mask_type="FixedMask", 
             mask_kwargs=None,
             fsr=False,
+            n_units=None,
             *args, **kwargs):
         """
         Args:
@@ -620,6 +621,10 @@ class InterventionModule(torch.nn.Module):
         if type(self.sizes)==int:
             self.sizes = [self.sizes]
         self.fsr = fsr
+        if n_units is not None:
+            if mask_kwargs is None:
+                mask_kwargs = {}
+            mask_kwargs["n_units"] = n_units
 
         # Rotation Matrices
         if type(mtx_types)==str:
@@ -665,8 +670,8 @@ class InterventionModule(torch.nn.Module):
             mask_kwargs = dict()
         n_units = mask_kwargs.get("n_units", None)
         if rank is not None: n_units = rank
-        elif n_units is None or n_units>max_rank:
-            n_units = default_rank
+        elif n_units is None: n_units = default_rank
+        elif n_units>max_rank: n_units = max_rank
         mask_kwargs["n_units"] = n_units
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
@@ -700,7 +705,7 @@ class InterventionModule(torch.nn.Module):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        if varb_idx is not None:
+        if varb_idx is not None and varb_idx>0:
             raise NotImplemented
 
         trg_mtx = self.rot_mtxs[target_idx]
