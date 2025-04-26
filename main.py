@@ -26,7 +26,7 @@ from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
 from intrv_modules import InterventionModule
 import filters
-from causal_models.causal_models import CountUpDown, CountUpUp
+from causal_models import CountUpDown, CountUpUp, CountMod, CountRoundN, CountSquare
 from intrv_datas import make_intrv_data_from_seqs
 
 import pandas as pd # import after transformers to avoid versioning bug

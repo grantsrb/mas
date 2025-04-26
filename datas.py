@@ -5,6 +5,7 @@ from utils import (
 from dl_utils.utils import (
     pad_to, arglast, get_mask_past_idx,
 )
+from intrv_datas import run_to_completion
 from datasets import load_dataset, Dataset
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -32,6 +33,33 @@ def get_dataset(dataset_name, data_path=None, **kwargs):
             path = os.path.abspath(os.path.expanduser(data_path))
         d = load_json(path) #[{"text": t} for t in load_text(file_name=path)]
         return Dataset.from_dict(d)
+
+def generate_token_ids_from_cmodel(n_samples, cmodel, info):
+    """
+    Uses a causal model to generate a dataset.
+
+    Args:
+        n_samples: int
+        cmodel: CausalModel
+        info: dict
+    """
+    samples = []
+    task_masks = []
+    meta_data = []
+    for i in range(n_samples):
+        varbs = cmodel.init_varbs
+        inpt_token = info["bos_token_id"]
+        seq, varbs_list, tmask = run_to_completion(
+            cmodel=cmodel,
+            inpt_token=inpt_token,
+            varbs=varbs,
+            info=info,
+            end_tokens={info.get("eos_token_id", None)},
+        )
+        samples.append( seq )
+        task_masks.append( tmask )
+        meta_data.append(varbs_list[-1])
+    return samples, task_masks, meta_data
 
 def extend_example(ex, seq_len, pad_side="left"):
     for k in ex:
