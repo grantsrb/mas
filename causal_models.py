@@ -163,3 +163,119 @@ class CountUpUp(CountUpDown):
             return info["eos_token_id"], tmask
         ridx = int(np.random.randint(len(info["resp_token_ids"])))
         return info["resp_token_ids"][ridx], tmask
+
+class CountMod(CountUpDown):
+    """
+    This model counts some initial demo tokens and then takes the
+    mod of that count to produce the response. 
+    """
+    def __init__(self, obj_count=None, mod=4, max_count=20, min_count=1):
+        super().__init__()
+        self.max_count = max_count
+        self.min_count = min_count
+        self.mod = mod
+        self.init_varbs_ = {
+            "obj_count": obj_count,
+            "phase": -1,
+            "count": 0,
+        }
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        if varbs is None: varbs = self.init_varbs
+        if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+            varbs["count"] = -1
+            varbs["phase"] = 1
+            return varbs
+        if varbs["phase"]==-1:
+            if token_id in info["trig_token_ids"]:
+                varbs["phase"] = 1
+                varbs["count"] = varbs["count"]%self.mod
+            elif token_id in info["demo_token_ids"]:
+                varbs["count"] += 1
+        else:
+            if token_id in info["resp_token_ids"]:
+                varbs["count"] -= 1
+        return varbs
+
+class CountSquare(CountUpDown):
+    """
+    This model counts some initial demo tokens and then takes the
+    square of that count to produce the response. 
+    """
+    def __init__(self, obj_count=None, max_count=10, min_count=1):
+        super().__init__()
+        self.max_count = max_count
+        self.min_count = min_count
+        self.init_varbs_ = {
+            "obj_count": obj_count,
+            "phase": -1,
+            "count": 0,
+        }
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        if varbs is None: varbs = self.init_varbs
+        if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+            varbs["count"] = -1
+            varbs["phase"] = 1
+            return varbs
+        if varbs["phase"]==-1:
+            if token_id in info["trig_token_ids"]:
+                varbs["phase"] = 1
+                varbs["count"] = varbs["count"]**2
+            elif token_id in info["demo_token_ids"]:
+                varbs["count"] += 1
+        else:
+            if token_id in info["resp_token_ids"]:
+                varbs["count"] -= 1
+        return varbs
+
+class CountRoundN(CountUpDown):
+    """
+    This model counts some initial demo tokens and then rounds
+    to the nearest Ns place.
+    """
+    def __init__(self, obj_count=None, roundn=3, max_count=20, min_count=1):
+        super().__init__()
+        self.max_count = max_count
+        self.min_count = min_count
+        self.roundn = roundn
+        self.init_varbs_ = {
+            "obj_count": obj_count,
+            "phase": -1,
+            "count": 0,
+        }
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        if varbs is None: varbs = self.init_varbs
+        if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+            varbs["count"] = -1
+            varbs["phase"] = 1
+            return varbs
+        if varbs["phase"]==-1:
+            if token_id in info["trig_token_ids"]:
+                varbs["phase"] = 1
+                varbs["count"] = round(varbs["count"]/self.roundn)*self.roundn
+            elif token_id in info["demo_token_ids"]:
+                varbs["count"] += 1
+        else:
+            if token_id in info["resp_token_ids"]:
+                varbs["count"] -= 1
+        return varbs
