@@ -149,7 +149,7 @@ def get_stepwise_hook(comms_dict):
 
     return hook_fn
 
-def get_indyswap_hook(comms_dict):
+def get_indywise_hook(comms_dict):
     def hook(module, inp, out):
         """
         out: tensor (B,M,D)
@@ -222,10 +222,11 @@ def get_indyswap_hook(comms_dict):
 
         # Perform causal interchange
         outs = intrv_modu(
-            base=trg_inpts,
+            target=trg_inpts,
             source=source_inpts.to(device),
-            trg_idx=trg_idx,
-            source_idx=src_idx,)
+            target_idx=trg_idx,
+            source_idx=src_idx,
+            varb_idx=varb_idx,)
 
         ## If auxiliary targets are argued, then use them as a constraint
         ## on the intervened vectors.
@@ -348,10 +349,18 @@ def forward_pass(
         comms_dict["trg_swap_idxs"] = tsm
 
     ## Run model
-    outputs = model(
-        input_ids=batch["input_ids"],
-        attention_mask=batch["inpt_attn_mask"],
-    )
+    if stepwise:
+        outputs = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["inpt_attn_mask"],
+        )
+    else:
+        outputs = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["inpt_attn_mask"],
+            task_mask=batch["input_tmask"],
+            tforce=False,
+        )
 
     # Calc Loss
     if "logits" in outputs:
@@ -881,7 +890,7 @@ def main():
     if config.get("stepwise", True):
         hook_fns = [get_stepwise_hook(comms_dict) for _ in models]
     else:
-        hook_fns = [get_indystep_hook(comms_dict) for _ in models]
+        hook_fns = [get_indywise_hook(comms_dict) for _ in models]
     hook_modules = [
         get_hook_module(model, config["layers"][mi])
             for mi,model in enumerate(models)
