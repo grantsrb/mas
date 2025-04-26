@@ -363,17 +363,19 @@ def forward_pass(
     flat = logits.reshape(-1,V)
     labels = batch["labels"].reshape(-1)
     lmask = batch["outp_attn_mask"]
-    if "trg_swap_mask" in batch:
-        smask = torch.roll(~batch["trg_swap_mask"], -1, dims=-1)
+    if "trg_swap_masks" in batch:
+        smask = torch.roll(~batch["trg_swap_masks"], -1, dims=-1)
+        smask[...,-1] = True
         lmask = lmask&(smask)
 
-    ## TODO
-    pids = torch.argmax(logits, dim=-1)
-    print("HEYO")
-    for i in range(3):
-        print("Preds :", tensor2str(pids[i][lmask[i]]))
-        print("Lables:", tensor2str(batch["labels"][i][lmask[i]]))
-        print()
+    ### TODO
+    #pids = torch.argmax(logits, dim=-1)
+    #print("HEYO")
+    #for i in range(3):
+    #    print("Swaps:", tensor2str(batch["labels"][i][~lmask[i]]))
+    #    print("Preds:", tensor2str(pids[i][lmask[i]]))
+    #    print("Label:", tensor2str(batch["labels"][i][lmask[i]]))
+    #    print()
 
     loss = F.cross_entropy(
         flat[lmask.reshape(-1)],
@@ -422,10 +424,10 @@ def forward_pass(
             print("Trg  :", tensor2str(inpts[i]))
             print("Preds:", tensor2str(outs[i]))
             print("Lbls :", tensor2str(labels[i]))
-            print("ITmsk:", tensor2str(batch["input_tmask"][i].long()))
+            print("TrnLb:", tensor2str(labels[i][lmask[i]].long()))
             print("OTmsk:", tensor2str(batch["outp_tmask"][i].long()))
-            print("SSwap:", tensor2str(batch["src_swap_masks"][i].long()))
             print("TSwap:", tensor2str(batch["trg_swap_masks"][i].long()))
+            print("LsMsk:", tensor2str(lmask[i].long()))
             print()
             print("Inpts:", tensor2str(inpts[i][:trg_swap]))
             print("Gtrth:", tensor2str(labels[i][trg_swap:]))
