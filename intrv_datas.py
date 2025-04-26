@@ -588,6 +588,8 @@ def make_intrv_data_from_seqs(
         "src_varbs": src_swap_varbs,
         "src_swap_masks": src_swap_masks,
         "src_task_masks": src_task_masks,
+        "trg_swap_idxs": trg_swap_idxs,
+        "src_swap_idxs": src_swap_idxs,
     }
     max_len = int(max(
         np.max([len(seq) for seq in d["trg_input_ids"]]),
@@ -603,18 +605,23 @@ def make_intrv_data_from_seqs(
                     print(d[k])
                     print(k)
                     print(type(d[k]))
-    d["trg_inpt_attn_masks"] = d["trg_input_ids"]!=trg_info["pad_token_id"]
-    d["src_inpt_attn_masks"] = d["src_input_ids"]!=src_info["pad_token_id"]
+    d["trg_inpt_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
+    d["src_inpt_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
     if trg_info.get("eos_token_id", None) is not None:
-        eos_mask = d["trg_input_ids"]!=trg_info["eos_token_id"]
+        eos_mask = d["trg_input_ids"]==trg_info["eos_token_id"]
         d["trg_inpt_attn_masks"] = d["trg_inpt_attn_masks"]|eos_mask
-        eos_mask = d["src_input_ids"]!=src_info["eos_token_id"]
+        eos_mask = d["src_input_ids"]==src_info["eos_token_id"]
         d["src_inpt_attn_masks"] = d["src_inpt_attn_masks"]|eos_mask
-    d["trg_outp_attn_masks"] = d["trg_input_ids"]!=trg_info["pad_token_id"]
-    d["src_outp_attn_masks"] = d["src_input_ids"]!=src_info["pad_token_id"]
+    d["trg_inpt_attn_masks"] = ~d["trg_inpt_attn_masks"]
+    d["src_inpt_attn_masks"] = ~d["src_inpt_attn_masks"]
+    
+    d["trg_outp_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
+    d["src_outp_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
     if trg_info.get("bos_token_id", None) is not None:
-        bos_mask = d["trg_input_ids"]!=trg_info["bos_token_id"]
+        bos_mask = d["trg_input_ids"]==trg_info["bos_token_id"]
         d["trg_outp_attn_masks"] = d["trg_outp_attn_masks"]|bos_mask
-        bos_mask = d["src_input_ids"]!=src_info["bos_token_id"]
+        bos_mask = d["src_input_ids"]==src_info["bos_token_id"]
         d["src_outp_attn_masks"] = d["src_outp_attn_masks"]|bos_mask
+    d["trg_outp_attn_masks"] = ~d["trg_outp_attn_masks"]
+    d["src_outp_attn_masks"] = ~d["src_outp_attn_masks"]
     return d

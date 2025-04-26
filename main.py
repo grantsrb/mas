@@ -50,6 +50,14 @@ def config_prep(config):
         for s in range(n_models):
             for t in range(n_models):
                 config["train_directions"].append((s,t))
+
+    if not config.get("stepwise", True):
+        config["layers"] = ["inpt_identity" if l=="embeddings" else l for l in config["layers"]]
+
+    if "learning_rate" in config:
+        print("use lr instead of learning_rate keyword")
+        assert False
+
     return config
 
 def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
@@ -89,7 +97,7 @@ def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
         print()
     return config
 
-def get_hook(comms_dict):
+def get_stepwise_hook(comms_dict):
     def hook_fn(module, input, output):
         if "loop_count" not in comms_dict:
             comms_dict["loop_count"] = 0
@@ -111,40 +119,8 @@ def get_hook(comms_dict):
         if comms_dict.get("trg_swap_masks", None) is not None:
             trg_swap_mask = comms_dict["trg_swap_masks"]
             src_swap_mask = comms_dict["src_swap_masks"]
-            # print()
-            # print("Hooked Print")
-            # idx_range = torch.arange(trg_swap_mask.shape[-1]).long()
-            # for i in range(3):
-            #     print("Idx:  ", tensor2str(idx_range))
-            #     print("SSwap:", tensor2str(src_swap_mask[i].long()))
-            #     print("TSwap:", tensor2str(trg_swap_mask[i].long()))
-        elif comms_dict.get("trg_swap_idxs", None) is not None:
-            trg_swap_idxs = comms_dict["trg_swap_idxs"]
-            src_swap_idxs = comms_dict["src_swap_idxs"]
-            i = comms_dict["loop_count"]
-            if len(src_actvs.shape)==2: # in contrast to len 3
-                trg_swap_idxs = trg_swap_idxs[:,i]
-                trg_swap_mask = trg_swap_idxs>-1
-                src_swap_mask = (src_swap_idxs==trg_swap_idxs[:,None])
-                src_swap_mask = src_swap_mask&(src_swap_idxs>0)
-            else:
-                trg_swap_mask = trg_swap_idxs>-1
-                src_swap_mask = src_swap_idxs>-1
 
         comms_dict["loop_count"] += 1
-
-        ## TODO
-        #device = trg_actvs.get_device()
-        #p = torch.nn.Parameter(torch.ones_like(trg_actvs))
-        #trg_actvs[trg_swap_mask] = src_actvs[src_swap_mask].to(device)
-        #return trg_actvs*p
-
-        # DEBUGGING
-        #device = src_actvs.get_device()
-        #p = torch.nn.Parameter(torch.ones_like(src_actvs))
-        #return src_actvs.to(device) * p.to(device)
-        #return output * p.to(device)
-        ## DEBUGGING
 
         if trg_swap_mask is not None:
             placeholder = torch.empty_like(trg_actvs)
@@ -152,11 +128,6 @@ def get_hook(comms_dict):
             src_actvs = src_actvs[src_swap_mask]
             trg_actvs = trg_actvs[trg_swap_mask]
 
-        ## DEBUGGING
-        # Perform causal interchange
-        #p = torch.nn.Parameter(torch.ones_like(src_actvs))
-        #outs = src_actvs.to(device)*p
-        ## DEBUGGING
         intrv_module = comms_dict["intrv_module"]
         outs = intrv_module(
             target=trg_actvs,
@@ -177,6 +148,106 @@ def get_hook(comms_dict):
             return outs
 
     return hook_fn
+
+def get_indyswap_hook(comms_dict):
+    def hook(module, inp, out):
+        """
+        out: tensor (B,M,D)
+            the mamba recurrent states where M is the number of SSM
+            states
+        """
+        h = out
+        if type(out)==dict:
+            h = h["hidden_states"]
+        device = device_fxn(h.get_device())
+        og_h_shape = h.shape
+        intrv_modu = comms_dict["intrv_module"]
+        src_idx = comms_dict.get("src_idx",0)
+        trg_idx = comms_dict.get("trg_idx",1)
+        varb_idx = comms_dict.get("varb_idx",None)
+
+        #if comms_dict["pad_mask"] is None:
+        #    pad_mask = torch.ones(len(h)).bool().to(device)
+        #else:
+        #    # assumes mask denotes pad ids as true
+        #    pad_mask = ~(comms_dict["pad_mask"].bool()).to(device)
+        #    pad_mask = pad_mask[:,comms_dict["loop_count"]]
+
+        #if pad_mask.long().sum()==0:
+        #    return out
+
+        # General to multi-dimensional states or single vector states
+        source_actvs = comms_dict["src_activations"]
+        B,S = source_actvs.shape[:2]
+        source_actvs = source_actvs.reshape(B,S,-1)
+        source_actvs = source_actvs.to(device)
+
+        #print("B,S:", B,S)
+        #print("og_out shape:", og_h_shape)
+        #print("pre pad:", comms_dict[source_actvs_key].shape)
+        #print("pad:", pad_mask.shape)
+        #print("ptype:", type(pad_mask), pad_mask.dtype)
+        #print("h:", h.shape, type(h), h.dtype)
+
+        # Get positional indices of the interchange for each sample in
+        # the batch.
+        source_seq_idxs = comms_dict["src_swap_idxs"].long()
+        trg_seq_idxs = comms_dict["trg_swap_idxs"].long()
+        batch_bools = trg_seq_idxs==comms_dict["loop_count"]
+        h = h.reshape(B,-1) # assume no seq dim
+        intr_out = h.clone()
+
+        comms_dict["loop_count"] += 1
+        if batch_bools.float().sum()==0:
+            h = h.reshape(og_h_shape)
+            if type(out)==dict:
+                out["hidden_states"] = h
+                h = out
+            return h
+
+        # Get appropriate inputs for interchange
+        idxs = torch.arange(len(batch_bools)).long().to(device)
+        idxs = idxs[batch_bools]
+        #trg_idxs = trg_seq_idxs[batch_bools]
+        source_idxs = source_seq_idxs[batch_bools]
+
+        trg_inpts = h[idxs]
+        source_inpts = source_actvs[idxs, source_idxs]
+
+        #print("source_idxs:", source_idxs.shape)
+        #print("h:", h.shape)
+        #print("sactvs:", source_actvs.shape)
+        #print("trg_inpts:", trg_inpts.shape)
+        #print("source_inpts:", source_inpts.shape)
+
+        # Perform causal interchange
+        outs = intrv_modu(
+            base=trg_inpts,
+            source=source_inpts.to(device),
+            trg_idx=trg_idx,
+            source_idx=src_idx,)
+
+        ## If auxiliary targets are argued, then use them as a constraint
+        ## on the intervened vectors.
+        #if comms_dict.get(aux_targs_key, None) is not None:
+        #    comms_dict[aux_loss_key] = aux_loss_fxn(
+        #        outs,
+        #        comms_dict[aux_targs_key][idxs].to(device),
+        #        targs=torch.ones(len(outs)).to(device),
+        #    )
+
+        # Place causally intervened outputs into appropriate locations
+        # in original output tensor. We do it this way to avoid auto-grad
+        # errors for in-place operations
+        intr_out[idxs] = 0
+        intr_out[idxs] += outs
+
+        intr_out = intr_out.reshape(og_h_shape)
+        if type(out)==dict:
+            out["hidden_states"] = intr_out
+            intr_out = out
+        return intr_out
+    return hook
 
 # Helper: get the module corresponding to the chosen layer.
 def get_hook_module(model, hook_layer):
@@ -252,20 +323,14 @@ def forward_pass(
     comms_dict["intrv_module"].reset()
     comms_dict["src_activations"] =\
         src_activations[batch_indices].to(device)
-    input_ids = batch["input_ids"]
+    input_ids = batch["input_ids"].clone()
 
     mask = None
     if "trg_swap_masks" in batch:
         comms_dict["trg_swap_masks"] = batch["trg_swap_masks"]
         comms_dict["src_swap_masks"] = batch["src_swap_masks"]
         mask = batch["trg_swap_masks"]
-    elif "trg_swap_idxs" in batch:
-        ssm = batch["src_swap_idxs"].to(device)
-        comms_dict["src_swap_idxs"] = ssm
-        tsm = batch["trg_swap_idxs"].to(device)
-        comms_dict["trg_swap_idxs"] = tsm
-        mask = tsm>-1
-    if mask is not None:
+    if mask is not None and config.get("stepwise", True):
         if const_targ_inpt_id:
             resp_id = config.get("resp_id", 6)
             input_ids[mask] = int(resp_id)
@@ -276,12 +341,16 @@ def forward_pass(
             perm = [perms[i+1]+len(perms[i]) for i in range(len(perms)-1)]
             perm = torch.cat([perms[0]] + perm)
             input_ids[mask] = input_ids[mask][perm.to(device)]
+    if "trg_swap_idxs" in batch:
+        ssm = batch["src_swap_idxs"].to(device)
+        comms_dict["src_swap_idxs"] = ssm
+        tsm = batch["trg_swap_idxs"].to(device)
+        comms_dict["trg_swap_idxs"] = tsm
 
     ## Run model
     outputs = model(
         input_ids=batch["input_ids"],
         attention_mask=batch["inpt_attn_mask"],
-        #task_mask=batch.get("input_tmask", None),
     )
 
     # Calc Loss
@@ -293,11 +362,19 @@ def forward_pass(
     V = logits.shape[-1]
     flat = logits.reshape(-1,V)
     labels = batch["labels"].reshape(-1)
-    tmask = batch["outp_attn_mask"]
+    mask = batch["outp_attn_mask"]
+
+    ## TODO
+    #pids = torch.argmax(logits, dim=-1)
+    #print("HEYO")
+    #for i in range(3):
+    #    print("Preds :", tensor2str(pids[i][mask[i]]))
+    #    print("Lables:", tensor2str(batch["labels"][i][mask[i]]))
+    #    print()
 
     loss = F.cross_entropy(
-        flat[tmask.reshape(-1)],
-        labels[tmask.reshape(-1)]
+        flat[mask.reshape(-1)],
+        labels[mask.reshape(-1)]
     )
 
     if "outp_tmask" in batch:
@@ -796,7 +873,10 @@ def main():
         "trg_idx": 1,
         "varb_idx": None,
     }
-    hook_fns = [get_hook(comms_dict) for _ in models]
+    if config.get("stepwise", True):
+        hook_fns = [get_stepwise_hook(comms_dict) for _ in models]
+    else:
+        hook_fns = [get_indystep_hook(comms_dict) for _ in models]
     hook_modules = [
         get_hook_module(model, config["layers"][mi])
             for mi,model in enumerate(models)
