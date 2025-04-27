@@ -117,6 +117,7 @@ def get_datasets(config):
         **temp)
     config["info"] = info
     config["seq_len"] = tmax_len
+    config["n_tokens"] = len(tokenizer.word2id)
     config["out_tokens"] = len(tokenizer.word2id)
     return tokenizer, train_dataset, valid_dataset
 
@@ -298,11 +299,14 @@ def train(rank, config, verbose=True, *args, **kwargs):
             print("Token Map:", tokenizer.id2word)
             preds = package["pred_ids"]
             targs = data["output_ids"]
+            tok = tokenizer
             for i in range(min(3,len(preds))):
                 s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                 s += "\nTarg: " + tensor2str(targs[i],)
                 s += "\nPred: " + tensor2str(preds[i],)
                 s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
+                s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                 print(s)
                 print()
                 logstr += s+"\n"
@@ -315,12 +319,15 @@ def train(rank, config, verbose=True, *args, **kwargs):
                 arr = torch.arange(len(incorrects)).long()
                 preds = package["pred_ids"]
                 targs = data["output_ids"]
+                tok = tokenizer
                 for i in range(min(3,incorrects.long().sum().item())):
                     i = arr[incorrects.cpu()][i]
                     s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                     s += "\nTarg: " + tensor2str(targs[i],)
                     s += "\nPred: " + tensor2str(preds[i],)
                     s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                    s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
+                    s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                     print(s)
                     print()
                     logstr += s+"\n"
@@ -389,11 +396,14 @@ def train(rank, config, verbose=True, *args, **kwargs):
                 logstr += s+"\n"
                 preds = package["pred_ids"]
                 targs = data["output_ids"]
+                tok = tokenizer
                 for i in range(min(3,len(preds))):
                     s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                     s += "\nTarg: " + tensor2str(targs[i],)
                     s += "\nPred: " + tensor2str(preds[i],)
                     s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                    s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
+                    s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                     print(s)
                     print()
                     logstr += s+"\n"
