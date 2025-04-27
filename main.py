@@ -349,7 +349,7 @@ def forward_pass(
         comms_dict["trg_swap_idxs"] = tsm
 
     ## Run model
-    if stepwise:
+    if config.get("stepwise", True):
         outputs = model(
             input_ids=batch["input_ids"],
             attention_mask=batch["inpt_attn_mask"],
