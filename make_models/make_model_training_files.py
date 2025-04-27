@@ -146,6 +146,7 @@ for rnn in rnns:
         config["model_type"] = rnn
         config["n_layers"] = 1
         config["d_model"] = main_d_model
+        config["tforce_train"] = False
         config["unk_p"] = bool("unk" in unk)*unk_p
         cpath = os.path.join("configs/", exp_name + "_config.json")
         save_json(config, cpath)
@@ -192,6 +193,7 @@ for enc_type in ["rope"]:
             config["exp_name"] = exp_name
             config["task_type"] = task
             config["model_type"] = "Transformer"
+            config["tforce_train"] = True
             config["lnorm"] = True
             config["llama"] = True
             config["d_model"] = main_d_model

@@ -392,7 +392,7 @@ class RNN(SequenceModule):
                 in the model.
         """
         n = self.n_layers
-        hs = [torch.zeros(batch_size,self.d_model) for _ in range(n)]
+        hs = [torch.zeros(batch_size,rnn.hidden_size) for rnn in self.rnns]
         d = self.get_device()
         return [h.to(d) for h in hs]
     

@@ -1146,6 +1146,7 @@ class LossWrapper(torch.nn.Module):
               data,inpt_pad_mask=inpt_pad_mask,out_pad_mask=out_pad_mask
             )
             assert False
+
         if not reduce_metrics:
             temp = torch.zeros_like(out_ids).float()
             temp[out_mask.reshape(out_ids.shape)] = loss
@@ -1196,22 +1197,25 @@ class LossWrapper(torch.nn.Module):
               self.tokenizer.decode(data["output_ids"][i]))
             print("dropped inpt:",
               self.tokenizer.decode(
-                data["input_ids"][i][inpt_pad_mask[i]]))
+                data["input_ids"][i].cpu()[inpt_pad_mask[i].cpu()]))
             print("dropped out:",
               self.tokenizer.decode(
-                data["output_ids"][i][out_pad_mask[i]]))
+                data["output_ids"][i].cpu()[out_pad_mask[i].cpu()]))
             print("post inpt:",
               self.tokenizer.decode(
-                data["input_ids"][i][~inpt_pad_mask[i]]))
+                data["input_ids"][i].cpu()[~inpt_pad_mask[i].cpu()]))
             print("post out:",
               self.tokenizer.decode(
-                data["output_ids"][i][~out_pad_mask[i]]))
+                data["output_ids"][i].cpu()[~out_pad_mask[i].cpu()]))
 
-        idx = inpt_pad_mask.float().sum(-1)!=out_pad_mask.float().sum(-1)
+        idx = inpt_pad_mask.float().sum(-1).cpu()!=out_pad_mask.float().sum(-1).cpu()
         print()
         print()
         print()
         print()
+        data = {k: v.cpu() for k,v in data}
+        inpt_pad_mask = inpt_pad_mask.cpu()
+        out_pad_mask = out_pad_mask.cpu()
         for i in range(idx.long().sum(-1)):
             print("Full inpt:",
               self.tokenizer.decode(data["input_ids"][idx][i]))

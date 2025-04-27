@@ -49,7 +49,12 @@ def make_tokenizer(info):
     )
     return tokenizer
 
-def tokenize_samples(samples, info, tokenizer=None, add_bos=True, *args, **kwargs):
+def tokenize_samples(
+        samples,
+        info,
+        tokenizer=None,
+        add_bos=True,
+        *args, **kwargs):
     """
     This function takes a list of samples and tokenizes them using the
     tokenizer. It also pads the samples to the maximum length of the
@@ -105,8 +110,6 @@ def get_datasets(config):
     info = task.info
     tokenizer = make_tokenizer( info=info )
     train_samps, train_tmasks, _ = task.generate_samples(n_train)
-    print("Trainsame:", train_samps[0])
-    print("Trainsame:", train_samps[1])
     valid_samps, valid_tmasks, _ = task.generate_samples(n_valid)
     train_samps, tokenizer, info, tmax_len = tokenize_samples(
         samples=train_samps, info=info, tokenizer=tokenizer, **config)
@@ -115,17 +118,18 @@ def get_datasets(config):
 
     # Pad to insure equal length
     pad = tokenizer.pad_token_id
+    add_bos = config.get("add_bos", True)
     train_samps = [
         pad_to(s, tot_len=tmax_len, fill_val=pad) for s in train_samps
     ]
     train_tmasks = [
-        pad_to(t, tot_len=tmax_len, fill_val=0) for t in train_tmasks
+        pad_to(add_bos*[0]+t, tot_len=tmax_len, fill_val=0) for t in train_tmasks
     ]
     valid_samps = [
         pad_to(s, tot_len=vmax_len, fill_val=pad) for s in valid_samps
     ]
     valid_tmasks = [
-        pad_to(t, tot_len=vmax_len, fill_val=0) for t in valid_tmasks
+        pad_to(add_bos*[0]+t, tot_len=vmax_len, fill_val=0) for t in valid_tmasks
     ]
 
     train_samps = torch.LongTensor(train_samps)
