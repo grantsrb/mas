@@ -38,7 +38,7 @@ if os.path.exists(root):
     os.chdir(root)
 
 
-for folder in ["ranges", "configs", "metas"]:
+for folder in ["ranges", "configs", "metas", "run_scripts"]:
     if not os.path.exists(folder):
         os.mkdir(folder)
 
@@ -172,7 +172,7 @@ for rnn in rnns:
         save_json(meta, mpath)
         run_script += f"python3 distr.py training.py {root}/{mpath}\n"
     script_name = f"{rnn_low}.sh"
-    script_path = os.path.join("model_creation_scripts", script_name)
+    script_path = os.path.join("run_scripts", script_name)
     with open(script_path, "w") as f:
         f.write(run_script)
 
@@ -226,7 +226,7 @@ for enc_type in ["rope"]:
             save_json(meta, mpath)
             run_script += f"python3 distr.py training.py {root}/{mpath}\n"
     script_name = f"{enc_type}_tformer.sh"
-    script_path = os.path.join("model_creation_scripts", script_name)
+    script_path = os.path.join("run_scripts", script_name)
     with open(script_path, "w") as f:
         f.write(run_script)
 
