@@ -50,6 +50,8 @@ class CausalModel:
         return token, tmask
 
     def __call__(self, token_id, varbs, info=None, *args, **kwargs):
+        for k in kwargs:
+            if k in varbs: varbs[k] = kwargs[k]
         varbs = self.update_varbs(token_id, varbs, info=info)
         varbs = self.perform_intervention(varbs)
         self.clear_intervention()
@@ -164,7 +166,7 @@ class CountUpUp(CountUpDown):
         ridx = int(np.random.randint(len(info["resp_token_ids"])))
         return info["resp_token_ids"][ridx], tmask
 
-class CountMod(CountUpDown):
+class CountUpDownMod(CountUpDown):
     """
     This model counts some initial demo tokens and then takes the
     mod of that count to produce the response. 
@@ -203,7 +205,7 @@ class CountMod(CountUpDown):
                 varbs["count"] -= 1
         return varbs
 
-class CountSquare(CountUpDown):
+class CountUpDownSquare(CountUpDown):
     """
     This model counts some initial demo tokens and then takes the
     square of that count to produce the response. 
@@ -241,7 +243,7 @@ class CountSquare(CountUpDown):
                 varbs["count"] -= 1
         return varbs
 
-class CountRoundN(CountUpDown):
+class CountUpDownRound(CountUpDown):
     """
     This model counts some initial demo tokens and then rounds
     to the nearest Ns place.
