@@ -64,6 +64,7 @@ class CountUpDown(CausalModel):
             min_count=1,
             max_count=20,
             hold_outs={4,9,14,17},
+            unk_p=0.0,
             *args, **kwargs,
         ):
         super().__init__()
@@ -72,6 +73,7 @@ class CountUpDown(CausalModel):
         self.hold_outs = hold_outs
         self.init_varbs_ = {
             "obj_count": obj_count,
+            "unk_p": unk_p,
             "phase": -1,
             "count": 0,
         }
@@ -114,6 +116,8 @@ class CountUpDown(CausalModel):
     def get_token(self, varbs, info, *args, **kwargs):
         if varbs["phase"]==-1:
             tmask = 0
+            if np.random.random()<varbs.get("unk_p", 0):
+                return info.get("unk_token_id", 8), tmask
             if varbs["count"]>=varbs["obj_count"]:
                 tidx = np.random.randint(len(info["trig_token_ids"]))
                 return info["trig_token_ids"][tidx], tmask
@@ -128,16 +132,11 @@ class CountUpDown(CausalModel):
         return info["resp_token_ids"][ridx], tmask
 
 class CountUpUp(CountUpDown):
-    def __init__(self, obj_count=None, max_count=20, min_count=1):
-        super().__init__()
-        self.max_count = max_count
-        self.min_count = min_count
-        self.init_varbs_ = {
-            "obj_count": obj_count,
-            "phase": -1,
-            "demo_count": 0,
-            "resp_count": 0,
-        }
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        del self.init_varbs_["count"]
+        self.init_varbs_["demo_count"] = 0
+        self.init_varbs_["resp_count"] = 0
         self.ignore_keys = { "obj_count" }
         self.swap_varbs = None
 
@@ -164,6 +163,8 @@ class CountUpUp(CountUpDown):
     def get_token(self, varbs, info, *args, **kwargs):
         if varbs["phase"]==-1:
             tmask = 0
+            if np.random.random()<varbs.get("unk_p", 0):
+                return info.get("unk_token_id", 8), tmask
             if varbs["demo_count"]>=varbs["obj_count"]:
                 tidx = np.random.randint(len(info["trig_token_ids"]))
                 return info["trig_token_ids"][tidx], tmask
@@ -182,18 +183,9 @@ class CountUpDownMod(CountUpDown):
     This model counts some initial demo tokens and then takes the
     mod of that count to produce the response. 
     """
-    def __init__(self, obj_count=None, mod=4, max_count=20, min_count=1):
-        super().__init__()
-        self.max_count = max_count
-        self.min_count = min_count
+    def __init__(self, mod=4, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.mod = mod
-        self.init_varbs_ = {
-            "obj_count": obj_count,
-            "phase": -1,
-            "count": 0,
-        }
-        self.ignore_keys = { "obj_count" }
-        self.swap_varbs = None
 
     def update_varbs(self,
             token_id,
@@ -221,17 +213,8 @@ class CountUpDownSquare(CountUpDown):
     This model counts some initial demo tokens and then takes the
     square of that count to produce the response. 
     """
-    def __init__(self, obj_count=None, max_count=10, min_count=1):
-        super().__init__()
-        self.max_count = max_count
-        self.min_count = min_count
-        self.init_varbs_ = {
-            "obj_count": obj_count,
-            "phase": -1,
-            "count": 0,
-        }
-        self.ignore_keys = { "obj_count" }
-        self.swap_varbs = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def update_varbs(self,
             token_id,
@@ -259,18 +242,9 @@ class CountUpDownRound(CountUpDown):
     This model counts some initial demo tokens and then rounds
     to the nearest Ns place.
     """
-    def __init__(self, obj_count=None, roundn=3, max_count=20, min_count=1):
+    def __init__(self, roundn=3, *args, **kwargs):
         super().__init__()
-        self.max_count = max_count
-        self.min_count = min_count
         self.roundn = roundn
-        self.init_varbs_ = {
-            "obj_count": obj_count,
-            "phase": -1,
-            "count": 0,
-        }
-        self.ignore_keys = { "obj_count" }
-        self.swap_varbs = None
 
     def update_varbs(self,
             token_id,
