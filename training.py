@@ -22,6 +22,11 @@ from dl_utils.tokenizer import Tokenizer
 from seq_models import make_model
 from utils import tensor2str
 import tasks
+from dl_utils.training import run_training
+import torch.multiprocessing as mp
+
+torch.autograd.set_detect_anomaly(True)
+
 
 def make_tokenizer(info):
     words = set()
@@ -641,9 +646,7 @@ def config_error_catching(config):
     config = extract_task_config(config)
     return config
 
-if __name__=="__main__":
-    config = { }
-    if len(sys.argv)>1:
-        config = load_json_or_yaml(sys.argv[1])
-    train(0, config)
+if __name__ == "__main__":
+    mp.set_start_method('forkserver')
+    run_training(train)
 

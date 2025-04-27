@@ -3,6 +3,7 @@ import pickle
 import os
 import json
 import yaml
+import copy
 from .utils import get_git_revision_hash, package_versions, get_datetime_str, remove_ending_slash
 import numpy as np
 
@@ -320,7 +321,7 @@ def get_model_folders(exp_folder, incl_full_path=False, incl_empty=True):
     if incl_full_path: folders = [os.path.expanduser(f) for f in folders]
     return sorted(folders, key=foldersort)
 
-def load_checkpoint(path, use_best=False):
+def load_checkpoint(path, use_best=True, ret_path=False):
     """
     Loads the save_dict into python. If the path is to a model_folder,
     the loaded checkpoint is the BEST checkpt if available, otherwise
@@ -331,6 +332,8 @@ def load_checkpoint(path, use_best=False):
             path to checkpoint file or model_folder
         use_best: bool
             if true, will load the best checkpt based on validation metrics
+        ret_path: bool
+            if true, will return the path used for the checkpoint
     Returns:
         checkpt: dict
             a dict that contains all the valuable information for the
@@ -346,7 +349,11 @@ def load_checkpoint(path, use_best=False):
             checkpts = get_checkpoints(path)
             if len(checkpts)==0: return None
             path = checkpts[-1]
-    data = torch.load(path, map_location=torch.device("cpu"), weights_only=False)
+    data = torch.load(
+        path,
+        map_location=torch.device("cpu"),
+        weights_only=False,
+    )
     data["loaded_path"] = path
     if "config" in data:
         data["hyps"] = data["config"]
@@ -357,6 +364,8 @@ def load_checkpoint(path, use_best=False):
         ext = path.split(".")[-1]
         data["epoch"] = int(path.split("."+ext)[0].split("_")[-1])
         torch.save(data, path) 
+    if ret_path:
+        return data, path
     return data
 
 def load_model(path, models, load_sd=True, use_best=False,
@@ -542,6 +551,69 @@ def exp_num_exists(exp_num, exp_folder):
             return True
     return False
 
+def make_save_folder(hyps, incl_full_path=False):
+    """
+    Creates the save name for the model. Will add exp_num to hyps if
+    it does not exist when argued.
+
+    hyps: dict
+        keys:
+            exp_save_path: str
+                path to the experiment folder where all experiments
+                sharing the same `exp_name` are saved.
+                i.e. /home/user/all_saves/exp_name/
+            exp_name: str
+                the experiment name
+            exp_num: int
+                the experiment id number
+            search_keys: str
+                the identifying keys for this hyperparameter search
+    incl_full_path: bool
+        if true, prepends the exp_save_path to the save_folder.
+    """
+    return get_save_folder(hyps, incl_full_path=incl_full_path)
+
+def get_save_folder(hyps, incl_full_path=False):
+    """
+    Creates the save name for the model. Will add exp_num to hyps if
+    it does not exist when argued.
+
+    hyps: dict
+        keys:
+            exp_folder: str or None
+                path to the experiment folder where all experiments
+                sharing the same `exp_name` are saved.
+                i.e. /home/user/all_saves/<exp_name>/
+                If None is argued, will use "./<exp_name>"
+            exp_name: str
+                the experiment name.
+            exp_num: int
+                the experiment id number
+            search_keys: str
+                the identifying keys for this hyperparameter search
+    incl_full_path: bool
+        if true, prepends the exp_folder to the save_folder.
+    """
+    if "exp_num" not in hyps:
+        hyps["exp_folder"] = hyps.get(
+          "exp_folder", os.path.join("./", hyps.get("exp_name", "myexp"))
+        )
+        hyps["exp_num"] = get_new_exp_num(
+            hyps["exp_folder"], hyps["exp_name"]
+        )
+    model_folder = "{}_{}".format( hyps["exp_name"], hyps["exp_num"] )
+    model_folder += prep_search_keys(hyps.get("search_keys","_"))
+    if "exp_name" in model_folder:
+        splt = model_folder.split("exp_name")
+        right = splt[-1].split("_")
+        if len(right)>1:
+            model_folder = splt[0] + "_".join(right[1:])
+        else:
+            model_folder = splt[0]
+    if incl_full_path: 
+        return os.path.join(hyps["exp_folder"], model_folder)
+    return model_folder
+
 def get_new_exp_num(exp_folder, exp_name, offset=0):
     """
     Finds the next open experiment id number by searching through the
@@ -597,6 +669,10 @@ def get_new_exp_num(exp_folder, exp_name, offset=0):
             return i+offset
     return len(exp_nums) + offset
 
+def save_yaml(data, file_name):
+    with open(file_name, 'w') as outfile:
+        yaml.dump(data, outfile, default_flow_style=False)
+
 def load_yaml(file_name):
     """
     Loads a yaml file as a python dict
@@ -624,10 +700,32 @@ def load_json(file_name):
 
 def is_jsonable(x):
     try:
-        json.dumps(x)
+        json.dumps(x, ensure_ascii=False, indent=4)
         return True
     except (TypeError, OverflowError):
-        return False
+        pass
+    return False
+
+def make_jsonable(x):
+    if is_jsonable(x): return x
+    if type(x)==dict:
+        for k in list(x.keys()):
+            newk = make_jsonable(k)
+            x[newk] = make_jsonable(x[k])
+            if newk!=k or type(newk)!=type(k):
+                print("K:", k, x[k])
+                del x[k]
+    elif hasattr(x, "__len__"):
+        x = [make_jsonable(xx) for xx in x]
+    elif hasattr(x,"__name__"):
+        x = x.__name__
+    else:
+        try:
+            x = str(x)
+        except:
+            print("Removing", x, "from json")
+            x = ""
+    return x
 
 def save_json(data, file_name):
     """
@@ -641,36 +739,9 @@ def save_json(data, file_name):
     n_loops = 0
     while failure and n_loops<10*len(data):
         failure = False
-        n_loops += 1
-        try:
-            with open(file_name, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-        except (TypeError, OverflowError):
-            data = {**data}
-            keys = list(data.keys())
-            for k in keys:
-                if not is_jsonable(data[k]):
-                    if type(data[k])==dict:
-                        data = {**data, **data[k]}
-                        del data[k]
-                    elif type(data[k])==set:
-                        data[k] = list(data[k])
-                    elif hasattr(data[k],"__name__"):
-                        data[k] = data[k].__name__
-                    else:
-                        try:
-                            data[k] = str(data[k])
-                        except:
-                            del data[k]
-                            print("Removing", k, "from json")
-            try:
-                with open(file_name, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=4)
-            except:
-                print("trying again")
-                failure = True
-
-
+        jdata = make_jsonable(copy.deepcopy(data))
+        with open(file_name, 'w', encoding='utf-8') as f:
+            json.dump(jdata, f, ensure_ascii=False, indent=4)
 
 def load_json_or_yaml(file_name):
     """
@@ -752,9 +823,11 @@ def get_folder_from_path(path):
 
 def get_num_duplicates(folder, fname, ext=".csv"):
     n_dupls = 0
+    folder = get_folder_from_path(folder)
     for f in os.listdir(folder):
-        if fname in f and ext in f: n_dupls += 1
+        n_dupls += int(fname == f[:len(fname)] and ext in f)
     return n_dupls
+
 
 def get_save_name(
         save_folder,

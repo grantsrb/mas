@@ -12,11 +12,10 @@ import copy
 root = "make_models" # the name of the directory in which this script resides
 main_save_directory = "/mnt/fs2/grantsrb/mas_neurips2025/"
 main_d_model = 128
-seeds =    [12345, 23456, ]
+seeds =    [12345, 23456,]
 devices =  [0,1,2,3,4,5,6,7,8,9]
 unk_p = 0.2
-
-tasks = ["MultiObject", "SingleObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
+tasks = ["MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
 rnns = ["GRU", "LSTM"]
 
 if len(sys.argv)>=2:
@@ -125,9 +124,6 @@ def save_yaml(data, file_name):
         yaml.dump(data, outfile, default_flow_style=False)
 
 
-config_folder =   "tmlr_exp_files/configs/"
-ranges_folder = "tmlr_exp_files/ranges/"
-
 # Get Main Config
 config = load_yaml("config.yaml")
 config["save_root"] = main_save_directory
@@ -135,53 +131,61 @@ og_config = config
 
 # Make RNN Configs
 config = copy.deepcopy(og_config)
-for task in tasks:
-    for rnn in rnns:
-        run_script = f"#!/bin/bash\n\n"
-        for ui,unk in enumerate(["_unk", ""]):
-            task_low = task.lower()
-            rnn_low = rnn.lower()
-            exp_name = f"{task_low}_{rnn_low}{unk}"
-            # Make Config
-            config["exp_name"] = exp_name
-            config["task_type"] = task
-            config["model_type"] = rnn
-            config["n_layers"] = 1
-            config["d_model"] = main_d_model
-            config["unk_p"] = bool("unk" in unk)*unk_p
-            cpath = os.path.join("configs/", exp_name + "_config.json")
-            save_json(config, cpath)
+unk = ""
+incr = len(devices)//len(tasks)
+for rnn in rnns:
+    print(rnn)
+    run_script = f"#!/bin/bash\n\n"
+    for ti,task in enumerate(tasks):
+        task_low = task.lower()
+        rnn_low = rnn.lower()
+        exp_name = f"{task_low}_{rnn_low}{unk}"
+        # Make Config
+        config["exp_name"] = exp_name
+        config["task_type"] = task
+        config["model_type"] = rnn
+        config["n_layers"] = 1
+        config["d_model"] = main_d_model
+        config["unk_p"] = bool("unk" in unk)*unk_p
+        cpath = os.path.join("configs/", exp_name + "_config.json")
+        save_json(config, cpath)
 
-            # Make Ranges
-            ranges = {
-                "seed": seeds,
-            }
-            rpath = os.path.join("ranges/", exp_name + "_ranges.json")
-            save_json(ranges, rpath)
+        # Make Ranges
+        ranges = {
+            "seed": seeds,
+        }
+        rpath = os.path.join("ranges/", exp_name + "_ranges.json")
+        save_json(ranges, rpath)
 
-            # Make Meta Config
-            ds = devices[:len(devices)//2] if ui==0 else devices[len(devices)//2:]
-            meta = {
-                "devices": ds,
-                "key_order": ["seed"],
-                "hyperparams": os.path.join(root, cpath),
-                "hyperranges": os.path.join(root, rpath),
-            }
-            mpath = os.path.join("metas/", exp_name + "_meta.json")
-            save_json(meta, mpath)
-            run_script += f"python3 distr.py training.py {root}/{mpath}\n"
-        script_name = f"{task_low}_{rnn_low}.sh"
-        script_path = os.path.join("model_creation_scripts", script_name)
-        with open(script_path, "w") as f:
-            f.write(run_script)
+        # Make Meta Config
+        start = ti*incr
+        end = (ti+1)*incr
+        ds = devices[start:end]
+        print(ds)
+        meta = {
+            "devices": ds,
+            "key_order": ["seed"],
+            "hyperparams": os.path.join(root, cpath),
+            "hyperranges": os.path.join(root, rpath),
+        }
+        mpath = os.path.join("metas/", exp_name + "_meta.json")
+        save_json(meta, mpath)
+        run_script += f"python3 distr.py training.py {root}/{mpath}\n"
+    script_name = f"{rnn_low}.sh"
+    script_path = os.path.join("model_creation_scripts", script_name)
+    with open(script_path, "w") as f:
+        f.write(run_script)
 
 
 # Make Transformer Configs
 config = copy.deepcopy(og_config)
-for task in tasks:
-    for enc_type in ["rope", "nope"]:
-        run_script = f"#!/bin/bash\n\n"
-        for ui,unk in enumerate(["_unk", ""]):
+unks = ["_unk", ""]
+incr = len(devices)//(len(tasks) * len(unks))
+for enc_type in ["rope"]:
+    print("Tformer", enc_type)
+    run_script = f"#!/bin/bash\n\n"
+    for ti,task in enumerate(tasks):
+        for ui,unk in enumerate(unks):
             task_low = task.lower()
             exp_name = f"{task_low}_{enc_type}_tformer{unk}"
             # Make Config
@@ -208,7 +212,10 @@ for task in tasks:
             save_json(ranges, rpath)
 
             # Make Meta Config
-            ds = devices[:len(devices)//2] if ui==0 else devices[len(devices)//2:]
+            start = int((ti*len(unks)+ui)*incr)
+            end = int((ti*len(unks)+ui+1)*incr)
+            ds = devices[start: end]
+            print("ds:", ds)
             meta = {
                 "devices": ds,
                 "key_order": ["seed"],
@@ -218,9 +225,9 @@ for task in tasks:
             mpath = os.path.join("metas/", exp_name + "_meta.json")
             save_json(meta, mpath)
             run_script += f"python3 distr.py training.py {root}/{mpath}\n"
-        script_name = f"{task_low}_{enc_type}_tformer.sh"
-        script_path = os.path.join("model_creation_scripts", script_name)
-        with open(script_path, "w") as f:
-            f.write(run_script)
+    script_name = f"{enc_type}_tformer.sh"
+    script_path = os.path.join("model_creation_scripts", script_name)
+    with open(script_path, "w") as f:
+        f.write(run_script)
 
 print("Done")
