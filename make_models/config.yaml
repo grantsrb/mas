@@ -1,0 +1,31 @@
+add_bos: true
+batch_size: 128
+d_model: 20
+encoder_layer_class: RotaryEncoderLayer
+exp_name: mkmdls
+l_norm: false
+llama: true
+lr: 0.0001
+model_type: GRU
+n_epochs: 800
+n_heads: 1
+n_layers: 1
+n_train_samples: 1000
+n_val_samples: 500
+patience: 200
+plateau: 0.0001
+pos_enc_class: IdentityPositionalEncoding
+save: true
+save_root: /mnt/fs2/grantsrb/das_saves/
+sd_save_double_every: null
+sd_save_mod: 5
+task_config:
+  hold_outs:
+  - 4
+  - 9
+  - 14
+  - 17
+  min_count: 1
+  max_count: 20
+  unk_p: 0
+val_mod: 5
