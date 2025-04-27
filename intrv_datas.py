@@ -418,6 +418,7 @@ def make_intrv_data_from_seqs(
         seqs=trg_seqs,
         cmodel=trg_cmodel,
         info=trg_info,
+        post_varbs=False,
     )
     if stepwise:
         trg_swap_masks = copy.deepcopy(src_swap_masks)
@@ -437,7 +438,6 @@ def make_intrv_data_from_seqs(
             filter=trg_filter,
             info=trg_info,
             stepwise=False,
-            post_varbs=False
         )
 
     # 3. Using the variables, seqs, and swap indices, create
