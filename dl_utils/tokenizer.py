@@ -256,6 +256,7 @@ class Tokenizer():
                        words={"\\newline",'\n'},
                        delimeters={" "},
                        padding_side="right",
+                       *args, **kwargs,
         ):
         """
         word2id: dict
@@ -382,8 +383,8 @@ class Tokenizer():
             None
         tok_X: list of lists of tokens
             these are the strings that will be tokenized and indexed.
-            if None is argued, the word2id and id2word must not be
-            None
+            if None is argued for this and X, the word2id and id2word
+            must not be None
         alphabetize: bool
             if true, will alphabetize the token mapping, so that the
             words have ids according to their alphabetical ordering

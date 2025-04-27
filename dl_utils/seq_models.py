@@ -375,6 +375,8 @@ class RNN(SequenceModule):
             modules.append(torch.nn.LayerNorm(d_hid))
         modules.append(torch.nn.Dropout(self.drop_p))
         self.decoder = torch.nn.Sequential( *modules )
+        print("D", d_hid)
+        print("Out", self.out_tokens)
         self.lm_head = torch.nn.Linear( d_hid, self.out_tokens )
 
     def get_fresh_recurrent_vectors(self, batch_size=1):

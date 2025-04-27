@@ -46,7 +46,6 @@ class Task:
             inpt_token=self.bos_token,
             info=self.info,
             end_tokens={self.info.get("eos_token", "E"), None},
-            *args, **kwargs,
         )
         return seq, tmask, varbs
 

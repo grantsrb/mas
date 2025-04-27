@@ -59,10 +59,17 @@ class CausalModel:
         return outp_token, varbs, tmask
 
 class CountUpDown(CausalModel):
-    def __init__(self, obj_count=None, max_count=20, min_count=1):
+    def __init__(self,
+            obj_count=None,
+            min_count=1,
+            max_count=20,
+            hold_outs={4,9,14,17},
+            *args, **kwargs,
+        ):
         super().__init__()
-        self.max_count = max_count
         self.min_count = min_count
+        self.max_count = max_count
+        self.hold_outs = hold_outs
         self.init_varbs_ = {
             "obj_count": obj_count,
             "phase": -1,
@@ -78,6 +85,10 @@ class CountUpDown(CausalModel):
             varbs["obj_count"] = int(np.random.randint(
                 self.min_count, self.max_count+1
             ))
+            while varbs["obj_count"] in self.hold_outs:
+                varbs["obj_count"] = int(np.random.randint(
+                    self.min_count, self.max_count+1
+                ))
         return varbs
 
     def update_varbs(self,
