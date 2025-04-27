@@ -251,7 +251,7 @@ class Tokenizer():
                        pad_token="<PAD>",
                        bos_token="<BOS>",
                        eos_token="<EOS>",
-                       unk_token="<UNK>",
+                       unk_token=None,
                        strings=None,
                        words={"\\newline",'\n'},
                        delimeters={" "},
@@ -302,11 +302,11 @@ class Tokenizer():
         self.pad_token = Tokenizer.pad_token
         self.bos_token = Tokenizer.bos_token
         self.eos_token = Tokenizer.eos_token
-        if pad_token and pad_token != Tokenizer.pad_token:
+        if pad_token:
             self.pad_token = pad_token
-        if bos_token and bos_token != Tokenizer.bos_token:
+        if bos_token:
             self.bos_token = bos_token
-        if eos_token and eos_token != Tokenizer.eos_token:
+        if eos_token:
             self.eos_token = eos_token
         self.special_tokens = {
             "pad_token": self.pad_token,
@@ -321,13 +321,16 @@ class Tokenizer():
         self.special_tokens["unk_token"] = self.unk_token
         self.split_digits = split_digits
 
+        if word2id is not None: words = set(word2id.keys())
         if words is None: words = set()
         #if split_digits: words |= set([str(i) for i in range(10)])
         words |= set(self.special_tokens.values())
 
-        if word2id is None:
-            word2id = {}
-            id2word = {}
+        if id2word is None: id2word = dict()
+        if word2id is None: word2id = dict()
+        if len(word2id)!=len(id2word):
+            word2id = {**{v:k for k,v in id2word.items()}, **word2id}
+            id2word = {**{v:k for k,v in word2id.items()}, **id2word}
 
         for w in self.special_tokens.values():
             if w not in word2id:
@@ -358,12 +361,6 @@ class Tokenizer():
                 tid = len(word2id)
                 word2id[word] = tid 
                 id2word[tid] = word
-
-        if id2word is None: id2word = dict()
-        if word2id is None: word2id = dict()
-        if len(word2id)!=len(id2word):
-            word2id = {**{v:k for k,v in id2word.items()}, **word2id}
-            id2word = {**{v:k for k,v in word2id.items()}, **id2word}
         self.word2id = word2id
         self.id2word = id2word
 

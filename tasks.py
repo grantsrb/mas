@@ -24,8 +24,9 @@ class Task:
         self.info = info if info is not None else dict()
         self.bos_token = self.info.get("bos_token", "B")
 
-    def prep_info(self, info):
+    def prep_info(self, info, unk_p=0, **kwargs):
         # Need to use _id to integrate with the CausalModels
+        if unk_p: info["unk_token"] = "U"
         for k in list(info.keys()):
             if "tokens" in k:
                 kid = k.replace("tokens", "token_ids")
@@ -71,7 +72,7 @@ class MultiObject(NumericEquivalence):
     def __init__(self, info=None, *args, **kwargs):
         if info is None:
             info = copy.deepcopy(multiobj_info)
-            info = self.prep_info(info)
+            info = self.prep_info(info, **kwargs)
         super().__init__(info=info, *args, **kwargs)
 
 class SingleObject(NumericEquivalence):

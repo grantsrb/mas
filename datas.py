@@ -5,7 +5,7 @@ from utils import (
 from dl_utils.utils import (
     pad_to, arglast, get_mask_past_idx,
 )
-from intrv_datas import run_to_completion
+from utils import run_cmodel_to_completion
 from datasets import load_dataset, Dataset
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -49,7 +49,7 @@ def generate_token_ids_from_cmodel(n_samples, cmodel, info):
     for i in range(n_samples):
         varbs = cmodel.init_varbs
         inpt_token = info["bos_token_id"]
-        seq, varbs_list, tmask = run_to_completion(
+        seq, varbs_list, tmask = run_cmodel_to_completion(
             cmodel=cmodel,
             inpt_token=inpt_token,
             varbs=varbs,

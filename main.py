@@ -26,7 +26,7 @@ from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
 from intrv_modules import InterventionModule
 import filters
-from causal_models import CountUpDown, CountUpUp, CountMod, CountRoundN, CountSquare
+import causal_models
 from intrv_datas import make_intrv_data_from_seqs
 
 import pandas as pd # import after transformers to avoid versioning bug
@@ -38,7 +38,7 @@ def config_prep(config):
     config["filters"] = [
         getattr(filters, fname) for fname in config["filter_names"]
     ]
-    config["cmodels"] = [globals()[cname]() for cname in config["cmodel_names"]]
+    config["cmodels"] = [getattr(causal_models, cname) for cname in config["cmodel_names"]]
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
     for si,sks in enumerate(config["swap_keys"]):

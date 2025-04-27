@@ -23,6 +23,27 @@ from seq_models import make_model
 from utils import tensor2str
 import tasks
 
+def make_tokenizer(info):
+    words = set()
+    for v in info.values():
+        if type(v)==list:
+            words = words.union(set(v))
+        else: words.add(v)
+    print("Words:", words)
+    word2id = {
+        info["pad_token"]: 0,
+        info["bos_token"]: 1,
+        info["eos_token"]: 2,
+    }
+    for w in sorted(list(words)):
+        if w not in word2id: word2id[w] = len(word2id)
+    print("word2id:", word2id)
+    tokenizer = Tokenizer(
+        word2id=word2id,
+        **info,
+    )
+    return tokenizer
+
 def tokenize_samples(samples, info, tokenizer=None, add_bos=True, *args, **kwargs):
     """
     This function takes a list of samples and tokenizes them using the
@@ -77,10 +98,13 @@ def get_datasets(config):
     task_config = config.get("task_config", dict())
     task = getattr(tasks, config["task_type"])(**task_config)
     info = task.info
+    tokenizer = make_tokenizer( info=info )
     train_samps, train_tmasks, _ = task.generate_samples(n_train)
+    print("Trainsame:", train_samps[0])
+    print("Trainsame:", train_samps[1])
     valid_samps, valid_tmasks, _ = task.generate_samples(n_valid)
     train_samps, tokenizer, info, tmax_len = tokenize_samples(
-        samples=train_samps, info=info, tokenizer=None, **config)
+        samples=train_samps, info=info, tokenizer=tokenizer, **config)
     valid_samps, _, _, vmax_len = tokenize_samples(
         samples=valid_samps, info=info, tokenizer=tokenizer,**config)
 
