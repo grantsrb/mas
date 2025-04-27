@@ -9,7 +9,7 @@ import torch
 from datasets import Dataset
 
 from dl_utils.utils import pad_to
-from utils import tensor2str
+from utils import tensor2str, run_cmodel_to_completion
 
 def pad_seqs(data, max_len):
     """
@@ -76,124 +76,6 @@ def collect_varbs(seq, cmodel, varbs=None, info=None, post_varbs=False):
             varb_list.append(copy.deepcopy(varbs))
         outp_token_ids.append(outp)
         task_mask.append(tmask)
-    return outp_token_ids, varb_list, task_mask
-
-def run_to_completion(
-        cmodel,
-        inpt_token,
-        varbs=None,
-        post_varbs=False,
-        info=None,
-        end_tokens={}
-    ):
-    """
-    Runs a causal model until it produces None or a token contained
-    in the end_tokens dict.
-
-    Args:
-        cmodel: CausalModel
-            accepts a token and a dict of variables
-        inpt_token: tokenized string
-        varbs: (optional) dict of variables or None
-            optionally argue variables to argue to the causal model
-            with the first input token.
-        post_varbs: bool
-            if true, will return the variables after each
-            input token. Otherwise returns the variables
-            before each token.
-        info: (optional) dict
-            some cmodels require additional info which can be specified
-            in the info dict
-        end_tokens: set
-            optionally specify tokens that indicate the model is finished.
-            None is assumed to be an end condition for all cmodels
-    Returns:
-        outp_tokens: list of tokens
-            the output produced by the causal model after each
-            input token.
-        varb_list: list of dicts
-            the input variables used by the causal model with each
-            input token.
-        outp_task_mask: list of bools
-            a task mask output by the causal model
-    """
-    return run_for_n_steps(
-        cmodel=cmodel,
-        inpt_token=inpt_token,
-        varbs=varbs,
-        post_varbs=post_varbs,
-        info=info,
-        end_tokens=end_tokens,
-        n_steps=None,
-    )
-
-def run_for_n_steps(
-        cmodel,
-        inpt_token,
-        n_steps=None,
-        varbs=None,
-        post_varbs=False,
-        info=None,
-        end_tokens=set(),
-    ):
-    """
-    Runs a causal model until it prduces None or a token contained in the end_tokens
-    dict.
-
-    Args:
-        cmodel: CausalModel
-            accepts a token and a dict of variables
-        inpt_token: tokenized string
-        n_steps: (optional) int or None
-            if int, will run the causal model for only that many steps or until
-            an end condition is met. If None, will run the causal model until an
-            end condition.
-        varbs: (optional) dict of variables or None
-            optionally argue variables to argue to the causal model
-            with the first input token.
-        info: (optional) dict
-            some cmodels require additional info which can be specified
-            in the info dict
-        end_tokens: set
-            optionally specify tokens that indicate the model is finished.
-            None is assumed to be an end condition for all cmodels
-        post_varbs: bool
-            if true, will return the variables after each
-            input token. Otherwise returns the variables
-            before each token.
-    Returns:
-        outp_tokens: list of tokens
-            the output produced by the causal model after each
-            input token.
-        varb_list: list of dicts
-            the input variables used by the causal model with each
-            input token.
-        outp_task_mask: list of bools
-            a task mask output by the causal model
-    """
-    if end_tokens is None: end_tokens = set()
-    outp_token_ids = []
-    if not varbs:
-        varbs = cmodel.init_varbs
-    varb_list = []
-    task_mask = []
-    token = inpt_token
-    step = 0
-    while n_steps is None or step < n_steps:
-        step += 1
-        if not post_varbs:
-            varb_list.append(copy.deepcopy(varbs))
-        token, varbs, tmask = cmodel(
-            token_id=token, varbs=varbs, info=info)
-        if post_varbs:
-            varb_list.append(copy.deepcopy(varbs))
-        task_mask.append(tmask)
-        outp_token_ids.append(token)
-        if token in end_tokens or token is None:
-            break
-        elif step > 10000:
-            print("Infinite Loop in intrv_datas!!!!")
-            assert False
     return outp_token_ids, varb_list, task_mask
 
 def get_varbs_at_idx(seq, cmodel, idx, info=None, post_varbs=False):
@@ -416,7 +298,7 @@ def make_counterfactual_seqs(
         intrv_varbs_list.append(intrv_varbs)
         inpt_token = int(trg_seq[trg_idx])
 
-        intrv_seq, _, intrv_tmask = run_to_completion(
+        intrv_seq, intrv_tmask, _ = run_cmodel_to_completion(
             cmodel=trg_cmodel,
             inpt_token=inpt_token,
             varbs=trg_varbs,
