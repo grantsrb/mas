@@ -171,7 +171,7 @@ for rnn in rnns:
         }
         mpath = os.path.join("metas/", exp_name + "_meta.json")
         save_json(meta, mpath)
-        run_script += f"python3 distr.py training.py {root}/{mpath}\n"
+        run_script += f"python3 distr.py train.py {root}/{mpath}\n"
     script_name = f"{rnn_low}.sh"
     script_path = os.path.join("run_scripts", script_name)
     with open(script_path, "w") as f:
@@ -226,7 +226,7 @@ for enc_type in ["rope"]:
             }
             mpath = os.path.join("metas/", exp_name + "_meta.json")
             save_json(meta, mpath)
-            run_script += f"python3 distr.py training.py {root}/{mpath}\n"
+            run_script += f"python3 distr.py train.py {root}/{mpath}\n"
     script_name = f"{enc_type}_tformer.sh"
     script_path = os.path.join("run_scripts", script_name)
     with open(script_path, "w") as f:
