@@ -11,6 +11,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import torch
 
+import tasks
+
 def gsm8k_tokenize_training(example, tokenizer, config, prompt=""):
     text = prompt + example["question"] + "\nAnswer:" + example["answer"]
     return tokenizer(text, truncation=True, padding="max_length", max_length=config["max_length"])
@@ -19,9 +21,31 @@ def numequiv_tokenize_training(example, tokenizer, config):
     text = example["text"]
     return tokenizer(text, truncation=True, padding="max_length", max_length=config["max_length"])[0]
 
-def get_dataset(dataset_name, data_path=None, **kwargs):
+def get_task_generated_dataset(
+        n_samples,
+        task_type,
+        task_config=dict(),
+    ):
+    task = getattr(tasks, task_type)(**task_config)
+    samps, tmasks, _ = task.generate(n_samples)
+    samps = [" ".join(samp) for samp in samps]
+    return samps, tmasks
+
+def get_dataset(
+        dataset_name,
+        n_samples=10000,
+        data_path=None,
+        task_type=None,
+        task_config=None,
+        **kwargs):
     if dataset_name=="gsm8k":
         return load_dataset(dataset_name, **kwargs)
+    elif dataset_name=="task":
+        d = get_task_generated_dataset(
+            n_samples=n_samples,
+            task_type=task_type,
+            task_config=task_config,
+        )
     elif dataset_name=="num_equivalence":
         if kwargs.get("split", "train")=="train":
             if not data_path:
@@ -32,7 +56,7 @@ def get_dataset(dataset_name, data_path=None, **kwargs):
                 data_path = "./data/multiobj_systematic_1000.json"
             path = os.path.abspath(os.path.expanduser(data_path))
         d = load_json(path) #[{"text": t} for t in load_text(file_name=path)]
-        return Dataset.from_dict(d)
+    return Dataset.from_dict(d)
 
 def generate_token_ids_from_cmodel(n_samples, cmodel, info):
     """

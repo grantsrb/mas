@@ -293,7 +293,7 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
         model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="auto")
     model.eval()
-    return model, tokenizer
+    return model, tokenizer, mconfig
 
 def forward_pass(
         sidx,
@@ -516,11 +516,15 @@ def main():
         ], #[, "gpt2"], #
 
         "dataset_names": [
-            "data/multiobj.json", "data/multiobj.json"
+            "task", "task"
         ],
+        "n_train_samples": 10000, # sample counts only apply if using task generated
+            # dataset
+        "n_valid_samples": 1000,
         "dataset_kwargs": [
             {"name": "main", "split":"train", } for _ in range(2)
         ],
+        "task_kwargs": [{} for _ in range(2)],
         "filter_by_correct": False,
         "filtered_dataset_paths": [
             "./data/filtered_gsm8k",  # where to save/load the filtered dataset
@@ -609,14 +613,16 @@ def main():
             poss_devices = [0,0]
     models = []
     tokenizers = []
+    model_configs = []
     m_sizes = []
     devices = []
     for mi,model_name in enumerate(config["model_names"]):
-        model, tokenizer = get_model_and_tokenizer(
+        model, tokenizer, model_config = get_model_and_tokenizer(
             model_name,
             padding_side=padding_sides[mi],
         )
         model.eval()
+        model_configs.append(model_config)
 
         # Freeze model parameters so that only our rotation matrix is trained.
         for param in model.parameters():
@@ -656,6 +662,7 @@ def main():
     datasets = { "train": [], "valid": [], }
     for mi in range(len(config["dataset_names"])):
         for k in datasets:
+            n_samples = config[f"n_{k}_samples"]
             dkwargs = {**config["dataset_kwargs"][mi]}
             dkwargs["split"] = k
             dkwargs["data_path"] = config.get(
@@ -663,8 +670,14 @@ def main():
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
             dataset = get_dataset(
-                config["dataset_names"][mi], **dkwargs)
+                config["dataset_names"][mi],
+                n_samples=n_samples,
+                task_type=model_configs[mi].get("task_type", None),
+                task_config=model_configs[mi].get("task_config", None),
+                **dkwargs)
             datasets[k].append(dataset)
+    print("Pre Dataset:", tokenized_datasets["train"][0])
+    print("Pre Info:", infos[0])
 
     ####################################################
     #    Tokenize the filtered dataset for autoregressive training.
@@ -686,14 +699,19 @@ def main():
                     config=kwrgs,
                 )
             )
-            info = make_tokenized_info(
-                replacements=kwrgs["replacements"],
-                tokenizer=tokenizer,
-                config=config)
+            info = model_configs[mi].get(
+                "info",
+                make_tokenized_info(
+                    replacements=kwrgs["replacements"],
+                    tokenizer=tokenizer,
+                    config=config)
+            )
         infos.append(info)
     config["infos"] = infos
     print("Tok Dataset:", tokenized_datasets["train"][0])
     print("Tok Info:", infos[0])
+    # TODO
+    assert False
 
     ####################################################
     #    Make/Get Intervention Data
