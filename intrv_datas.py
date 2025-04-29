@@ -11,7 +11,7 @@ from datasets import Dataset
 from dl_utils.utils import pad_to
 from utils import tensor2str, run_cmodel_to_completion
 
-def pad_seqs(data, max_len):
+def pad_seqs(data, max_len, truncate=False):
     """
     Pads all of the sequences in data that have mask or seq
     or input_ids in their key name. Operates in place.
@@ -21,6 +21,9 @@ def pad_seqs(data, max_len):
             all keys that contain "mask" or "seq" or "input_ids"
             are padded to the max_len arg
         max_len: int
+        truncate: bool
+            if true, will cut the sequences down to max_len
+            if they exceed.
     Returns:
         data: dict
             the same data dict with padded sequences
@@ -33,6 +36,8 @@ def pad_seqs(data, max_len):
                     tot_len=max_len,
                     fill_val=0,
                 )
+                if truncate:
+                    data[k][si] = data[k][si][:max_len]
     return data
 
 def collect_varbs(seq, cmodel, varbs=None, info=None, post_varbs=False):
@@ -458,9 +463,8 @@ def make_intrv_data_from_seqs(
     )
 
     intrv_swap_masks = [
-        pad_to(swap_mask, len(seq)) for swap_mask,seq in zip(trg_swap_masks, intrv_seqs)
+        pad_to(msk, len(seq)) for msk,seq in zip(trg_swap_masks, intrv_seqs)
     ]
-
     d = {
         "trg_input_ids": intrv_seqs,
         "trg_varbs": intrv_varbs,
@@ -473,11 +477,12 @@ def make_intrv_data_from_seqs(
         "trg_swap_idxs": trg_swap_idxs,
         "src_swap_idxs": src_swap_idxs,
     }
+
     max_len = int(max(
         np.max([len(seq) for seq in d["trg_input_ids"]]),
         np.max([len(seq) for seq in d["src_input_ids"]]),
     ))
-    d = pad_seqs(d, max_len=max_len)
+    d = pad_seqs(d, max_len=max_len, truncate=True)
     for k in d:
         if type(d[k])==list:
             if type(d[k][0])==list:
@@ -507,3 +512,4 @@ def make_intrv_data_from_seqs(
     d["trg_outp_attn_masks"] = ~d["trg_outp_attn_masks"]
     d["src_outp_attn_masks"] = ~d["src_outp_attn_masks"]
     return d
+

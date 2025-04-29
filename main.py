@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from datas import (
     get_dataset, tokenize_dataset, ensure_equal_length,
     collate_fn, default_replacement_dict,
-    make_tokenized_info,
+    make_tokenized_info, add_token_ids_to_info
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
@@ -28,6 +28,7 @@ from intrv_modules import InterventionModule
 import filters
 import causal_models
 from intrv_datas import make_intrv_data_from_seqs
+from train import make_tokenizer_from_info
 
 import pandas as pd # import after transformers to avoid versioning bug
 
@@ -38,7 +39,14 @@ def config_prep(config):
     config["filters"] = [
         getattr(filters, fname) for fname in config["filter_names"]
     ]
-    config["cmodels"] = [getattr(causal_models, cname) for cname in config["cmodel_names"]]
+    
+    # can assume different cmodels will default to appropriate parameters. This
+    # reduces risk of error. Just make a new causal model for new interventions
+    kwargs = { "hold_outs": [], }
+    config["cmodels"] = [
+        getattr(causal_models, cname)(**kwargs) for cname in config["cmodel_names"]
+    ]
+
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
     for si,sks in enumerate(config["swap_keys"]):
@@ -272,11 +280,18 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
         temp = smods.make_model(mconfig)
         temp.load_state_dict(checkpt["state_dict"])
         model = temp.model
-        tokenizer = Tokenizer(
-            words=set(),
-            unk_token=None,
-            word2id=mconfig.get("word2id",{}),
-            padding_side=padding_side)
+        if "info" in mconfig:
+            tokenizer = make_tokenizer_from_info(mconfig["info"])
+        elif "word2id" in mconfig:
+            tokenizer = Tokenizer(
+                word2id=mconfig["word2id"],
+                padding_side=padding_side)
+        else:
+            tokenizer = Tokenizer(
+                words=set(),
+                unk_token=None,
+                word2id=None,
+                padding_side=padding_side)
     except:
         try:
             tokenizer = AutoTokenizer.from_pretrained(
@@ -372,7 +387,7 @@ def forward_pass(
     flat = logits.reshape(-1,V)
     labels = batch["labels"].reshape(-1)
     lmask = batch["outp_attn_mask"]
-    if "trg_swap_masks" in batch:
+    if "trg_swap_masks" in batch and config.get("stepwise", True):
         smask = torch.roll(~batch["trg_swap_masks"], -1, dims=-1)
         smask[...,-1] = True
         lmask = lmask&(smask)
@@ -676,8 +691,7 @@ def main():
                 task_config=model_configs[mi].get("task_config", None),
                 **dkwargs)
             datasets[k].append(dataset)
-    print("Pre Dataset:", tokenized_datasets["train"][0])
-    print("Pre Info:", infos[0])
+    print("Pre Dataset:", datasets["train"][0])
 
     ####################################################
     #    Tokenize the filtered dataset for autoregressive training.
@@ -699,19 +713,23 @@ def main():
                     config=kwrgs,
                 )
             )
-            info = model_configs[mi].get(
-                "info",
-                make_tokenized_info(
-                    replacements=kwrgs["replacements"],
-                    tokenizer=tokenizer,
-                    config=config)
-            )
+            if "info" in model_configs[mi]:
+                info = model_configs[mi]["info"]
+                if type(info["pad_token_id"])==str:
+                    info = add_token_ids_to_info(info=info, tokenizer=tokenizer)
+            else:
+                info = model_configs[mi].get(
+                    "info",
+                    make_tokenized_info(
+                        replacements=kwrgs["replacements"],
+                        tokenizer=tokenizer,
+                        config=config)
+                )
         infos.append(info)
     config["infos"] = infos
     print("Tok Dataset:", tokenized_datasets["train"][0])
     print("Tok Info:", infos[0])
-    # TODO
-    assert False
+    print("Cmodls:", config["cmodels"])
 
     ####################################################
     #    Make/Get Intervention Data
@@ -727,6 +745,11 @@ def main():
                 n_varbs = len(skeys)
                 z = enumerate(zip(skeys,tkeys))
                 for vidx,(src_swap_keys, trg_swap_keys) in z:
+                    print("INFOS:")
+                    print(config["infos"][0])
+                    print()
+                    print(config["infos"][1])
+                    print()
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],

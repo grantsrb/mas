@@ -27,9 +27,9 @@ def get_task_generated_dataset(
         task_config=dict(),
     ):
     task = getattr(tasks, task_type)(**task_config)
-    samps, tmasks, _ = task.generate(n_samples)
+    samps, tmasks, _ = task.generate_samples(n_samples)
     samps = [" ".join(samp) for samp in samps]
-    return samps, tmasks
+    return {"text": samps, "task_mask": tmasks}
 
 def get_dataset(
         dataset_name,
@@ -214,7 +214,8 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
         d["trg_swap_idxs"] = torch.tensor(batch["trg_swap_idxs"])[...,:-1]
         d["src_swap_idxs"] = torch.tensor(batch["src_swap_idxs"])[...,:-1]
     except: pass
-    # In a standard LM objective the labels are the input_ids (shifted internally by the model)
+    # In a standard LM objective the labels are the input_ids (shifted internally
+    # by the model), but we don't do that
     return {k:v.to(device) for k,v in d.items()}
 
 default_replacement_dict = {
@@ -236,6 +237,29 @@ def replace_text(text, replacement_dict=default_replacement_dict):
 def get_max_length(text, tokenizer):
     toks = tokenizer(text, return_tensors="pt")["input_ids"]
     return toks.shape[-1] + 20*2 + 2
+
+def add_token_ids_to_info(info, tokenizer):
+    keys = list(info.keys())
+    for k in keys:
+        if not info[k]: continue
+        if "tokens" in k and not "_id" in k:
+            key_id = k[:-1] + "_ids"
+            try:
+                token_ids = [
+                    int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
+                ]
+            except:
+                token_ids = [
+                    int(tokenizer.word2id[tok]) for tok in info[k]
+                ]
+            info[key_id] = token_ids
+        elif "token" in k and not "_id" in k:
+            key_id = k + "_id"
+            try:
+                info[key_id] = int(tokenizer(info[k])["input_ids"][-1])
+            except:
+                info[key_id] = int(tokenizer.word2id[info[k]])
+    return info
 
 def make_tokenized_info(replacements, tokenizer, config):
     """
@@ -274,26 +298,7 @@ def make_tokenized_info(replacements, tokenizer, config):
         if replacements[k]:
             info[info_key].append(replacements[k])
     
-    keys = list(info.keys())
-    for k in keys:
-        if not info[k]: continue
-        if "tokens" in k and not "_id" in k:
-            key_id = k[:-1] + "_ids"
-            try:
-                token_ids = [
-                    int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
-                ]
-            except:
-                token_ids = [
-                    int(tokenizer.word2id[tok]) for tok in info[k]
-                ]
-            info[key_id] = token_ids
-        elif "token" in k and not "_id" in k:
-            key_id = k + "_id"
-            try:
-                info[key_id] = int(tokenizer(info[k])["input_ids"][-1])
-            except:
-                info[key_id] = int(tokenizer.word2id[info[k]])
+    info = add_token_ids_to_info(info)
     return info
 
 def tokenize_dataset(dataset, tokenizer, config):
@@ -342,12 +347,6 @@ def tokenize_dataset(dataset, tokenizer, config):
     tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
     tok_dict["inpt_attn_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
 
-    swap_idxs = get_swap_idxs(
-        token_ids=tok_dict["input_ids"],
-        replace_dict=reps,
-        tokenizer=tokenizer)
-    tok_dict["swap_idxs"] = swap_idxs
-
     #try:
     #    print()
     #    print("Swaps:")
@@ -390,7 +389,6 @@ def tokenize_dataset(dataset, tokenizer, config):
         tok_dict["inpt_attn_mask"] = tok_dict["inpt_attn_mask"]&~eos_and_tmask
 
         # Quick Tests
-        assert len(swap_idxs)==len(tmasks) and len(swap_idxs[0])==len(tmasks[0])
         tmask = tok_dict["task_mask"][0]
         assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
     tokenized = Dataset.from_dict(tok_dict)

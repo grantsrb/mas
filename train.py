@@ -19,6 +19,7 @@ from dl_utils.utils import package_versions, pad_to
 from dl_utils.datas import CausalDataset
 from dl_utils.tokenizer import Tokenizer
 
+from datas import add_token_ids_to_info
 from seq_models import make_model
 from utils import tensor2str
 import tasks
@@ -28,7 +29,7 @@ import torch.multiprocessing as mp
 torch.autograd.set_detect_anomaly(True)
 
 
-def make_tokenizer(info):
+def make_tokenizer_from_info(info):
     words = set()
     for v in info.values():
         if type(v)==list:
@@ -92,6 +93,7 @@ def tokenize_samples(
             ids = [tokenizer.bos_token_id] + ids
         sample_ids.append(ids)
         if len(ids)>max_len: max_len = len(ids)
+    info = add_token_ids_to_info(info=info, tokenizer=tokenizer)
     return sample_ids, tokenizer, info, max_len
 
 def get_datasets(config):
@@ -108,7 +110,8 @@ def get_datasets(config):
     task_config = config.get("task_config", dict())
     task = getattr(tasks, config["task_type"])(**task_config)
     info = task.info
-    tokenizer = make_tokenizer( info=info )
+    tokenizer = make_tokenizer_from_info( info=info )
+
     train_samps, train_tmasks, _ = task.generate_samples(n_train)
     valid_samps, valid_tmasks, _ = task.generate_samples(n_valid)
     train_samps, tokenizer, info, tmax_len = tokenize_samples(
@@ -152,6 +155,7 @@ def get_datasets(config):
     config["seq_len"] = tmax_len
     config["n_tokens"] = len(tokenizer.word2id)
     config["out_tokens"] = len(tokenizer.word2id)
+    config["word2id"] = tokenizer.word2id
     return tokenizer, train_dataset, valid_dataset
 
 

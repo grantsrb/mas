@@ -76,11 +76,13 @@ class LSTM(smods.LSTM):
         h = (cat[..., :h[0].shape[-1]], cat[..., h[0].shape[-1]:]) 
         return h
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.BoolTensor=None,
                       task_mask:torch.BoolTensor=None,
                       n_steps:int=0,
                       temperature=None,
+                      input_ids:torch.Tensor=None,
+                      attention_mask:torch.Tensor=None,
                       inputs_embeds=None,
                       ret_gtruth=True,
                       *args, **kwargs):
@@ -89,6 +91,9 @@ class LSTM(smods.LSTM):
             inpts: Tensor, shape ``[bsize, seq_len]``
             pad_mask: Tensor, shape ``[bsize, seq_len]``
                 true means padding
+            attention_mask: Tensor, shape ``[bsize, seq_len]``
+                huggingface style padding mask where false means padding.
+                True for positions that you want to attend to.
             task_mask: Tensor, shape ``[bsize, seq_len]``
                 true means the tokens are a part of the prediction
                 task and as such should not be teacher forced. Tokens at
@@ -113,8 +118,10 @@ class LSTM(smods.LSTM):
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
         input_ids = inpts
-        if not inputs_embeds:
+        if inputs_embeds is None:
             embs = self.embeddings(inpts)
         else: embs = inputs_embeds
 
@@ -123,6 +130,8 @@ class LSTM(smods.LSTM):
         pred_ids = []
         past_hs,past_cs = [],[]
         hs,cs = self.get_fresh_recurrent_vectors(B)
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is None:
             pad_mask = torch.zeros_like(inpts).bool()
         # The task mask allows us to do teacher forcing up until
@@ -202,11 +211,13 @@ class RNN(smods.RNN):
         hcopy = self.identities[layer](hcopy)
         return hcopy
 
-    def forward(self, inpts:torch.Tensor,
+    def forward(self, inpts:torch.Tensor=None,
                       pad_mask:torch.Tensor=None,
                       task_mask:torch.Tensor=None,
                       n_steps:int=0,
                       temperature=None,
+                      input_ids:torch.Tensor=None,
+                      attention_mask:torch.Tensor=None,
                       inputs_embeds=None,
                       ret_gtruth=True,
                       *args, **kwargs):
@@ -215,6 +226,9 @@ class RNN(smods.RNN):
             inpts: Tensor, shape ``[bsize, seq_len]``
             pad_mask: Tensor, shape ``[bsize, seq_len]``
                 true means padding
+            attention_mask: Tensor, shape ``[bsize, seq_len]``
+                huggingface style padding mask where false means padding.
+                True for positions that you want to attend to.
             task_mask: Tensor, shape ``[bsize, seq_len]``
                 true means the tokens are a part of the prediction
                 task, and, as such should not be teacher forced. Tokens
@@ -238,8 +252,10 @@ class RNN(smods.RNN):
                 logits: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
                 pred_ids: Tensor of shape ``[bsize,seq_len+n_steps,n_tokens]``
         """
+        if input_ids is not None:
+            inpts = input_ids
         input_ids = inpts
-        if not inputs_embeds:
+        if inputs_embeds is None:
             embs = self.embeddings(inpts)
         else: embs = inputs_embeds
 
@@ -248,6 +264,8 @@ class RNN(smods.RNN):
         pred_ids = []
         past_hs = []
         hs = self.get_fresh_recurrent_vectors(B)
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is None:
             pad_mask = torch.zeros_like(inpts).bool()
         # The task mask allows us to do selective teacher forcing.
@@ -711,10 +729,12 @@ class Transformer(smods.Transformer):
         ))
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
                     mask:torch.Tensor=None,
                     pad_mask:torch.Tensor=None,
                     task_mask:torch.Tensor=None,
+                    input_ids:torch.Tensor=None,
+                    attention_mask:torch.Tensor=None,
                     n_steps:int=0,
                     temperature=None,
                     inputs_embeds=None,
@@ -731,6 +751,9 @@ class Transformer(smods.Transformer):
                 true means padding, or unattended locations
             pad_mask: Tensor, shape ``[bsize, seq_len]``
                 true means padding
+            attention_mask: Tensor, shape ``[bsize, seq_len]``
+                huggingface style padding mask where false means padding.
+                True for positions that you want to attend to.
             task_mask: Tensor, shape ``[bsize, seq_len]``
                 true means the tokens are a part of the prediction
                 task and as such should not be teacher forced. Tokens at
@@ -768,6 +791,8 @@ class Transformer(smods.Transformer):
                 "past_key_values": None or tuple of tuple of tensors
                 "last_hidden_state": torch FloatTensor (B,S+NSteps,E)
         """
+        if input_ids is not None:
+            inpts = input_ids
         if inpts is None:
             raise NotImplemented
             B,S = inputs_embeds.shape[:2]
@@ -803,6 +828,8 @@ class Transformer(smods.Transformer):
             inpt_emb = None
 
         # Masks
+        if attention_mask is not None:
+            pad_mask = ~attention_mask.bool()
         if pad_mask is not None:
             pad_mask = ~(pad_mask.bool())
             if pad_mask.shape[-1]<n_loops:
@@ -938,12 +965,13 @@ class KWindowTransformer(Transformer):
         self.attn_window = attn_window
 
     def tforce_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
+                    input_ids:torch.Tensor=None,
                     mask:torch.Tensor=None,
-                    pad_mask:torch.Tensor=None,
-                    task_mask:torch.Tensor=None,
                     past_key_values=None,
                     *args, **kwargs):
+        if input_ids is not None:
+            inpts = input_ids
         if inpts is None:
             S = inputs_embeds.shape[1]
         else:
@@ -955,19 +983,18 @@ class KWindowTransformer(Transformer):
         return super().tforce_fwd(
             inpts=inpts,
             mask=mask,
-            pad_mask=pad_mask,
-            task_mask=task_mask,
             past_key_values=past_key_values,
             *args, **kwargs)
 
     def freedom_fwd(self,
-                    inpts:torch.Tensor,
+                    inpts:torch.Tensor=None,
+                    input_ids:torch.Tensor=None,
                     mask:torch.Tensor=None,
-                    pad_mask:torch.Tensor=None,
-                    task_mask:torch.Tensor=None,
                     n_steps:int=0,
                     past_key_values=None,
                     *args, **kwargs):
+        if input_ids is not None:
+            inpts = input_ids
         if inpts is None:
             S = inputs_embeds.shape[1]
         else:
