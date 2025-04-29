@@ -49,9 +49,14 @@ def config_prep(config):
 
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
+    elif type(config["swap_keys"] )==str:
+        skey = config["swap_keys"]
+        config["swap_keys"] = [skey for _ in range(n_models)]
     for si,sks in enumerate(config["swap_keys"]):
         if sks[0] is None:
             config["swap_keys"][si] = ["full"]
+        elif type(sks)==str:
+            config["swap_keys"][si] = [sks]
     
     if config["train_directions"] in {None, "all"}:
         config["train_directions"] = []
@@ -443,15 +448,15 @@ def forward_pass(
             src_swap = arglast(batch["src_swap_masks"][i])
             trg_swap = arglast(batch["trg_swap_masks"][i])
             print("Src Swap", int(src_swap), "- Trg Swap", int(trg_swap))
-            print("Idx:  ", tensor2str(idx_range))
-            print("Src  :", tensor2str(batch["src_input_ids"][i]))
-            print("Trg  :", tensor2str(inpts[i]))
-            print("Preds:", tensor2str(outs[i]))
-            print("Lbls :", tensor2str(labels[i]))
-            print("TrnLb:", tensor2str(labels[i][lmask[i]].long()))
-            print("OTmsk:", tensor2str(batch["outp_tmask"][i].long()))
-            print("TSwap:", tensor2str(batch["trg_swap_masks"][i].long()))
-            print("LsMsk:", tensor2str(lmask[i].long()))
+            print("Idx   :", tensor2str(idx_range))
+            print("Src   :", tensor2str(batch["src_input_ids"][i]))
+            print("Trg   :", tensor2str(inpts[i]))
+            print("Preds :", tensor2str(outs[i]))
+            print("Labels:", tensor2str(labels[i]))
+            print("TrnLab:", tensor2str(labels[i][lmask[i]].long()))
+            print("OuTmsk:", tensor2str(batch["outp_tmask"][i].long()))
+            print("TrgSwp:", tensor2str(batch["trg_swap_masks"][i].long()))
+            print("LosMsk:", tensor2str(lmask[i].long()))
             print()
             print("Inpts:", tensor2str(inpts[i][:trg_swap]))
             print("Gtrth:", tensor2str(labels[i][trg_swap:]))
@@ -736,6 +741,11 @@ def main():
     ####################################################
     intrv_datasets = {k: dict() for k in tokenized_datasets }
     n_subspaces = 0
+    print("Info:")
+    print(config["infos"][0])
+    print()
+    print(config["infos"][1])
+    print()
     for k in tokenized_datasets:
         for tidx in range(len(tokenized_datasets[k])):
             for sidx in range(len(tokenized_datasets[k])):
@@ -745,11 +755,6 @@ def main():
                 n_varbs = len(skeys)
                 z = enumerate(zip(skeys,tkeys))
                 for vidx,(src_swap_keys, trg_swap_keys) in z:
-                    print("INFOS:")
-                    print(config["infos"][0])
-                    print()
-                    print(config["infos"][1])
-                    print()
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],

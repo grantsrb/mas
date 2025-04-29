@@ -12,7 +12,7 @@ import copy
 root = "make_models" # the name of the directory in which this script resides
 main_save_directory = "/mnt/fs2/grantsrb/mas_neurips2025/"
 main_d_model = 128
-n_epochs = 1600
+n_epochs = 2500
 seeds =    [12345, 23456,]
 devices =  [0,1,2,3,4,5,6,7,8,9]
 unk_p = 0.2

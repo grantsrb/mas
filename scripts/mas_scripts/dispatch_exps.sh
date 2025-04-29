@@ -1,17 +1,22 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="mas_dispatch"
-gpus=( 1 2 3 4 5 6 7 8 9 0 )
-root_folder="/mnt/fs2/grantsrb/mas_saves/"
-exp_folders1=( "lstm_multiobj" "tformer_multiobj_unk_d40" "big-sameobj" "lstm_sameobj" ) #"big-multiobj" "lstm_multiobj" "tformer_multiobj_unk_d40" "big-sameobj" "lstm_sameobj" )
-exp_folders2=( "lstm_multiobj" )
-config="configs/numequiv.yaml"
-n_units="n_units=16"
-fsr="fsr=False"
-const_targ_inpt_id="const_targ_inpt_id=False"
-mtx_types="mtx_types=RotationMatrix,RotationMatrix"
-stepwise="stepwise=True"
+exp_name="mas"
+gpus=( 0 1 2 3 4 5 6 7 8 9 )
+root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
+
+#"multiobjectmod_gru"
+#"multiobjectround_gru"
+#"multiobjectmod_lstm"
+#"multiobjectround_lstm"
+
+
+
+exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
+exp_folders2=( "multiobject_gru"  )
+config="configs/numequiv_indywise.yaml"
+search1=("n_units=16" "n_units=4")
+search2=("swap_keys=full" "swap_keys=count")
 
 echo Dispatching
 cuda_idx=0
@@ -30,8 +35,10 @@ do
 
                            model_path1="${exp_root1}/${model_folder1}"
                            model_path2="${exp_root2}/${model_folder2}"
+                           echo out1 ${search1[@]}
+                           echo out2 ${search2[@]}
 
-                           bash scripts/single_model_run.sh $cuda $exp_name $model_path1 $model_path2 $config $n_units $fsr $const_targ_inpt_id $mtx_types $stepwise &
+                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" &
 
                            cuda_idx=$((1+$cuda_idx))
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then

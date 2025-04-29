@@ -5,7 +5,7 @@ encoder_layer_class: RotaryEncoderLayer
 exp_name: mkmdls
 l_norm: false
 llama: true
-lr: 0.0001
+lr: 0.0005
 model_type: GRU
 n_epochs: 800
 n_heads: 1
