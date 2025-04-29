@@ -851,12 +851,14 @@ def get_save_name(
             "max_length": "mxln",
             "eval_batch_size": "vlbsz",
             "learning_rate": "lr",
+            "stepwise": "stpwse",
         },
         ignores = {
             "print_every",
             "model_names",
             "mtx_kwargs",
             "save_keys",
+            "dataset_names",
         },):
     # Get intial save folder root
     exp_name = kwargs.get("exp_name", config.get("exp_name", "mas_"))
@@ -870,6 +872,8 @@ def get_save_name(
     # add key value pairs to folder name
     if "save_keys" in kwargs:
         s = set(kwargs["save_keys"])
+    elif "save_keys" in config:
+        s = set(config["save_keys"])
     else:
         s = set(kwargs.keys())
         d = set(kwargs.keys()).symmetric_difference(set(config.keys()))

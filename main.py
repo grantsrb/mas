@@ -592,7 +592,7 @@ def main():
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
 
-        "save_keys": ["mtx_types", "mask_type", "layers", "lr", "fsr"],
+        "save_keys": ["mtx_types", "layers", "n_units","stepwise"],
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
