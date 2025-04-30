@@ -1150,6 +1150,9 @@ def main():
                 val_min = np.min(vals)
                 m = 0.999
                 end_training = end_training or (val_min>=m and trn_min>=m)
+                if (val_min<0.1 and global_step>=1500):
+                    print("Stopping due to poor performance!")
+                    end_training = True
 
             
             ### Save loss and state dict
