@@ -852,6 +852,7 @@ def get_save_name(
             "eval_batch_size": "vlbsz",
             "learning_rate": "lr",
             "stepwise": "stpwse",
+            "swap_keys": "swpks",
         },
         ignores = {
             "print_every",
@@ -884,7 +885,14 @@ def get_save_name(
     for k in sorted(list(s)):
         if k in ignores: continue
         has_len = hasattr(kwargs[k],"__len__")
-        if k!="hook_layers" and type(kwargs[k])!=str and has_len:
+        if k=="swap_keys":
+            val = config["swap_keys"]
+            swap_keys = []
+            for v in val:
+                skey = "".join(v)
+                swap_keys.append(skey)
+            val = "-".join(swap_keys)
+        elif k!="hook_layers" and type(kwargs[k])!=str and has_len:
             val = "".join([
               str(e)[:3]+str(e)[-2:] if len(str(e))>3 else str(e)[:3] for e in kwargs[k]
             ][:3])
@@ -915,6 +923,7 @@ def get_save_name(
         .replace("True","T")\
         .replace("False","F")\
         .replace("auto","ato")\
+        .replace("swap_keys","swpks")\
         .replace("encoder","enc")
     n_dupls = get_num_duplicates(save_folder, save_name, ext=".csv")
     return save_name + f"_v{n_dupls}"

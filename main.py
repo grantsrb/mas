@@ -71,6 +71,9 @@ def config_prep(config):
         print("use lr instead of learning_rate keyword")
         assert False
 
+    if config.get("debugging", False):
+        config["n_train_samples"] = 100
+        config["n_valid_samples"] = 100
     return config
 
 def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
@@ -592,7 +595,8 @@ def main():
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
 
-        "save_keys": ["mtx_types", "layers", "n_units","stepwise"],
+        "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
+        "debugging": False,
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
@@ -620,7 +624,8 @@ def main():
     print("Saving to:", save_folder)
 
     jpath = os.path.join(save_folder, save_name + ".json")
-    save_json(config, jpath)
+    if not config.get("debugging", False):
+        save_json(config, jpath)
 
     ##########################
     #    Load two models and tokenizers
@@ -1148,7 +1153,10 @@ def main():
 
             
             ### Save loss and state dict
-            if end_training or global_step%config.get("save_every_steps", 100):
+            svsteps = config.get("save_every_steps", 100)
+            if config.get("debugging", False):
+                print("Skipping saving due to debugging flag")
+            elif end_training or global_step%svsteps:
                 #print("Saving To", os.path.join(save_folder, save_name))
                 csv = os.path.join(save_folder, save_name + ".csv")
                 df = pd.DataFrame(df_dict)
