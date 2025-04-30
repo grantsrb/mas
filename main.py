@@ -680,7 +680,7 @@ def main():
     ####################################################
     print("Loading datasets...")
     datasets = { "train": [], "valid": [], }
-    for mi in range(len(config["dataset_names"])):
+    for mi in range(len(config["model_names"])):
         for k in datasets:
             n_samples = config[f"n_{k}_samples"]
             dkwargs = {**config["dataset_kwargs"][mi]}
@@ -744,8 +744,10 @@ def main():
     print("Info:")
     print(config["infos"][0])
     print()
-    print(config["infos"][1])
-    print()
+    try:
+        print(config["infos"][1])
+        print()
+    except: pass
     for k in tokenized_datasets:
         for tidx in range(len(tokenized_datasets[k])):
             for sidx in range(len(tokenized_datasets[k])):
