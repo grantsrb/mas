@@ -972,43 +972,26 @@ def main():
         "varb_idx": [],
     }
     end_training = False
-    while global_step < config["num_training_steps"] and not end_training:
-        for batch_indices in train_loader:
-            # Forward passes. The hook functions will transform activations at the chosen layer.
-            losses = dict()
-            trial_accs = dict()
-            tok_accs = dict()
-            tot_loss = 0
-            tot_tok = 0
-            tot_trial = 0
+    try:
+        while global_step < config["num_training_steps"] and not end_training:
+            for batch_indices in train_loader:
+                # Forward passes. The hook functions will transform activations at the chosen layer.
+                losses = dict()
+                trial_accs = dict()
+                tok_accs = dict()
+                tot_loss = 0
+                tot_tok = 0
+                tot_trial = 0
 
-            val_losses = dict()
-            val_trial_accs = dict()
-            val_tok_accs = dict()
-            startt = time.time()
-            for dirvar_tup in tokenized_datasets["train"]:
-                runtime = time.time()
-                (sidx,tidx,vidx) = dirvar_tup
-                accum = config.get("grad_accumulation_steps", 1)
-                if (sidx,tidx) in config["train_directions"]:
-                    loss, tok_acc, trial_acc = forward_pass(
-                        sidx=sidx,
-                        tidx=tidx,
-                        vidx=vidx,
-                        model=models[tidx],
-                        comms_dict=comms_dict,
-                        batch_indices=batch_indices,
-                        dataset=tokenized_datasets["train"][dirvar_tup],
-                        src_activations=all_src_activations["train"][dirvar_tup],
-                        device=devices[tidx],
-                        config=config,
-                    )
-                    loss = loss/accum/(len(models)**2)
-                    if config["conserve_memory"]:
-                        n_tups = len(list(tokenized_datasets["train"].keys()))
-                        (loss/float(n_tups)).backward()
-                else:
-                    with torch.no_grad():
+                val_losses = dict()
+                val_trial_accs = dict()
+                val_tok_accs = dict()
+                startt = time.time()
+                for dirvar_tup in tokenized_datasets["train"]:
+                    runtime = time.time()
+                    (sidx,tidx,vidx) = dirvar_tup
+                    accum = config.get("grad_accumulation_steps", 1)
+                    if (sidx,tidx) in config["train_directions"]:
                         loss, tok_acc, trial_acc = forward_pass(
                             sidx=sidx,
                             tidx=tidx,
@@ -1022,163 +1005,183 @@ def main():
                             config=config,
                         )
                         loss = loss/accum/(len(models)**2)
-                losses[dirvar_tup] = loss.item()
-                tot_loss += loss.to(devices[0])
-
-                tot_trial += trial_acc.item()/(len(models)**2)
-                tot_tok += tok_acc.item()/(len(models)**2)
-                trial_accs[dirvar_tup] = trial_acc.item()
-                tok_accs[dirvar_tup] = tok_acc.item()
-                print("Loss:", round(loss.item(), 5),
-                    "- Time:", round(time.time()-runtime,5),
-                    "- Step:", round(global_step),
-                    end="                  \r"
-                )
-
-                # Print a sample generation every print_every steps.
-                if global_step % config["print_every"] == 0:
-                    ####################################################
-                    #### VALIDATION
-                    ####################################################
-                    print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
-                    print("Validating...")
-                    val_loss = 0
-                    val_tok = 0
-                    val_trial = 0
-                    with torch.no_grad():
-                        for val_indices in valid_loader:
-                            vloss, vtok, vtrial = forward_pass(
+                        if config["conserve_memory"]:
+                            n_tups = len(list(tokenized_datasets["train"].keys()))
+                            (loss/float(n_tups)).backward()
+                    else:
+                        with torch.no_grad():
+                            loss, tok_acc, trial_acc = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
                                 vidx=vidx,
                                 model=models[tidx],
                                 comms_dict=comms_dict,
-                                batch_indices=val_indices,
-                                dataset=tokenized_datasets["valid"][dirvar_tup],
-                                src_activations=all_src_activations["valid"][dirvar_tup],
+                                batch_indices=batch_indices,
+                                dataset=tokenized_datasets["train"][dirvar_tup],
+                                src_activations=all_src_activations["train"][dirvar_tup],
                                 device=devices[tidx],
-                                tokenizer=tokenizers[tidx],
                                 config=config,
-                                verbose=True,
                             )
-                            val_loss  += vloss.item() /len(valid_loader)
-                            val_tok   += vtok.item()  /len(valid_loader)
-                            val_trial += vtrial.item()/len(valid_loader)
-                        val_losses[dirvar_tup] = val_loss
-                        val_tok_accs[dirvar_tup] = val_tok
-                        val_trial_accs[dirvar_tup] = val_trial
+                            loss = loss/accum/(len(models)**2)
+                    losses[dirvar_tup] = loss.item()
+                    tot_loss += loss.to(devices[0])
 
-            if not config["conserve_memory"]:
-                tot_loss.backward()
-            if global_step % accum==0:
-                optimizer.step()
-                optimizer.zero_grad()
+                    tot_trial += trial_acc.item()/(len(models)**2)
+                    tot_tok += tok_acc.item()/(len(models)**2)
+                    trial_accs[dirvar_tup] = trial_acc.item()
+                    tok_accs[dirvar_tup] = tok_acc.item()
+                    print("Loss:", round(loss.item(), 5),
+                        "- Time:", round(time.time()-runtime,5),
+                        "- Step:", round(global_step),
+                        end="                  \r"
+                    )
 
-            end_training = False
-            if global_step % config["print_every"] == 0:
-                for vidx in range(n_varbs):
-                    print("Varbl", vidx)
-                    print("Mtx  Type:", config["mtx_types"][0])
-                    print("Mask Type:", type(intrv_module.swap_mask).__name__,
-                            "- FSR:", config["fsr"],
-                            "- Const Inpt:", config["const_targ_inpt_id"],
-                            "- Units:", intrv_module.swap_mask.n_units)
-                    print()
+                    # Print a sample generation every print_every steps.
+                    if global_step % config["print_every"] == 0:
+                        ####################################################
+                        #### VALIDATION
+                        ####################################################
+                        print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
+                        print("Validating...")
+                        val_loss = 0
+                        val_tok = 0
+                        val_trial = 0
+                        with torch.no_grad():
+                            for val_indices in valid_loader:
+                                vloss, vtok, vtrial = forward_pass(
+                                    sidx=sidx,
+                                    tidx=tidx,
+                                    vidx=vidx,
+                                    model=models[tidx],
+                                    comms_dict=comms_dict,
+                                    batch_indices=val_indices,
+                                    dataset=tokenized_datasets["valid"][dirvar_tup],
+                                    src_activations=all_src_activations["valid"][dirvar_tup],
+                                    device=devices[tidx],
+                                    tokenizer=tokenizers[tidx],
+                                    config=config,
+                                    verbose=True,
+                                )
+                                val_loss  += vloss.item() /len(valid_loader)
+                                val_tok   += vtok.item()  /len(valid_loader)
+                                val_trial += vtrial.item()/len(valid_loader)
+                            val_losses[dirvar_tup] = val_loss
+                            val_tok_accs[dirvar_tup] = val_tok
+                            val_trial_accs[dirvar_tup] = val_trial
 
-                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
-                    print("Train Tok Acc:",  tot_tok)
-                    s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
-                    if len(models)>1:
-                        s += "| M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
-                        s += "\n\tM2->M1:" + str(round(tok_accs[(1,0,vidx)], 5))
-                        s += "| M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
-                    print(s)
+                if not config["conserve_memory"]:
+                    tot_loss.backward()
+                if global_step % accum==0:
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-                    print("Train Trial Acc:",tot_trial)
-                    s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
-                    if len(models)>1:
-                        s += "| M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
-                        s += "\n\tM2->M1:" + str(round(trial_accs[(1,0,vidx)], 5))
-                        s += "| M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
-                    print(s)
-                    print()
+                end_training = False
+                if global_step % config["print_every"] == 0:
+                    for vidx in range(n_varbs):
+                        print("Varbl", vidx)
+                        print("Mtx  Type:", config["mtx_types"][0])
+                        print("Mask Type:", type(intrv_module.swap_mask).__name__,
+                                "- FSR:", config["fsr"],
+                                "- Const Inpt:", config["const_targ_inpt_id"],
+                                "- Units:", intrv_module.swap_mask.n_units)
+                        print()
 
-                    print("Valid Tok Acc:")
-                    s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
-                    if len(models)>1:
-                        s += "| M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
-                        s += "\n\tM2->M1:" + str(round(val_tok_accs[(1,0,vidx)], 5))
-                        s += "| M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
-                    print(s)
+                        print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                        print("Train Tok Acc:",  tot_tok)
+                        s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(tok_accs[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
+                        print(s)
 
-                    print("Valid Trial Acc:")
-                    s = "\tM1->M1: " + str(round(val_trial_accs[(0,0,vidx)], 5))
-                    if len(models)>1:
-                        s += "| M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
-                        s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
-                        s += "| M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
-                    print(s)
-                    print("Experiment:", os.path.join(save_folder, save_name))
-                    print("M1:", config["model_names"][0])
-                    if len(config["model_names"])>1:
-                        print("M2:", config["model_names"][1])
-                    print("Exec Time:", time.time()-startt)
-                    print()
+                        print("Train Trial Acc:",tot_trial)
+                        s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(trial_accs[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
+                        print(s)
+                        print()
 
-                for (s,t,v) in tokenized_datasets["train"]:
-                    tup = (s,t,v)
-                    df_dict["global_step"].append(global_step)
-                    df_dict["train_loss"].append(float(losses[tup]))
-                    df_dict["train_tok_acc"].append(float(tok_accs[tup]))
-                    df_dict["train_trial_acc"].append(float(trial_accs[tup]))
-                    df_dict["valid_loss"].append(float(val_losses[tup]))
-                    df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
-                    df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
-                    df_dict["src_idx"].append(s)
-                    df_dict["trg_idx"].append(t)
-                    df_dict["varb_idx"].append(v)
-                val_loss = np.mean(
-                    [float(l) for l in val_losses.values()])
-                vals = [float(l) for l in val_trial_accs.values()]
-                val_acc = np.mean(vals)
-                end_training = plateau_tracker.update(
-                    val_loss=val_loss, 
-                    val_acc=val_acc)
+                        print("Valid Tok Acc:")
+                        s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(val_tok_accs[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
+                        print(s)
 
-                trns = [float(l) for l in trial_accs.values()]
-                trn_min = np.min(trns)
-                val_min = np.min(vals)
-                m = 0.999
-                end_training = end_training or (val_min>=m and trn_min>=m)
-                if (val_min<0.1 and global_step>=1500):
-                    print("Stopping due to poor performance!")
-                    end_training = True
+                        print("Valid Trial Acc:")
+                        s = "\tM1->M1: " + str(round(val_trial_accs[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
+                        print(s)
+                        print("Experiment:", os.path.join(save_folder, save_name))
+                        print("M1:", config["model_names"][0])
+                        if len(config["model_names"])>1:
+                            print("M2:", config["model_names"][1])
+                        print("Exec Time:", time.time()-startt)
+                        print()
 
-            
-            ### Save loss and state dict
-            svsteps = config.get("save_every_steps", 100)
-            if config.get("debugging", False):
-                print("Skipping saving due to debugging flag")
-            elif end_training or global_step%svsteps:
-                #print("Saving To", os.path.join(save_folder, save_name))
-                csv = os.path.join(save_folder, save_name + ".csv")
-                df = pd.DataFrame(df_dict)
-                df.to_csv(csv, header=True, index=False)
+                    for (s,t,v) in tokenized_datasets["train"]:
+                        tup = (s,t,v)
+                        df_dict["global_step"].append(global_step)
+                        df_dict["train_loss"].append(float(losses[tup]))
+                        df_dict["train_tok_acc"].append(float(tok_accs[tup]))
+                        df_dict["train_trial_acc"].append(float(trial_accs[tup]))
+                        df_dict["valid_loss"].append(float(val_losses[tup]))
+                        df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
+                        df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
+                        df_dict["src_idx"].append(s)
+                        df_dict["trg_idx"].append(t)
+                        df_dict["varb_idx"].append(v)
+                    val_loss = np.mean(
+                        [float(l) for l in val_losses.values()])
+                    vals = [float(l) for l in val_trial_accs.values()]
+                    val_acc = np.mean(vals)
+                    end_training = plateau_tracker.update(
+                        val_loss=val_loss, 
+                        val_acc=val_acc)
 
-                pt = os.path.join(save_folder, save_name + ".pt")
-                sd = {
-                    "config": config,
-                    "state_dict": intrv_module.state_dict(),
-                }
-                torch.save(sd, pt)
+                    trns = [float(l) for l in trial_accs.values()]
+                    trn_min = np.min(trns)
+                    val_min = np.min(vals)
+                    m = 0.999
+                    end_training = end_training or (val_min>=m and trn_min>=m)
+                    if (val_min<0.1 and global_step>=1500):
+                        print("Stopping due to poor performance!")
+                        end_training = True
 
-            ### Stop training
-            global_step += 1
-            if global_step >= config["num_training_steps"]:
-                break
-            if end_training:
-                print("Early stopping due to performance plateau!!")
-                break
+                
+                ### Save loss and state dict
+                svsteps = config.get("save_every_steps", 100)
+                if config.get("debugging", False):
+                    print("Skipping saving due to debugging flag")
+                elif end_training or global_step%svsteps:
+                    #print("Saving To", os.path.join(save_folder, save_name))
+                    csv = os.path.join(save_folder, save_name + ".csv")
+                    df = pd.DataFrame(df_dict)
+                    df.to_csv(csv, header=True, index=False)
+
+                    pt = os.path.join(save_folder, save_name + ".pt")
+                    sd = {
+                        "config": config,
+                        "state_dict": intrv_module.state_dict(),
+                    }
+                    torch.save(sd, pt)
+
+                ### Stop training
+                global_step += 1
+                if global_step >= config["num_training_steps"]:
+                    break
+                if end_training:
+                    print("Early stopping due to performance plateau!!")
+                    break
+    except KeyboardInterrupt:
+        print("Interrupted training!!")
 
     ##########################
     # 9. Clean up: remove hooks.
