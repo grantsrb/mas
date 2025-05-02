@@ -586,9 +586,11 @@ def main():
         "lr": 1e-3,
         "max_length": 128,                 # max token length for our (toy) examples
         "eval_batch_size": 16,             # batch size for correctness evaluation
-        "patience": 500,
-        "plateau": 0.0001,
-        
+        "patience": 10, # only evaluated on print_every epochs
+        "plateau": 0.001,
+        "measure": "loss", #plateau measure (acc or loss)
+        "upper_acc_thresh": 0.995,
+
         "stepwise": False,
         "train_directions": None, # None and "all" do the same thing. Can
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
@@ -1149,7 +1151,7 @@ def main():
                     trns = [float(l) for l in trial_accs.values()]
                     trn_min = np.min(trns)
                     val_min = np.min(vals)
-                    m = 0.999
+                    m = config.get("upper_acc_thresh", 0.99)
                     end_training = end_training or (val_min>=m and trn_min>=m)
                     if (val_min<0.1 and global_step>=1500):
                         print("Stopping due to poor performance!")
