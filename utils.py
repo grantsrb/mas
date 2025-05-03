@@ -520,6 +520,8 @@ def run_for_n_steps(
             print("Infinite Loop in intrv_datas!!!!")
             print("inpt token:", inpt_token)
             print("outpts:", outp_token_ids[:100])
+            print("varbs step1:", varb_list[0])
+            print("varbs:", varbs)
             assert False
     return outp_token_ids, task_mask, varb_list
 
