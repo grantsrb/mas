@@ -5,18 +5,12 @@ exp_name="mas"
 gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
-#"multiobjectmod_gru"
-#"multiobjectround_gru"
-#"multiobjectmod_lstm"
-#"multiobjectround_lstm"
 
-
-
-exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobject_rope_tformer_unk" )
-exp_folders2=( "multiobject_gru"  )
+exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
+exp_folders2=( "multiobjectmod_gru"  )
 config="configs/general_indywise.yaml"
-search1=( "n_units=16" )
-search2=( "swap_keys=full"  "swap_keys=count" )
+search1=( "n_units=16" "n_units=64" "n_units=96" )
+search2=( "swap_keys=full" ) # "swap_keys=count" 
 
 echo Dispatching
 cuda_idx=0
@@ -44,6 +38,7 @@ do
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
                                cuda_idx=0
                            fi
+                           sleep 0.7
                       fi
                 done
             done

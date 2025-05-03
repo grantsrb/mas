@@ -44,6 +44,7 @@ do
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
                                cuda_idx=0
                            fi
+                           sleep 0.7
                       fi
                 done
             done
