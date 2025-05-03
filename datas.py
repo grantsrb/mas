@@ -10,6 +10,7 @@ from datasets import load_dataset, Dataset
 import pyarrow as pa
 import pyarrow.dataset as ds
 import torch
+from constants import DEFAULT_REPLACEMENTS
 
 import tasks
 
@@ -218,18 +219,7 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     # by the model), but we don't do that
     return {k:v.to(device) for k,v in d.items()}
 
-default_replacement_dict = {
-    "demo_word0": "D0",
-    "demo_word1": "D1",
-    "demo_word2": "D2",
-    "asst_word": "",
-    "user_word": "",
-    "trig_word": "T",
-    "resp_word": "R",
-    "done_word": "<EOS>",
-}
-
-def replace_text(text, replacement_dict=default_replacement_dict):
+def replace_text(text, replacement_dict=DEFAULT_REPLACEMENTS):
     for k,v in replacement_dict.items():
         text = text.replace(k, v)
     return text
@@ -306,7 +296,7 @@ def tokenize_dataset(dataset, tokenizer, config):
 
 
     bos = tokenizer.bos_token
-    reps = config.get("replacements", default_replacement_dict)
+    reps = config.get("replacements", DEFAULT_REPLACEMENTS)
     prompt = replace_text(text=prompt, replacement_dict=reps)
     text = dataset.map(
         lambda ex: {

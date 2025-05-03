@@ -10,8 +10,7 @@ import torch.nn.functional as F
 
 from datas import (
     get_dataset, tokenize_dataset, ensure_equal_length,
-    collate_fn, default_replacement_dict,
-    make_tokenized_info, add_token_ids_to_info
+    collate_fn, make_tokenized_info, add_token_ids_to_info
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
@@ -19,7 +18,8 @@ from utils import (
 )
 import seq_models as smods
 from dl_utils.save_io import (
-    get_save_name, load_checkpoint, get_folder_from_path, save_json, load_yaml,
+    get_save_name, load_checkpoint, get_folder_from_path, save_json,
+    load_yaml, get_config,
 )
 from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast, arglast
 from dl_utils.schedulers import PlateauTracker
@@ -27,6 +27,7 @@ from dl_utils.tokenizer import Tokenizer
 from intrv_modules import InterventionModule
 import filters
 import causal_models
+import constants as consts
 from intrv_datas import make_intrv_data_from_seqs
 from train import make_tokenizer_from_info
 
@@ -41,13 +42,21 @@ def config_prep(config):
     config["filters"] = [
         getattr(filters, fname) for fname in config["filter_names"]
     ]
-    
+
     # can assume different cmodels will default to appropriate parameters. This
     # reduces risk of error. Just make a new causal model for new interventions
+    if config.get("cmodel_names", None) is None:
+        mconfigs = [get_config(mname) for mname in config["model_names"]]
+        t2c = consts.TASK2CMODEL
+        cnames = [t2c.get(mc["task_type"], "CountUpDown") for mc in mconfigs]
+        config["cmodel_names"] = cnames
+        print("Cmodel Names:", cnames)
+
     kwargs = { "hold_outs": [], }
     config["cmodels"] = [
         getattr(causal_models, cname)(**kwargs) for cname in config["cmodel_names"]
     ]
+    print("Cmodels:", config["cmodels"])
 
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
@@ -78,36 +87,35 @@ def config_prep(config):
         config["n_valid_samples"] = 100
     return config
 
-def fill_in_prompts_and_replacements(config, yaml_path="./constants.yaml"):
-    consts = load_yaml(yaml_path)
+def fill_in_prompts_and_replacements(config):
     config["prompts"] = []
     config["replacements"] = []
     config["padding_sides"] = []
     for model_name in config["model_names"]:
         print("Model Name:", model_name)
         # Get padding side
-        padding_side = consts["padding_sides"].get(model_name, "right")
+        padding_side = consts.PADDING_SIDES.get(model_name, "right")
         config["padding_sides"].append(padding_side)
 
         # Get prompts
-        prompt = consts["prompts"].get(model_name, "")
+        prompt = consts.PROMPTS.get(model_name, "")
         if not prompt:
-            for k in consts["prompts"]:
+            for k in consts.PROMPTS:
                 if k in model_name:
-                    prompt = consts["prompts"][k]
+                    prompt = consts.PROMPTS[k]
         config["prompts"].append(prompt)
         print("Prompt:", prompt)
 
         # Get string replacement dict
-        replacements = consts["replacements"].get(
+        replacements = consts.REPLACEMENTS.get(
                 model_name,
                 None
             )
         if not replacements:
-            replacements = {**default_replacement_dict}
-            for k in consts["replacements"]:
+            replacements = {**consts.DEFAULT_REPLACEMENTS}
+            for k in consts.REPLACEMENTS:
                 if k in model_name:
-                    replacements = {**replacements, **consts["replacements"][k]}
+                    replacements = {**replacements, **consts.REPLACEMENTS[k]}
         config["replacements"].append(replacements)
         print("Replacements:")
         for k,v in replacements.items():
@@ -561,10 +569,7 @@ def main():
             "embeddings",
             "embeddings"
         ],  
-        "cmodel_names": [
-            "CountUpDown",
-            "CountUpDown",
-        ],
+        "cmodel_names": None,
         "filter_names": [
             "default_filter",
             "default_filter",
@@ -749,7 +754,7 @@ def main():
         infos.append(info)
     config["infos"] = infos
     print("Tok Dataset:", tokenized_datasets["train"][0])
-    print("Cmodls:", config["cmodels"])
+    print("Cmodels:", config["cmodels"])
 
     ####################################################
     #    Make/Get Intervention Data
@@ -775,6 +780,7 @@ def main():
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
                     print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
+                    print("Sample Tsk:", tokenized_datasets[k][tidx]["task_mask"][0].long())
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
