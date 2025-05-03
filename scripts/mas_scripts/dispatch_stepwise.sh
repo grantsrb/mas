@@ -12,11 +12,11 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 
-exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
+exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobject_rope_tformer_unk" )
 exp_folders2=( "multiobject_gru"  )
-config="configs/numequiv_indywise.yaml"
-search1=("n_units=16" "n_units=4")
-search2=("swap_keys=full" "swap_keys=count")
+config="configs/numequiv_stepwise.yaml"
+search1=( "n_units=16" )
+search2=( "swap_keys=full" )
 
 echo Dispatching
 cuda_idx=0
