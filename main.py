@@ -34,6 +34,8 @@ import pandas as pd # import after transformers to avoid versioning bug
 
 def config_prep(config):
     n_models = len(config["model_names"])
+    if type(config["mtx_types"])==str:
+        config["mtx_types"] = [config["mtx_types"] for _ in range(n_models)]
     config["mtx_kwargs"] = [ {**config} for _ in range(n_models) ]
     config["mask_kwargs"] = {**config}
     config["filters"] = [
