@@ -17,6 +17,7 @@ seeds =    [12345, 23456,]
 devices =  [0,1,2,3,4,5,6,7,8,9]
 unk_p = 0.2
 tasks = ["MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
+tformer_tasks = ["MultiObject", "MultiObjectMod", "MultiObjectRound"]
 rnns = ["GRU", "LSTM"]
 
 if len(sys.argv)>=2:
@@ -182,12 +183,12 @@ for rnn in rnns:
 
 # Make Transformer Configs
 config = copy.deepcopy(og_config)
-unks = ["_unk", ""]
-incr = len(devices)//(len(tasks) * len(unks))
+unks = ["_unk",]
+incr = len(devices)//(len(tformer_tasks) * len(unks))
 for enc_type in ["rope"]:
     print("Tformer", enc_type)
     run_script = f"#!/bin/bash\n\n"
-    for ti,task in enumerate(tasks):
+    for ti,task in enumerate(tformer_tasks):
         for ui,unk in enumerate(unks):
             task_low = task.lower()
             exp_name = f"{task_low}_{enc_type}_tformer{unk}"
