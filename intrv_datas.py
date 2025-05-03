@@ -290,30 +290,39 @@ def make_counterfactual_seqs(
     for seq_i, tup in enumerate(z):
         (trg_seq,trg_idx,trg_tmask,src_varbs,trg_varbs, src_seq, src_idx) = tup
         zkeys = zip(trg_swap_keys, src_swap_keys)
-        trg_cmodel.queue_intervention(
-            {tkey: src_varbs[skey] for tkey,skey in zkeys}
-        )
+        intrv_varbs = {tkey: src_varbs[skey] for tkey,skey in zkeys}
+        trg_cmodel.queue_intervention(intrv_varbs)
         if seq_i%500==0:
             print("Src Varbs:", src_varbs)
             print("Trg Varbs:", trg_varbs)
             print("Intrv Varbs:", trg_cmodel.swap_varbs)
-        intrv_varbs = copy.deepcopy(trg_varbs)
-        for trg_key,src_key in zip(trg_swap_keys, src_swap_keys):
-            intrv_varbs[trg_key] = src_varbs[src_key]
+        intrv_varbs = {**copy.deepcopy(trg_varbs), **intrv_varbs}
         intrv_varbs_list.append(intrv_varbs)
-        inpt_token = int(trg_seq[trg_idx])
+        if trg_idx<len(trg_seq):
+            inpt_token = int(trg_seq[trg_idx])
+        else: inpt_token = fill_id
+        if inpt_token==pad_id: inpt_token = fill_id
 
-        intrv_seq, intrv_tmask, _ = run_cmodel_to_completion(
-            cmodel=trg_cmodel,
-            inpt_token=inpt_token,
-            varbs=trg_varbs,
-            info=trg_info,
-            end_tokens={trg_info.get("eos_token_id", None)},
-        )
+        try:
+            intrv_seq, intrv_tmask, _ = run_cmodel_to_completion(
+                cmodel=trg_cmodel,
+                inpt_token=inpt_token,
+                varbs=trg_varbs, # The intervention is queued in the cmodel
+                info=trg_info,
+                end_tokens={trg_info.get("eos_token_id", None)},
+            )
+        except:
+            print("Failed:")
+            print("Src Varbs:", src_varbs)
+            print("Trg Varbs:", trg_varbs)
+            print("Intrv Varbs:", trg_cmodel.swap_varbs)
+            assert False
         if stepwise:
             inseq = [t if t!=pad_id and t!=eos_id else fill_id for t in trg_seq[:trg_idx+1]]
+            if len(inseq)<trg_idx+1:
+                inseq += [fill_id for _ in range(trg_idx+1-len(inseq))]
             seq = inseq + intrv_seq
-            tmask = [0 for t in trg_seq[:trg_idx+1]] + intrv_tmask
+            tmask = [0 for t in inseq] + intrv_tmask
         else:
             inseq = trg_seq[:trg_idx+1]
             seq = inseq + intrv_seq
