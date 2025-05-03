@@ -288,12 +288,14 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
         temp = smods.make_model(mconfig)
         temp.load_state_dict(checkpt["state_dict"])
         model = temp.model
-        if "info" in mconfig:
-            tokenizer = make_tokenizer_from_info(mconfig["info"])
-        elif "word2id" in mconfig:
+        if "word2id" in mconfig:
+            print("word2id:", mconfig["word2id"])
             tokenizer = Tokenizer(
                 word2id=mconfig["word2id"],
+                **mconfig["info"],
                 padding_side=padding_side)
+        elif "info" in mconfig:
+            tokenizer = make_tokenizer_from_info(mconfig["info"])
         else:
             tokenizer = Tokenizer(
                 words=set(),
@@ -696,13 +698,18 @@ def main():
                 f"{k}_data_paths",
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
+            tconfig = model_configs[mi].get("task_config", None)
+            if tconfig: tconfig["unk_p"] = 0
             dataset = get_dataset(
                 config["dataset_names"][mi],
                 n_samples=n_samples,
                 task_type=model_configs[mi].get("task_type", None),
-                task_config=model_configs[mi].get("task_config", None),
+                task_config=tconfig,
                 **dkwargs)
             datasets[k].append(dataset)
+        print("Model", mi)
+        print(datasets["train"][mi]["text"][0])
+        print(datasets["train"][mi]["task_mask"][0])
     print("Pre Dataset:", datasets["train"][0])
 
     ####################################################
@@ -740,7 +747,6 @@ def main():
         infos.append(info)
     config["infos"] = infos
     print("Tok Dataset:", tokenized_datasets["train"][0])
-    print("Tok Info:", infos[0])
     print("Cmodls:", config["cmodels"])
 
     ####################################################
@@ -749,10 +755,10 @@ def main():
     intrv_datasets = {k: dict() for k in tokenized_datasets }
     n_subspaces = 0
     print("Info:")
-    print(config["infos"][0])
+    print("1:", config["infos"][0])
     print()
     try:
-        print(config["infos"][1])
+        print("2:", config["infos"][1])
         print()
     except: pass
     for k in tokenized_datasets:
@@ -764,6 +770,9 @@ def main():
                 n_varbs = len(skeys)
                 z = enumerate(zip(skeys,tkeys))
                 for vidx,(src_swap_keys, trg_swap_keys) in z:
+                    print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
+                    print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
+                    print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],

@@ -518,6 +518,8 @@ def run_for_n_steps(
             break
         elif step > 10000:
             print("Infinite Loop in intrv_datas!!!!")
+            print("inpt token:", inpt_token)
+            print("outpts:", outp_token_ids[:100])
             assert False
     return outp_token_ids, task_mask, varb_list
 

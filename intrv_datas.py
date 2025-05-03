@@ -501,7 +501,7 @@ def make_intrv_data_from_seqs(
         d["src_inpt_attn_masks"] = d["src_inpt_attn_masks"]|eos_mask
     d["trg_inpt_attn_masks"] = ~d["trg_inpt_attn_masks"]
     d["src_inpt_attn_masks"] = ~d["src_inpt_attn_masks"]
-    
+
     d["trg_outp_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
     d["src_outp_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
     if trg_info.get("bos_token_id", None) is not None:

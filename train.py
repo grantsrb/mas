@@ -31,7 +31,8 @@ torch.autograd.set_detect_anomaly(True)
 
 def make_tokenizer_from_info(info):
     words = set()
-    for v in info.values():
+    for k,v in info.items():
+        if "id" in k: continue
         if type(v)==list:
             words = words.union(set(v))
         else: words.add(v)
@@ -341,7 +342,8 @@ def train(rank, config, verbose=True, *args, **kwargs):
                 s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                 s += "\nTarg: " + tensor2str(targs[i],)
                 s += "\nPred: " + tensor2str(preds[i],)
-                s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                if "task_mask" in data:
+                    s += "\nMask: " + tensor2str(data["task_mask"][i][1:],)
                 s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
                 s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                 print(s)
@@ -362,7 +364,8 @@ def train(rank, config, verbose=True, *args, **kwargs):
                     s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                     s += "\nTarg: " + tensor2str(targs[i],)
                     s += "\nPred: " + tensor2str(preds[i],)
-                    s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                    if "task_mask" in data:
+                        s += "\nMask: " + tensor2str(data["task_mask"][i][1:],)
                     s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
                     s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                     print(s)
@@ -438,7 +441,8 @@ def train(rank, config, verbose=True, *args, **kwargs):
                     s = "\nIdx : " + tensor2str(torch.arange(len(targs[i])))
                     s += "\nTarg: " + tensor2str(targs[i],)
                     s += "\nPred: " + tensor2str(preds[i],)
-                    s += "\nMask: " + tensor2str(data["task_mask"][i],)
+                    if "task_mask" in data:
+                        s += "\nMask: " + tensor2str(data["task_mask"][i][1:],)
                     s += "\nRawT: " + " ".join([tok.id2word[int(w)] for w in targs[i]])
                     s += "\nRawP: " + " ".join([tok.id2word[int(w)] for w in preds[i]])
                     print(s)

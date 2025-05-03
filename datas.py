@@ -304,6 +304,7 @@ def make_tokenized_info(replacements, tokenizer, config):
 def tokenize_dataset(dataset, tokenizer, config):
     prompt = config.get("prompt", "")
 
+
     bos = tokenizer.bos_token
     reps = config.get("replacements", default_replacement_dict)
     prompt = replace_text(text=prompt, replacement_dict=reps)
@@ -322,14 +323,14 @@ def tokenize_dataset(dataset, tokenizer, config):
         if add_eos: text[i] = text[i] + tokenizer.eos_token
 
 
-    max_length = get_max_length(text[0], tokenizer)
-    print("Tokenizing - Max Len:", max_length)
+    print("Text Sample:", text[0])
+    print("Tokenizing...")
     try:
         tok_dict = tokenizer(
             text,
             padding="max_length",
             return_tensors="pt",
-            max_length=max_length,
+            #max_length=max_length,
             add_bos=False,
         )
     except:
@@ -337,9 +338,10 @@ def tokenize_dataset(dataset, tokenizer, config):
             text,
             padding="max_length",
             return_tensors="pt",
-            max_length=max_length,
+            #max_length=max_length,
             truncation=True,
         )
+    print("Tok Shape:", tok_dict["input_ids"].shape)
     idx = tok_dict["input_ids"]==tokenizer.bos_token_id
     dupls = idx.long().sum(-1)>1
     idxs = torch.argmax(idx.long(), dim=-1)[dupls]
@@ -360,7 +362,7 @@ def tokenize_dataset(dataset, tokenizer, config):
     #except: pass
 
     if "task_mask" in dataset.column_names:
-        max_len = tok_dict["input_ids"].shape[-1]
+        max_length = tok_dict["input_ids"].shape[-1]
         tmasks = []
         for i,tmask in enumerate(dataset["task_mask"]):
             # two 0s for annoying HF BOS business...
@@ -369,7 +371,7 @@ def tokenize_dataset(dataset, tokenizer, config):
             tmask = bos_zeros + tmask + eos_zero
             tmasks.append(pad_to(
                 arr=tmask,
-                tot_len=max_len,
+                tot_len=max_length,
                 fill_val=0,
                 side=tokenizer.padding_side,
             ))
