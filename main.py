@@ -780,7 +780,7 @@ def main():
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
                     print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
-                    print("Sample Tsk:", tokenized_datasets[k][tidx]["task_mask"][0].long())
+                    print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
