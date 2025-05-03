@@ -1,4 +1,4 @@
-exp_name: "step"
+exp_name: "indy"
 save_root: "/data2/grantsrb/icml_mas/"
 seed: 123456
 
@@ -37,15 +37,15 @@ dataset_kwargs:
 filter_by_correct: False
 filtered_dataset_path: null
 layers: # layers at which to attach the hooks
-  - "embeddings"
-  - "embeddings"
+  - "identities.0"
+  - "identities.0"
+  #- "embeddings"
+  #- "embeddings"
 # If true, will shuffle the target tokens within the swap mask
 shuffle_targ_ids: False
 const_targ_inpt_id: False
 incl_empty_varbs: False
-cmodels:
-  - "CountUpDown"
-  - "CountUpDown"
+
 swap_keys:
   - 
     - "full"
@@ -73,5 +73,5 @@ lr: 0.001
 max_length: null
 eval_batch_size: 1000
 
-stepwise: True
+stepwise: False
 train_directions: null
