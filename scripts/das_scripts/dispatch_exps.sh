@@ -2,8 +2,7 @@
 # Use this script to run the DAS experiments
 
 exp_name="das"
-#gpus=( 0 1 2 3 4 5 6 7 8 9 )
-gpus=( 6 7 8 9 )
+gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 #"multiobjectmod_gru"
@@ -13,11 +12,11 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 
-exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
-config="configs/numequiv_indywise.yaml"
-search1=( "n_units=64" "n_units=32" )
-search2=( "swap_keys=count" )
-arg1="mtx_types=FCARotationMatrix"
+exp_folders1=(  "multiobjectmod_gru" ) #"multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
+config="configs/general_indywise.yaml"
+search1=( "n_units=64" "n_units=96" "n_units=128" )
+search2=( "swap_keys=full" )
+arg1="mtx_types=RotationMatrix"
 arg2=""
 arg3=""
 

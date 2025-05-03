@@ -6,7 +6,7 @@ exp_name="sweep"
 model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobjectmod_gru/multiobjectmod_gru_0_seed12345"
 model_path2=" "
 
-config="configs/numequiv_indywise.yaml"
+config="configs/general_indywise.yaml"
 search1=( "n_units=96" "n_units=64" "n_units=128" )
 search2=( "mtx_types=RotationMatrix" ) 
 arg1="swap_keys=full"
