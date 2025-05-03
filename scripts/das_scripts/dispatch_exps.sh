@@ -1,8 +1,9 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="mas"
-gpus=( 0 1 2 3 4 5 6 7 8 9 )
+exp_name="das"
+#gpus=( 0 1 2 3 4 5 6 7 8 9 )
+gpus=( 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 #"multiobjectmod_gru"
@@ -12,10 +13,13 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 
-exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
+exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
 config="configs/numequiv_indywise.yaml"
-search1=("n_units=16" "n_units=4" "n_units=48" )
-search2=("swap_keys=full" "swap_keys=count")
+search1=( "n_units=64" "n_units=32" )
+search2=( "swap_keys=count" )
+arg1="mtx_types=FCARotationMatrix"
+arg2=""
+arg3=""
 
 echo Dispatching
 cuda_idx=0
@@ -31,12 +35,13 @@ do
            echo out1 ${search1[@]}
            echo out2 ${search2[@]}
 
-           bash scripts/das_scripts/single_model_search.sh $cuda $exp_name $model_path1 $config "${search1[*]}" "${search2[*]}" &
+           bash scripts/das_scripts/single_model_search.sh $cuda $exp_name $model_path1 $config "${search1[*]}" "${search2[*]}" $arg1 $arg2 $arg3 &
 
            cuda_idx=$((1+$cuda_idx))
            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
                cuda_idx=0
            fi
+           sleep 0.6
          fi
     done
 done

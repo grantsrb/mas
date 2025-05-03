@@ -8,6 +8,9 @@ model_path1=$3
 config=$4
 IFS=' ' read -r -a search1 <<< "$5"
 IFS=' ' read -r -a search2 <<< "$6"
+arg3=$7
+arg4=$8
+arg5=$9
 
 for arg1 in ${search1[@]}
 do
@@ -19,10 +22,10 @@ do
         done
         session_name="${exp_name}${i}-${cuda}"
         
-        tmux new -d -s "$session_name" "export CUDA_VISIBLE_DEVICES=${cuda}; export CUBLAS_WORKSPACE_CONFIG=:4096:8; python3 main.py $config model_names=$model_path1, $arg1 $arg2 $8 $9 ${10}; tmux wait -S ${session_name}"
+        tmux new -d -s "$session_name" "export CUDA_VISIBLE_DEVICES=${cuda}; export CUBLAS_WORKSPACE_CONFIG=:4096:8; python3 main.py $config model_names=$model_path1, $arg1 $arg2 $arg3 $arg4 $arg5 ; tmux wait -S ${session_name}"
 
         
-        printf "\nCUDA$cuda M1: $model_path1 \nCUDA$cuda M2: $model_path2\nCUDA_VISIBLE_DEVICES=${cuda} python3 main.py $config $arg1 $arg2 $8 $9 ${10}\n"
+        printf "\nCUDA$cuda M1: $model_path1 \nCUDA_VISIBLE_DEVICES=${cuda} python3 main.py $config model_names=$model_path1, $arg1 $arg2 $arg3 $arg4 $arg5 \n"
         echo "Waiting on ${session_name}"
         tmux wait ${session_name}
     done
