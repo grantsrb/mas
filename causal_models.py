@@ -30,14 +30,22 @@ class CausalModel:
         """
         self.swap_varbs = swap_varbs
 
+    def trigger_fxn(self, x):
+        """
+        This is a function to call when the trigger token appears when
+        updating the variables.
+        """
+        return x
+
+    def post_intervention_fxn(self, varbs):
+        return varbs
+
     def perform_intervention(self, varbs):
         if self.swap_varbs:
             for key in self.swap_varbs:
                 if key not in self.ignore_keys:
                     varbs[key] = self.swap_varbs[key]
-        return varbs
-
-    def post_intervention_fxn(self, varbs):
+            varbs = self.post_intervention_fxn(varbs)
         return varbs
 
     def clear_intervention(self):
@@ -57,7 +65,6 @@ class CausalModel:
             if k in varbs: varbs[k] = kwargs[k]
         varbs = self.update_varbs(token_id, varbs, info=info)
         varbs = self.perform_intervention(varbs)
-        varbs = self.post_intervention_fxn(varbs)
         self.clear_intervention()
         outp_token, tmask = self.get_token(varbs, info=info)
         return outp_token, varbs, tmask
@@ -83,9 +90,6 @@ class CountUpDown(CausalModel):
         }
         self.ignore_keys = { "obj_count" }
         self.swap_varbs = None
-        def identity(x):
-            return x
-        self.fxn = identity
 
     @property
     def init_varbs(self):
@@ -113,7 +117,7 @@ class CountUpDown(CausalModel):
         if varbs["phase"]==-1:
             if token_id in info["trig_token_ids"]:
                 varbs["phase"] = 1
-                varbs["count"] = self.fxn(varbs["count"])
+                varbs["count"] = self.trigger_fxn(varbs["count"])
             elif token_id in info["demo_token_ids"]:
                 varbs["count"] += 1
         else:
@@ -196,9 +200,14 @@ class CountUpDownMod(CountUpDown):
     def __init__(self, mod=4, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mod = mod
-        def fxn(x):
-            return x%self.mod
-        self.fxn = fxn
+
+    def trigger_fxn(self, x):
+        return x%self.mod
+
+    def post_intervention_fxn(self, varbs):
+        if varbs["phase"]==1:
+            varbs["count"] = self.trigger_fxn(varbs["count"])
+        return varbs
 
 class CountUpDownSquare(CountUpDown):
     """
@@ -207,9 +216,9 @@ class CountUpDownSquare(CountUpDown):
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        def fxn(x):
-            return x**2
-        self.fxn = fxn
+
+    def trigger_fxn(self, x):
+        return x**2
 
 class CountUpDownRound(CountUpDown):
     """
@@ -219,7 +228,7 @@ class CountUpDownRound(CountUpDown):
     def __init__(self, roundn=3, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.roundn = roundn
-        def fxn(x):
-            return round(x/self.roundn)*self.roundn
-        self.fxn = fxn
+
+    def trigger_fxn(self, x):
+        return round(x/self.roundn)*self.roundn
 
