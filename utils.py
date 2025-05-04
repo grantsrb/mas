@@ -525,3 +525,63 @@ def run_for_n_steps(
             assert False
     return outp_token_ids, task_mask, varb_list
 
+def run_til_idx(
+        cmodel,
+        seq,
+        idx=None,
+        varbs=None,
+        post_varbs=False,
+        info=None,
+        *args, **kwargs,
+    ):
+    """
+    Runs a causal model on the provided sequence until the
+    argued idx. If the idx is None, will run on all tokens
+    in the sequence.
+
+    Args:
+        cmodel: CausalModel
+            accepts a token and a dict of variables
+        seq: list of ids
+        idx: (optional) int or None
+            (inclusive) the index in the sequence to inclusively
+            stop at
+        varbs: (optional) dict of variables or None
+            optionally argue variables to argue to the causal model
+            with the first input token.
+        info: (optional) dict
+            some cmodels require additional info which can be specified
+            in the info dict
+        post_varbs: bool
+            if true, will return the variables after each
+            input token. Otherwise returns the variables
+            before each token.
+    Returns:
+        outp_tokens: list of tokens
+            the output produced by the causal model after each
+            input token.
+        varb_list: list of dicts
+            the input variables used by the causal model with each
+            input token.
+        outp_task_mask: list of bools
+            a task mask output by the causal model
+    """
+    if idx is None: idx = len(seq)
+    outp_token_ids = []
+    if not varbs:
+        varbs = cmodel.init_varbs
+    varb_list = []
+    task_mask = []
+    for si,token in enumerate(seq):
+        if not post_varbs:
+            varb_list.append(copy.deepcopy(varbs))
+        token, varbs, tmask = cmodel(
+            token_id=token, varbs=varbs, info=info, *args, **kwargs
+        )
+        if post_varbs:
+            varb_list.append(copy.deepcopy(varbs))
+        task_mask.append(tmask)
+        outp_token_ids.append(token)
+        if si==idx:
+            break
+    return outp_token_ids, task_mask, varb_list
