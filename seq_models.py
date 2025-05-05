@@ -12,6 +12,11 @@ from dl_utils.utils import (
     generate_ktoken_causal_mask, get_one_hot
 )
 import math
+try:
+    from transformers.modeling_outputs import BaseModelOutputWithPast
+except:
+    from dl_utils.torch_modules import BaseModelOutputWithPast
+
 
 DEVICES = {
     -1: "cpu", **{i:i for i in range(10)}
@@ -727,6 +732,121 @@ class Transformer(smods.Transformer):
         self.register_buffer("trigger_ids", torch.LongTensor(
             [tid for tid in trigger_ids]
         ))
+        self.identities = torch.nn.ModuleList([])
+        for el in range(self.n_layers):
+            self.identities.append( tmods.IdentityModule() )
+        self.inpt_identity = tmods.IdentityModule()
+
+    def encoder(self,
+                input_ids=None,
+                attention_mask=None,
+                pad_mask=None,
+                use_cache=False,
+                past_key_values=None,
+                inputs_embeds=None,
+                position_ids=None,
+                output_attentions=False,
+                is_causal=True,
+                *args, **kwargs):
+        """
+        Arguments:
+            input_ids: Long Tensor, shape ``[bsize, seq_len]``
+                the input ids. one of this or inputs_embeds must be not
+                None
+            attention_mask: Tensor, shape (B,S,S) or (B,S)
+                false values mean masked, not attended to indices.
+            pad_mask: Tensor, shape (B,S)
+                false values mean masked, not attended to indices.
+            use_cache: bool
+                if true, will return the updated past_key_values for
+                future speedups
+            past_key_values: list of lists of tensors
+                the cached computations returned by the layer when
+                `use_cache` is true.
+            inputs_embeds: None or torch FloatTensor (B,S,E)
+                the input embeddings. this must not be None if input_ids
+                is None. input_ids overrides this argument if both are
+                not None.
+            position_ids: None or LongTensor (S,)
+                optionally argue the position ids for the positional
+                encodings.
+            output_attentions: bool
+                if true, will return the attention weights
+        Returns:
+            BaseModelOutputWithPast
+        """
+        if inputs_embeds is None:
+            inputs_embeds = self.embeddings(input_ids)
+        if inputs_embeds.shape[1]>1:
+            inpts_embeds = torch.stack([
+                self.inpt_identity(inputs_embeds[...,i,:]) for i in\
+                                      range(inputs_embeds.shape[-2])
+            ], dim=-2)
+        else:
+            shape = inputs_embeds.shape
+            inputs_embeds = self.inpt_identity(
+                inputs_embeds[...,0,:]
+            ).reshape(shape)
+        hidden_states = inputs_embeds
+
+        attn_mask = self.prep_encoder_mask(
+            S=inputs_embeds.shape[1],
+            attention_mask=attention_mask,
+            pad_mask=pad_mask,
+            is_causal=is_causal,
+        )
+
+        if past_key_values is not None and position_ids is None:
+            # we create the full position ids because this will be
+            # used for the keys if using rotary encoder attention module
+            position_ids = torch.arange(
+                past_key_values[0][0].shape[-2]+inputs_embeds.shape[1],
+            ).long().to(self.get_device())
+        pids = None
+        if position_ids is not None:
+            pids = position_ids[-inputs_embeds.shape[1]:]
+        hidden_states = self.pos_encs(
+                inputs_embeds,
+                pids=pids)
+
+        past_key_value = None
+        next_cache = [] if use_cache else None
+
+        all_hidden_states = []
+        attentions = []
+        next_cache = []
+        S = 0
+        for i,layer in enumerate(self.layers):
+            if past_key_values is not None:
+                past_key_value = past_key_values[i]
+            ret_dict = layer(
+                src=hidden_states,
+                src_mask=attn_mask,
+                past_key_value=past_key_value,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                position_ids=position_ids,
+            )
+            hidden_states = ret_dict["hidden_states"]
+            hidden_states = self.identities[i](hidden_states)
+
+            if use_cache:
+                next_cache.append(ret_dict["past_key_value"])
+            if output_attentions:
+                attentions.append(ret_dict.get("attentions", None))
+            hidden_states[torch.isnan(hidden_states)] = 0
+            all_hidden_states.append(hidden_states)
+        if use_cache:
+            if past_key_values is not None:
+                pkv = past_key_values[-1]
+                hidden_states = torch.cat([pkv,hidden_states],dim=1)
+            next_cache.append(hidden_states)
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=next_cache,
+            hidden_states=all_hidden_states,
+            attentions=attentions,
+        )
 
     def freedom_fwd(self,
                     inpts:torch.Tensor=None,

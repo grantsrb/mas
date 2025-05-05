@@ -112,6 +112,7 @@ def get_datasets(config):
     task = getattr(tasks, config["task_type"])(**task_config)
     info = task.info
     tokenizer = make_tokenizer_from_info( info=info )
+    info = add_token_ids_to_info(info, tokenizer)
 
     train_samps, train_tmasks, _ = task.generate_samples(n_train)
     valid_samps, valid_tmasks, _ = task.generate_samples(n_valid)
