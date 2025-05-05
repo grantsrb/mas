@@ -42,10 +42,14 @@ class Task:
         }
 
     def generate_sample(self, *args, **kwargs):
+        init_varbs = self.cmodel.init_varbs
+        kwargs = {k: v for k,v in kwargs.items() if k in init_varbs}
+        varbs = {**init_varbs, **kwargs}
         seq, tmask, varbs = run_cmodel_to_completion(
             cmodel=self.cmodel,
             inpt_token=self.bos_token,
             info=self.info,
+            varbs=varbs,
             end_tokens={self.info.get("eos_token", "E"), None},
         )
         return seq, tmask, varbs
