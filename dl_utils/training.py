@@ -11,6 +11,56 @@ import torch.multiprocessing as mp
 
 import dl_utils.save_io as io
 
+def parse_type(val):
+    """
+    Determines the appropriate data type for the argued string value.
+
+    Args:
+        val: str
+    Returns:
+        val: any
+    """
+    val = str(val)
+    if val.lower() in {"none", "null", "na"}:
+        val = None
+    elif "," in val:
+        val = [parse_type(v) for v in val.split(",") if v!=""]
+    elif val.lower()=="true":
+        val = True
+    elif val.lower()=="false":
+        val = False
+    elif val.isnumeric():
+        val = int(val)
+    elif val.replace(".", "").isnumeric():
+        val = float(val)
+    return val
+
+def read_command_line_args(args=None):
+    if args is None: args = sys.argv[1:]
+    model_folders = []
+    command_args = []
+    command_kwargs = dict()
+
+    for arg in args:
+        if io.is_model_folder(arg):
+            model_folders.append(arg)
+        elif io.is_exp_folder(arg):
+            mfs = io.get_model_folders(
+                arg, incl_full_path=True, incl_empty=False)
+            for f in mfs:
+                model_folders.append(f)
+        elif "checkpt" in arg and ".pt" in arg:
+            model_folders.append(arg)
+        elif ".yaml" in arg or ".json" in arg:
+            command_kwargs = {**command_kwargs,
+                              **io.load_json_or_yaml(arg)}
+        elif "=" in arg:
+            key,val = arg.split("=")
+            command_kwargs[key] = parse_type(val)
+        else:
+            command_args.append(arg)
+    return model_folders, command_args, command_kwargs
+
 def config_error_catching(config):
     """
     This function just makes sure that some obvious hyperparameter
@@ -378,7 +428,7 @@ def run_training(train_fxn):
                 ranges = io.load_json_or_yaml(arg)
             elif "=" in arg:
                 splt = arg.split("=")
-                config[splt[0]] = simple_parse(splt[1])
+                config[splt[0]] = parse_type(splt[1])
         if ranges is None:
             ranges = {"lr": [config['lr']]}
     print()
@@ -453,4 +503,3 @@ def run_training(train_fxn):
 
         hyper_search(config, ranges, train_fxn)
     print("Total Execution Time:", time.time() - start_time)
-
