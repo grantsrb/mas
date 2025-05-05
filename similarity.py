@@ -60,11 +60,13 @@ def compute_HSIC(K, L) -> float:
     Returns:
         float: The HSIC value.
     """
+    device = K.device
     n = K.shape[0]  # Assume K and L are square matrices of the same size
     assert K.shape == L.shape, "K and L must have the same dimensions"
 
     # Centering matrix
     H = torch.eye(n) - (1/n) * torch.ones((n, n))
+    H = H.to(device)
 
     # Compute HSIC
     HSIC_value = torch.trace(K @ H @ L @ H) / ((n - 1) ** 2)
@@ -187,19 +189,55 @@ default_sim_data_dict = {
     "rsa_nrm_cos_prs": [],
 }
 
-def compute_similarities(X, X2, n_runs=1, *args, **kwargs):
+def compute_similarities(
+        X, X2,
+        n_runs=10,
+        sample_size=1000,
+        *args,
+        **kwargs
+):
+    """
+    Args:
+        X: torch tensor
+        X2: torch tensor
+        n_runs: int
+            number of times to run and average over each metric
+        sample_size: int
+            optionally argue a sample size to use a uniformly sampled
+            sub sample from the activation matrices.
+    """
     sims = copy.deepcopy(default_sim_data_dict)
 
-    sims["cka_cos"] = get_cka(X, X2, n_runs=n_runs, sim_metric="cosine", prenorm=True)
-    sims["cka_l2"] = get_cka(X, X2, n_runs=n_runs, sim_metric="l2", prenorm=True)
-    sims["rsa_raw_cos_spr"] = get_rsa(X, X2, n_runs=n_runs, sim_metric="cosine", cor_type="spearmanr", prenorm=False)
-    sims["rsa_raw_l2_spr"] =  get_rsa(X, X2, n_runs=n_runs, sim_metric="l2",     cor_type="spearmanr", prenorm=False)
-    sims["rsa_raw_cos_prs"] = get_rsa(X, X2, n_runs=n_runs, sim_metric="cosine", cor_type="pearsonr",  prenorm=False)
-    sims["rsa_raw_l2_prs"] =  get_rsa(X, X2, n_runs=n_runs, sim_metric="l2",     cor_type="pearsonr",  prenorm=False)
-    sims["rsa_nrm_cos_spr"] = get_rsa(X, X2, n_runs=n_runs, sim_metric="cosine", cor_type="spearmanr", prenorm=True)
-    sims["rsa_nrm_l2_spr"] =  get_rsa(X, X2, n_runs=n_runs, sim_metric="l2",     cor_type="spearmanr", prenorm=True)
-    sims["rsa_nrm_cos_prs"] = get_rsa(X, X2, n_runs=n_runs, sim_metric="cosine", cor_type="pearsonr",  prenorm=True)
-    sims["rsa_nrm_l2_prs"] =  get_rsa(X, X2, n_runs=n_runs, sim_metric="l2",     cor_type="pearsonr",  prenorm=True)
+    print("Computing CKAs")
+    sims["cka_cos"] = get_cka(X, X2, n_runs=n_runs,
+        sim_metric="cosine", prenorm=True, batch_size=sample_size)
+    sims["cka_l2"] = get_cka(X, X2, n_runs=n_runs,
+        sim_metric="l2", prenorm=True, batch_size=sample_size)
+    print("Computing RSAs")
+    sims["rsa_raw_cos_spr"] = get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="cosine", cor_type="spearmanr",
+        prenorm=False, batch_size=sample_size)
+    sims["rsa_raw_l2_spr"] =  get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="l2", cor_type="spearmanr",
+        prenorm=False, batch_size=sample_size)
+    sims["rsa_raw_cos_prs"] = get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="cosine", cor_type="pearsonr",  
+        prenorm=False, batch_size=sample_size)
+    sims["rsa_raw_l2_prs"] =  get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="l2", cor_type="pearsonr",  
+        prenorm=False, batch_size=sample_size)
+    sims["rsa_nrm_cos_spr"] = get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="cosine", cor_type="spearmanr",
+        prenorm=True, batch_size=sample_size)
+    sims["rsa_nrm_l2_spr"] =  get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="l2", cor_type="spearmanr",
+        prenorm=True, batch_size=sample_size)
+    sims["rsa_nrm_cos_prs"] = get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="cosine", cor_type="pearsonr",
+        prenorm=True, batch_size=sample_size)
+    sims["rsa_nrm_l2_prs"] =  get_rsa(X, X2, n_runs=n_runs,
+        sim_metric="l2",     cor_type="pearsonr",
+        prenorm=True, batch_size=sample_size)
     return sims
 
 def initialize_sim_data_dict():
@@ -244,6 +282,7 @@ def get_model_and_config(model_folder):
     temp = seq_mods.LossWrapper(model=model, config=config)
     temp.load_state_dict(checkpt["state_dict"])
     model = temp.model
+    model.eval()
     return model, config
 
 def tokenize_input_data(input_data, mconfig):
@@ -253,22 +292,37 @@ def tokenize_input_data(input_data, mconfig):
         mconfig: dict
     """
     info = mconfig["info"]
-    default_word2id = {
-        info["pad_token"]: 0,
-        info["bos_token"]: 1,
-        info["eos_token"]: 2,
-        "D": 3,
-        info.get("demo_tokens", ["D0"])[0]: 3,
-        info.get("demo_tokens", ["D0","D1"])[1]: 4,
-        info.get("demo_tokens", ["D0","D1","D2"])[2]: 5,
-        info.get("resp_tokens", ["R"])[0]: 6,
-        info.get("trig_tokens", ["T"])[0]: 7,
-        info.get("void_token", "U"): 8
-    }
+    if "word2id" not in mconfig:
+        word2id = {
+            info["pad_token"]: 0,
+            info["bos_token"]: 1,
+            info["eos_token"]: 2,
+            "D": 3,
+            "D0": 3,
+            "D1": 4,
+            "D2": 5,
+            "R": 6,
+            "T": 7,
+            "U": 8,
+        }
+        if "Same" in mconfig["task_type"]:
+            word2id["D1"] = 3
+            word2id["D2"] = 3
+            word2id["R"] = 3
+            word2id["T"] = 4
+            word2id["U"] = 5
+        elif "Single" in mconfig["task_type"]:
+            word2id["D1"] = 3
+            word2id["D2"] = 3
+            word2id["R"] = 4
+            word2id["T"] = 5
+            word2id["U"] = 6
+    else:
+        word2id = mconfig["word2id"]
     demo_toks = ["D0", "D1", "D2"]
     resp_toks = ["R"]
-    word2id = mconfig.get("word2id", default_word2id)
     pad_id =  word2id[info["pad_token"]]
+    mconfig["pad_id"] = pad_id
     demo_id = word2id[info["demo_tokens"][0]]
     resp_id = word2id[info["resp_tokens"][0]]
     input_ids = []
@@ -288,23 +342,42 @@ def tokenize_input_data(input_data, mconfig):
     return torch.LongTensor(input_ids)
 
 
-def get_actvs(model, layer, input_ids):
-    return collect_activations(
-        model=model,
-        input_ids=input_ids,
-        layers=layer,
-    )[layer]
+def get_actvs(model, layer, input_ids, pad_mask=None):
+    """
+    Args:
+        model: torch module
+        layer: str
+        input_ids: torch LongTensor (B,S)
+        pad_mask: torch BoolTensor (B,S)
+            1s denote positions to drop. 1 is padding
+    """
+    with torch.no_grad():
+        actvs = collect_activations(
+            model=model,
+            input_ids=input_ids,
+            layers=[layer],
+            pad_mask=pad_mask.bool(),
+        )[layer]
+    if pad_mask is not None:
+        actvs = actvs[~pad_mask.bool()]
+    return actvs.reshape(-1, actvs.shape[-1])
 
 if __name__=="__main__":
+    device = "cpu"
     model_folders, _, config = read_command_line_args()
     layers = config.get("layers", ["identities.0", "identities.0"])
     if type(layers)==str: layers = [layers for _ in range(2)]
     assert type(layers)==list and len(layers)==2
     overwrite = config.get("overwrite", True)
+    print("Using Layers:", layers)
+
 
     # List of equal len lists of token str (including padding tokens)
     input_data = get_dataset(config=config)
-    for model_folder1 in model_folders:
+    mflen = len(model_folders)
+    actvs_cache = {}
+    for mf1idx,model_folder1 in enumerate(model_folders):
+        print("Beginning", model_folder1, f" - {mf1idx}/{mflen}")
         save_path = os.path.join( model_folder1, "rsa_cka_sims.csv" )
 
         sim_data = initialize_sim_data_dict() # Dict
@@ -312,34 +385,74 @@ if __name__=="__main__":
             else pd.read_csv(save_path)
         prev_comp_folders = set(old_df["model_folder2"])
 
-        model1, mconfig1 = get_model_and_config(model_folder1)
-        # Dict of tensors: input_ids, pad_mask
-        mf1_data = tokenize_input_data(input_data, mconfig=mconfig1)
-        # tensor of activations from the argued layer. default identities.0
-        mf1_actvs = get_actvs(model=model1, layer=layers[0], input_ids=mf1_data)
+        if model_folder1 in actvs_cache:
+            mf1_actvs = actvs_cache[model_folder1].to(device)
+        else:
+            model1, mconfig1 = get_model_and_config(model_folder1)
+            model1.to(device)
+            # Dict of tensors: input_ids, pad_mask
+            mf1_data = tokenize_input_data(input_data, mconfig=mconfig1)
+            # tensor of activations from the argued layer. default identities.0
+            mf1_actvs = get_actvs(
+                model=model1,
+                layer=layers[0],
+                input_ids=mf1_data,
+                pad_mask=(mf1_data==mconfig1["pad_id"]),
+            )
+            actvs_cache[model_folder1] = mf1_actvs.cpu()
+            model1.cpu()
 
-        for model_folder2 in model_folders:
-            if not overwrite and model_folder2 in prev_comp_folders:
+        for mf2idx,model_folder2 in enumerate(model_folders):
+            idx = (old_df["model_folder2"]==model_folder2)&\
+                  (old_df["layer1"]==layers[0])&\
+                  (old_df["layer2"]==layers[1])
+            if not overwrite and len(old_df.loc[idx])>0:
                 print("Skipping", model_folder2, "dup to previous record")
+                continue
+            print()
+            print("M1:", model_folder1, f" - {mf1idx}/{mflen}")
+            print("M2:", model_folder2, f" - {mf2idx}/{mflen}")
+            print("Layers:", layers)
 
-            model2, mconfig2 = get_model_and_config(model_folder2)
-            mf2_data = tokenize_input_data(input_data, mconfig=mconfig2)
-            mf2_actvs = get_actvs(
-                model=model2, layer=layers[1], input_ids=mf2_data)
+            if model_folder2 in actvs_cache:
+                mf2_actvs = actvs_cache[model_folder2].to(device)
+            else:
+                model2, mconfig2 = get_model_and_config(model_folder2)
+                model2.to(device)
+                mf2_data = tokenize_input_data(input_data, mconfig=mconfig2)
+                mf2_actvs = get_actvs(
+                    model=model2,
+                    layer=layers[1],
+                    input_ids=mf2_data,
+                    pad_mask=(mf2_data==mconfig2["pad_id"]),
+                )
+                actvs_cache[model_folder2] = mf2_actvs.cpu()
+                model2.cpu()
 
-            sims = compute_similarities(X=mf1_actvs, X2=mf2_actvs, **config)
+            sims = compute_similarities(
+                X=mf1_actvs,
+                X2=mf2_actvs,
+                **config)
             sim_data["model_folder1"].append(model_folder1)
             sim_data["model_folder2"].append(model_folder2)
             sim_data["layer1"].append(layers[0])
             sim_data["layer2"].append(layers[1])
             for k in sims:
                 sim_data[k].append(sims[k])
+                print(k, sims[k])
 
         new_df = pd.DataFrame(sim_data)
-        if overwrite:
-            old_df = old_df.loc[~old_df["model_folder2"].isin(set(new_df["model_folder2"]))]
-        df = pd.concat([old_df, new_df])
-        df.to_csv(save_path)
+        if len(old_df["model_folder2"])>0:
+            new_df = pd.concat([new_df, old_df])
+            new_df = new_df.drop_duplicates([
+                "model_folder1", "model_folder2", "layer1",
+                "layer2",
+            ])
+
+        new_df.to_csv(save_path, header=True, index=False)
+        print("DF Head:")
+        print(new_df.head())
+        print()
     print()
     print("Succeeded!")
 
