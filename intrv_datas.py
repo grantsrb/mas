@@ -508,8 +508,8 @@ def make_intrv_data_from_seqs(
         d["trg_inpt_attn_masks"] = d["trg_inpt_attn_masks"]|eos_mask
         eos_mask = d["src_input_ids"]==src_info["eos_token_id"]
         d["src_inpt_attn_masks"] = d["src_inpt_attn_masks"]|eos_mask
-    d["trg_inpt_attn_masks"] = ~d["trg_inpt_attn_masks"]
-    d["src_inpt_attn_masks"] = ~d["src_inpt_attn_masks"]
+    d["trg_inpt_attn_masks"] = ~d["trg_inpt_attn_masks"][...,:-1]
+    d["src_inpt_attn_masks"] = ~d["src_inpt_attn_masks"][...,:-1]
 
     d["trg_outp_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
     d["src_outp_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
@@ -518,7 +518,7 @@ def make_intrv_data_from_seqs(
         d["trg_outp_attn_masks"] = d["trg_outp_attn_masks"]|bos_mask
         bos_mask = d["src_input_ids"]==src_info["bos_token_id"]
         d["src_outp_attn_masks"] = d["src_outp_attn_masks"]|bos_mask
-    d["trg_outp_attn_masks"] = ~d["trg_outp_attn_masks"]
-    d["src_outp_attn_masks"] = ~d["src_outp_attn_masks"]
+    d["trg_outp_attn_masks"] = ~d["trg_outp_attn_masks"][...,1:]
+    d["src_outp_attn_masks"] = ~d["src_outp_attn_masks"][...,1:]
     return d
 

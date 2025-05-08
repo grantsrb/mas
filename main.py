@@ -245,7 +245,11 @@ def forward_pass(
     #pids = torch.argmax(logits, dim=-1)
     #print("HEYO")
     #for i in range(3):
-    #    print("Swaps:", tensor2str(batch["labels"][i][~lmask[i]]))
+    #    print("Omask:",tensor2str(batch["outp_attn_mask"][i].long()))
+    #    print("smask:",tensor2str(smask[i].long()))
+    #    print("Label:", tensor2str(batch["labels"][i]))
+    #    print("Inpts:", tensor2str(batch["input_ids"][i]))
+    #    print("Swaps:", tensor2str(batch["labels"][i][batch["trg_swap_masks"][i]]))
     #    print("Preds:", tensor2str(pids[i][lmask[i]]))
     #    print("Label:", tensor2str(batch["labels"][i][lmask[i]]))
     #    print()
