@@ -18,6 +18,8 @@ devices =  [0,1,2,3,4,5,6,7,8,9]
 unk_p = 0.2
 tasks = ["MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
 tformer_tasks = ["MultiObject", "MultiObjectMod", "MultiObjectRound"]
+tformer_lr = 0.0005
+tformer_layers = 4
 rnns = ["GRU", "LSTM"]
 
 if len(sys.argv)>=2:
@@ -200,7 +202,8 @@ for enc_type in ["rope"]:
             config["lnorm"] = True
             config["llama"] = True
             config["d_model"] = main_d_model
-            config["n_layers"] = 2
+            config["n_layers"] = tformer_layers
+            config["lr"] = tformer_lr
             config["unk_p"] = bool("unk" in unk)*unk_p
             config["encoder_layer_class"] = {
                 "rope": "RotaryEncoderLayer",
