@@ -187,7 +187,7 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     d = {
         "input_ids":      torch.tensor(batch["trg_input_ids"])[...,:-1],
         "inpt_attn_mask": torch.tensor(batch["trg_inpt_attn_masks"])[...,:-1],
-        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"])[...,1:],
+        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"])[...,:-1],
         "labels":         torch.tensor(batch["trg_input_ids"])[...,1:],
         "src_input_ids":  torch.tensor(batch["src_input_ids"])[...,:-1],
     }
@@ -195,7 +195,7 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
         d = {
           **d,
           "src_attention_mask": torch.tensor(batch["src_inpt_attn_masks"])[...,:-1],
-          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"])[...,1:],
+          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"])[...,:-1],
           "src_labels":         torch.tensor(batch["src_input_ids"])[...,1:],
         }
     try:

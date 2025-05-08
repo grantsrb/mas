@@ -778,7 +778,7 @@ class Transformer(smods.Transformer):
         if inputs_embeds is None:
             inputs_embeds = self.embeddings(input_ids)
         if inputs_embeds.shape[1]>1:
-            inpts_embeds = torch.stack([
+            inputs_embeds = torch.stack([
                 self.inpt_identity(inputs_embeds[...,i,:]) for i in\
                                       range(inputs_embeds.shape[-2])
             ], dim=-2)
@@ -828,7 +828,10 @@ class Transformer(smods.Transformer):
                 position_ids=position_ids,
             )
             hidden_states = ret_dict["hidden_states"]
-            hidden_states = self.identities[i](hidden_states)
+            hidden_states = torch.stack([
+                self.identities[i](hidden_states[...,si,:]) for si in\
+                                      range(hidden_states.shape[-2])
+            ], dim=-2)
 
             if use_cache:
                 next_cache.append(ret_dict["past_key_value"])
