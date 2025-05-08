@@ -37,8 +37,8 @@ dataset_kwargs:
 filter_by_correct: False
 filtered_dataset_path: null
 layers: # layers at which to attach the hooks
-  - "embeddings"
-  - "embeddings"
+  - "inpt_identity"
+  - "inpt_identity"
 # If true, will shuffle the target tokens within the swap mask
 shuffle_targ_ids: False
 const_targ_inpt_id: False

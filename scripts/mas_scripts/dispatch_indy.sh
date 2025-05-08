@@ -9,7 +9,7 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 exp_folders1=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobjectmod_gru"  )
 config="configs/general_indywise.yaml"
-search1=( "n_units=16" "n_units=64" "n_units=96" )
+search1=( "n_units=48" "n_units=32" )
 search2=( "swap_keys=full" ) # "swap_keys=count" 
 
 echo Dispatching
@@ -29,8 +29,8 @@ do
 
                            model_path1="${exp_root1}/${model_folder1}"
                            model_path2="${exp_root2}/${model_folder2}"
-                           echo out1 ${search1[@]}
-                           echo out2 ${search2[@]}
+                           echo Search1 ${search1[@]}
+                           echo Search2 ${search2[@]}
 
                            bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" &
 

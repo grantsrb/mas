@@ -6,10 +6,11 @@ gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
-exp_folders1=( "multiobject_rope_tformer_unk" "multiobjectmod_rope_tformer_unk" ) #"multiobject_gru" "sameobject_gru" ) #"multiobject_lstm" "sameobject_lstm" )
-exp_folders2=( "multiobjectmod_gru"  "multiobjectmod_rope_tformer_unk" )
+#exp_folders1=( "multiobject_rope_tformer_unk" "multiobjectmod_rope_tformer_unk" ) #"multiobject_gru" "sameobject_gru" ) #"multiobject_lstm" "sameobject_lstm" )
+exp_folders1=( "multiobject_rope_tformer_unk" "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
+exp_folders2=( "multiobject_gru" )
 config="configs/general_stepwise.yaml"
-search1=( "n_units=16"  "n_units=32" )
+search1=( "n_units=32" )
 search2=( "swap_keys=full" )
 
 echo Dispatching
