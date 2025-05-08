@@ -345,6 +345,7 @@ def load_json_or_yaml(file_name):
     raise NotImplemented
 
 def get_command_line_args(args):
+    command_keys = []
     config = {}
     for arg in args:
         if ".yaml" in arg or ".json" in arg:
@@ -352,6 +353,7 @@ def get_command_line_args(args):
             config = {**config, **load_json_or_yaml(arg)}
         elif "=" in arg:
             key,val = arg.split("=")
+            command_keys.append(key)
             if val=="None":
                 val = None
             elif "," in val:
@@ -367,7 +369,7 @@ def get_command_line_args(args):
                 print("Decimal!!!!!!", key)
                 val = float(val)
             config[key] = val
-    return config
+    return config, command_keys
 
 def extract_ids(string, tokenizer):
     """

@@ -245,7 +245,11 @@ def forward_pass(
     #pids = torch.argmax(logits, dim=-1)
     #print("HEYO")
     #for i in range(3):
-    #    print("Swaps:", tensor2str(batch["labels"][i][~lmask[i]]))
+    #    print("Omask:",tensor2str(batch["outp_attn_mask"][i].long()))
+    #    print("smask:",tensor2str(smask[i].long()))
+    #    print("Label:", tensor2str(batch["labels"][i]))
+    #    print("Inpts:", tensor2str(batch["input_ids"][i]))
+    #    print("Swaps:", tensor2str(batch["labels"][i][batch["trg_swap_masks"][i]]))
     #    print("Preds:", tensor2str(pids[i][lmask[i]]))
     #    print("Label:", tensor2str(batch["labels"][i][lmask[i]]))
     #    print()
@@ -368,7 +372,7 @@ def get_embedding_name(model, layer=""):
     return simplist_name
 
 def main():
-    arg_config = get_command_line_args(sys.argv)
+    arg_config, command_keys = get_command_line_args(sys.argv)
     ##########################
     #    Default configuration
     ##########################
@@ -446,9 +450,13 @@ def main():
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
     for k in arg_config: config[k] = arg_config[k]
+    for k in command_keys:
+        config["save_keys"].append(k)
+    config["save_keys"] = sorted(list(set(config["save_keys"])))
     print("Config:")
     for k in sorted(list(config.keys())):
         print(k, config[k])
+
 
     config = config_prep(config) # general error catching
     config = fill_in_prompts_and_replacements(config)
