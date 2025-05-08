@@ -246,6 +246,7 @@ def initialize_sim_data_dict():
     data["model_folder2"] = []
     data["layer1"] = []
     data["layer2"] = []
+    data["task_type"] = []
     return data
 
 def get_dataset(config, **kwargs):
@@ -253,6 +254,8 @@ def get_dataset(config, **kwargs):
     Returns:
         seqs: list of lists of str
             the string tokens
+        task_type: str
+            returns the task type for saving purposes
     """
     n_samples = config.get("n_samples_per_count", 15)
     config["unk_p"] = 0
@@ -273,7 +276,7 @@ def get_dataset(config, **kwargs):
             samps.append([ "B" ] + samp)
             max_len = max(max_len, len(samps[-1]))
     samps = [pad_to(samp, max_len, fill_val="P") for samp in samps]
-    return samps
+    return samps, config["task_type"]
 
 def get_model_and_config(model_folder):
     checkpt = savio.load_checkpoint(model_folder)
@@ -373,7 +376,7 @@ if __name__=="__main__":
 
 
     # List of equal len lists of token str (including padding tokens)
-    input_data = get_dataset(config=config)
+    input_data, task_type = get_dataset(config=config)
     mflen = len(model_folders)
     actvs_cache = {}
     for mf1idx,model_folder1 in enumerate(model_folders):
@@ -437,6 +440,7 @@ if __name__=="__main__":
             sim_data["model_folder2"].append(model_folder2)
             sim_data["layer1"].append(layers[0])
             sim_data["layer2"].append(layers[1])
+            sim_data["task_type"].append(task_type)
             for k in sims:
                 sim_data[k].append(sims[k])
                 print(k, sims[k])
