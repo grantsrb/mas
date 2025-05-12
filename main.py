@@ -180,6 +180,7 @@ def forward_pass(
         comms_dict,
         src_activations,
         device,
+        cl_latents=None,
         tokenizer=None,
         pad_mask=None,
         config=dict(),
@@ -188,6 +189,12 @@ def forward_pass(
         tforce=False,
         track_grad=True,
     ):
+    """
+    Args:
+        src_activations: torch tensor (B,S,D)
+        cl_latents: torch tensor (B,S,D)
+            use the trg_swap_mask to isolate the cl latent targets
+    """
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
     const_targ_inpt_id = config.get("const_targ_inpt_id", False)
     ## Get batch
@@ -281,13 +288,14 @@ def forward_pass(
     ## CL LOSS
     ##################
     cl_loss = torch.zeros(1).to(device)
-    if "cl_latents" in batch and "intrv_vecs" in comms_dict:
+    if cl_latents is not None and "intrv_vecs" in comms_dict:
+        cl_latents = cl_latents[batch_indices].to(device)
         prev_grad_state = torch.is_grad_enabled()
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
         cl_loss = cl_loss_fxn(
             intrv_vecs=torch.cat(comms_dict["intrv_vecs"],dim=0),
-            cl_latents=batch["cl_latents"],
+            cl_latents=cl_latents,
             swap_mask=batch["trg_swap_masks"],
         )
         torch.set_grad_enabled(prev_grad_state)
@@ -745,22 +753,23 @@ def main():
     ##########################
     with torch.no_grad():
         all_src_activations = {k:dict() for k in datasets}
+        cl_latents = {k:dict() for k in datasets}
         print("Collecting Activations")
         for k in all_src_activations:
-            for model_pair in tokenized_datasets[k].keys():
-                src_idx,trg_idx,varb_idx = model_pair
+            for dirvar_tup in tokenized_datasets[k].keys():
+                src_idx,trg_idx,varb_idx = dirvar_tup
+                dirvar_tup = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
                 src_model = models[src_idx].eval()
                 trg_model = models[trg_idx]
                 startt = time.time()
                 device = devices[src_idx]
-                model_pair = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
                 print("Trg Model", trg_idx, config["model_names"][trg_idx])
                 print("Src Model", src_idx, config["model_names"][src_idx])
                 print("Device:", device)
                 vbsize = config.get("eval_batch_size", 128)
                 batch = collate_fn(
-                    torch.arange(len(tokenized_datasets[k][model_pair])).long(),
-                    tokenized_datasets[k][model_pair],
+                    torch.arange(len(tokenized_datasets[k][dirvar_tup])).long(),
+                    tokenized_datasets[k][dirvar_tup],
                     incl_src=True,
                     device="cpu")
 
@@ -791,8 +800,20 @@ def main():
                     verbose=True,
                 )
 
-                all_src_activations[k][model_pair] =\
-                    actvs[config["layers"][src_idx]].squeeze()
+                src_actvs = actvs[config["layers"][src_idx]].squeeze()
+                all_src_activations[k][dirvar_tup] = src_actvs
+                
+                ## Collect cl latents
+                cl_latents[k][dirvar_tup] = None
+                if (src_idx,trg_idx) in config["cl_directions"]:
+                    cl_lats = torch.empty_like(src_actvs)
+                    mask = batch["trg_swap_masks"]
+                    if "cl_idxs" in batch:
+                        idxs = batch["cl_idxs"].long()
+                        cl_lats[mask] = src_actvs[idxs[:,0],idxs[:,1]]
+                    else:
+                        cl_lats[mask] = src_actvs[batch["src_swap_masks"]]
+                    cl_latents[k][dirvar_tup] = cl_lats
 
                 pad_id = tokenizers[src_idx].pad_token_id
                 pad_mask = ~batch["src_outp_attn_mask"]
@@ -938,6 +959,7 @@ def main():
                         batch_indices=batch_indices,
                         dataset=tokenized_datasets["train"][dirvar_tup],
                         src_activations=all_src_activations["train"][dirvar_tup],
+                        cl_latents=cl_latents["train"][dirvar_tup],
                         device=devices[tidx],
                         config=config,
                         tforce=True,
@@ -988,6 +1010,7 @@ def main():
                                 batch_indices=val_indices,
                                 dataset=tokenized_datasets["valid"][dirvar_tup],
                                 src_activations=all_src_activations["valid"][dirvar_tup],
+                                cl_latents=cl_latents["valid"][dirvar_tup],
                                 device=devices[tidx],
                                 tokenizer=tokenizers[tidx],
                                 config=config,
