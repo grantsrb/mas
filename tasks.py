@@ -18,6 +18,16 @@ singleobj_info["demo_tokens"] = ["D"]
 sameobj_info = copy.deepcopy(singleobj_info)
 sameobj_info["resp_tokens"] = ["D"]
 
+arithmetic_info = {
+    "bos_token": "B",
+    "eos_token": "E",
+    "pad_token": "P",
+    "number_tokens": [str(i) for i in range(21)],
+    "op_tokens": ["-","+"],
+    "equals_token": "=",
+    "comma_token": ",",
+}
+
 class Task:
     def __init__(self, cmodel, info=None, *args, **kwargs):
         self.cmodel = cmodel
@@ -146,4 +156,18 @@ class SameObjectRound(SameObject):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cmodel = causal_models.CountUpDownRound(*args, **kwargs)
+
+################################################################
+# Arithmetic Tasks
+################################################################
+class ArithmeticTask(Task):
+    def __init__(self, info=None, *args, **kwargs):
+        self.cmodel = causal_models.ArithmeticCmodel(*args, **kwargs)
+        if info is None:
+            info = copy.deepcopy(arithmetic_info)
+            minc,maxc = self.cmodel.min_count,self.cmodel.max_count
+            info["number_tokens"] = [str(i) for i in range(minc,maxc+1)]
+            info = self.prep_info(info, **kwargs)
+        self.info = info
+        self.bos_token = self.info["bos_token_id"]
 

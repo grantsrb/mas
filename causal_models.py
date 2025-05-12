@@ -232,3 +232,139 @@ class CountUpDownRound(CountUpDown):
     def trigger_fxn(self, x):
         return round(x/self.roundn)*self.roundn
 
+
+class ArithmeticCmodel(CausalModel):
+    def __init__(self,
+            min_count=0,
+            max_count=20,
+            max_ops=20,
+            blank_state=False,
+            *args, **kwargs,
+        ):
+        super().__init__()
+        self.min_count = min_count
+        self.max_count = max_count
+        self.max_ops = max_ops
+        # each of these are the real values, not token ids,
+        # except for next_token_id
+        self.init_varbs_ = {
+            "remops": None, 
+            "cumu_val": None,
+            "op": None,
+            "operand": None,
+            "next_token_id": None,
+        }
+        self.swap_varbs = None
+
+    @property
+    def init_varbs(self):
+        return copy.deepcopy(self.init_varbs_)
+
+    def evaluate_cumu(self, varbs, info):
+        cumu = varbs["cumu_val"]
+        op = varbs["op"]
+        operand = varbs["operand"]
+        return eval( f"{cumu}{op}{operand}" )
+
+    def sample_op(self, varbs):
+        """Samples the evaluatable value"""
+        cumu = varbs["cumu_val"]
+        if cumu==self.max_count: op = "-"
+        elif cumu==self.min_count: op = "+"
+        else: op = "-" if np.random.random()>0.5 else "+"
+        return op
+
+    def sample_op_id(self, varbs, info):
+        op = self.sample_op(varbs)
+        idx = info["op_tokens"].index(op)
+        return info["op_token_ids"][idx]
+
+    def sample_operand(self, varbs):
+        """Samples the evaluatable value"""
+        cumu = varbs["cumu_val"]
+        if varbs["op"]=="-":
+            operand = np.random.randint(0,cumu-self.min_count+1)
+        else:
+            operand = np.random.randint(0,self.max_count-cumu+1)
+        return str(operand)
+
+    def sample_operand_id(self, varbs, info):
+        operand = self.sample_operand(varbs)
+        return self.get_num_tok_id(operand, info)
+
+    def get_num_tok_id(self, num, info):
+        """
+        Converts the raw str number token to the token id
+        """
+        idx = info["number_tokens"].index(str(num))
+        return info["number_token_ids"][idx]
+    
+    def sample_remops(self,):
+        return int(np.random.randint(1,self.max_ops+1))
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        try:
+            if varbs is None: varbs = self.init_varbs
+            if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+                varbs["remops"] = -1
+                varbs["next_token_id"] = info["pad_token_id"]
+                varbs["tmask"] = 0
+                return varbs
+            elif varbs["remops"] is None:
+                varbs["remops"] = self.sample_remops()
+                varbs["next_token_id"] = self.get_num_tok_id(
+                    varbs["remops"],info)
+                varbs["tmask"] = 0
+            elif varbs["cumu_val"] is None:
+                varbs["cumu_val"] = int(np.random.randint(
+                    self.min_count, self.max_count+1))
+                varbs["next_token_id"] = self.get_num_tok_id(
+                    varbs["cumu_val"],info)
+                varbs["tmask"] = 0
+            elif token_id==info["equals_token_id"]:
+                varbs["cumu_val"] = self.evaluate_cumu(varbs,info)
+                varbs["next_token_id"] = self.get_num_tok_id(
+                    varbs["cumu_val"],info)
+                varbs["tmask"] = 1
+            elif token_id==info["comma_token_id"]:
+                varbs["remops"] -= 1
+                varbs["next_token_id"] = self.sample_op_id(varbs, info)
+                varbs["tmask"] = 0
+            elif token_id in info["op_token_ids"]:
+                idx = info["op_token_ids"].index(token_id)
+                varbs["op"] = info["op_tokens"][idx]
+                varbs["next_token_id"] = self.sample_operand_id(varbs, info)
+                varbs["tmask"] = 0
+            elif token_id in info["number_token_ids"]:
+                varbs["tmask"] = 1
+                idx = info["number_token_ids"].index(token_id)
+                inpt = info["number_tokens"][idx]
+                if varbs["op"] is None:
+                    varbs["next_token_id"] = self.sample_op_id(varbs, info)
+                    varbs["tmask"] = 0
+                elif varbs["operand"] is None: # case that it is the operand
+                    varbs["operand"] = inpt
+                    varbs["next_token_id"] = info["equals_token_id"]
+                else: # case that it is the cumu_val
+                    varbs["op"] = None
+                    varbs["operand"] = None
+                    varbs["next_token_id"] = info["comma_token_id"]
+        except:
+            for k,v in varbs.items():
+                print(k,v)
+            assert False
+        return varbs
+
+    def get_token(self, varbs, info, *args, **kwargs):
+        if varbs["remops"]<0:
+            return info["pad_token_id"], 0
+        elif varbs["next_token_id"]==info["comma_token_id"]:
+            if varbs["remops"]==1:
+                return info["eos_token_id"],varbs["tmask"]
+        return varbs["next_token_id"],varbs["tmask"]
+
+
