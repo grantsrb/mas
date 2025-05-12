@@ -10,18 +10,24 @@ def get_stepwise_hook(comms_dict):
         trg_idx = comms_dict.get("trg_idx",1)
         varb_idx = comms_dict.get("varb_idx",None)
 
+        # targ vectors, shape (B,D)
         if hasattr(output,"hidden_states"):
             trg_actvs = output["hidden_states"]
         else:
             trg_actvs = output
 
-        # Prep source vectors
+        # Prep source vectors, shape (B,S,D)
         src_actvs = comms_dict["src_activations"]
 
         # Handle case where we have a specific swap mask
         lc = comms_dict["loop_count"]
         comms_dict["loop_count"] += 1
         batch_bools = comms_dict["src_swap_masks"][:,lc]
+        if comms_dict.get("intrv_vecs",None) is None:
+            comms_dict["intrv_vecs"] = []
+        comms_dict["intrv_vecs"].append(torch.empty_like(trg_actvs))
+        if not torch.any(batch_bools):
+            return output
 
         placeholder = torch.empty_like(trg_actvs)
         placeholder[~batch_bools] = trg_actvs[~batch_bools]
@@ -36,6 +42,8 @@ def get_stepwise_hook(comms_dict):
             source_idx=src_idx,
             varb_idx=varb_idx,
         )
+
+        comms_dict["intrv_vecs"][-1][batch_bools] = outs
 
         placeholder[batch_bools] = outs
         outs = placeholder
@@ -85,7 +93,10 @@ def get_indywise_hook(comms_dict):
         intr_out = h.clone()
 
         comms_dict["loop_count"] += 1
-        if batch_bools.float().sum()==0:
+        if comms_dict.get("intrv_vecs", None) is None:
+            comms_dict["intrv_vecs"] = []
+        comms_dict["intrv_vecs"].append(torch.empty_like(intr_out))
+        if not torch.any(batch_bools):
             h = h.reshape(og_h_shape)
             if type(out)==dict:
                 out["hidden_states"] = h
@@ -115,14 +126,7 @@ def get_indywise_hook(comms_dict):
             source_idx=src_idx,
             varb_idx=varb_idx,)
 
-        ## If auxiliary targets are argued, then use them as a constraint
-        ## on the intervened vectors.
-        #if comms_dict.get(aux_targs_key, None) is not None:
-        #    comms_dict[aux_loss_key] = aux_loss_fxn(
-        #        outs,
-        #        comms_dict[aux_targs_key][idxs].to(device),
-        #        targs=torch.ones(len(outs)).to(device),
-        #    )
+        comms_dict["intrv_vecs"][-1][idxs] = outs
 
         # Place causally intervened outputs into appropriate locations
         # in original output tensor. We do it this way to avoid auto-grad
