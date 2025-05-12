@@ -70,18 +70,18 @@ def config_prep(config):
         elif type(sks)==str:
             config["swap_keys"][si] = [sks]
     
-    if config["train_directions"] in {None, "all"}:
+    if type(config["train_directions"])==list:
+        config["train_directions"] = [tuple(td) for td in config["train_directions"]]
+    elif config["train_directions"] in {None, "all"}:
         config["train_directions"] = []
         for s in range(n_models):
             for t in range(n_models):
                 config["train_directions"].append((s,t))
-    else:
-        config["train_directions"] = [tuple(td) for td in config["train_directions"]]
 
-    if config["cl_directions"] in {None, "none"}:
-        config["cl_directions"] = []
-    else:
+    if type(config["cl_directions"])==list:
         config["cl_directions"] = [tuple(td) for td in config["cl_directions"]]
+    elif config["cl_directions"] in {None, "none"}:
+        config["cl_directions"] = []
 
     config["layers"] = [
             "inpt_identity" if l=="embeddings" else l for l in config["layers"]]
@@ -927,6 +927,8 @@ def main():
                     runtime = time.time()
                     (sidx,tidx,vidx) = dirvar_tup
                     accum = config.get("grad_accumulation_steps", 1)
+                    track_grad = (sidx,tidx) in config["train_directions"]\
+                                or (sidx,tidx) in config["cl_directions"]
                     loss, cl_loss, tok_acc, trial_acc = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
@@ -939,20 +941,19 @@ def main():
                         device=devices[tidx],
                         config=config,
                         tforce=True,
-                        track_grad=(sidx,tidx) in config["train_directions"] or\
-                                    (sidx,tidx) in config["cl_directions"]
+                        track_grad=track_grad,
                     )
                     cl_loss = cl_loss/accum/(len(models)**2)
                     loss = loss/accum/(len(models)**2)
                     eps = config.get("cl_eps",0.9)
                     combo_loss = (1-eps)*loss + eps*cl_loss
 
-                    if config["conserve_memory"]:
+                    if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
                         try:
                             (combo_loss/float(n_tups)).backward()
-                        except:
-                            assert False, "need to catch specific error"
+                        except RuntimeError:
+                            assert False, "
 
                     losses[dirvar_tup] = loss.item()
                     tot_loss += combo_loss.to(devices[0])
