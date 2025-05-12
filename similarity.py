@@ -366,6 +366,11 @@ def get_actvs(model, layer, input_ids, pad_mask=None):
     return actvs.reshape(-1, actvs.shape[-1])
 
 if __name__=="__main__":
+    """
+    Can use this script by running it from the command line like so:
+
+    $ python3 similarity.py <path_to_model_folder1> <path_to_model_folder2> layers=<layer1>,<layer2>
+    """
     device = "cpu"
     model_folders, _, config = read_command_line_args()
     layers = config.get("layers", ["identities.0", "identities.0"])
