@@ -212,8 +212,11 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
         d["src_swap_masks"] = torch.tensor(batch["src_swap_masks"])[...,:-1]
     except: pass
     try:
-        d["trg_swap_idxs"] = torch.tensor(batch["trg_swap_idxs"])[...,:-1]
-        d["src_swap_idxs"] = torch.tensor(batch["src_swap_idxs"])[...,:-1]
+        d["trg_swap_idxs"] = torch.LongTensor(batch["trg_swap_idxs"])
+        d["src_swap_idxs"] = torch.LongTensor(batch["src_swap_idxs"])
+    except: pass
+    try:
+        d["cl_idxs"] = torch.LongTensor(batch["cl_idxs"])
     except: pass
     # In a standard LM objective the labels are the input_ids (shifted internally
     # by the model), but we don't do that
