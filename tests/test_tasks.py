@@ -7,7 +7,7 @@ try:
         MultiObjectMod, SingleObjectMod, SameObjectMod,
         MultiObjectSquare, SingleObjectSquare, SameObjectSquare,
         MultiObjectRound, SingleObjectRound, SameObjectRound,
-        ArithmeticTask,
+        Arithmetic,
     )
 except ImportError:
     import sys
@@ -19,7 +19,7 @@ except ImportError:
         MultiObjectMod, SingleObjectMod, SameObjectMod,
         MultiObjectSquare, SingleObjectSquare, SameObjectSquare,
         MultiObjectRound, SingleObjectRound, SameObjectRound,
-        ArithmeticTask,
+        Arithmetic,
     )
 
 
@@ -95,18 +95,18 @@ class TestTasks(unittest.TestCase):
         self.assertEqual(len(metas), n_samples)
 
     def test_arithmetic(self):
-        task = ArithmeticTask()
+        task = Arithmetic()
         self.assertIsInstance(task.cmodel, ArithmeticCmodel)
 
     def test_arithmetic_equals_count(self):
-        task = ArithmeticTask()
+        task = Arithmetic()
         seq, tmask, varbs = task.generate_sample()
         n_ops = int(seq[0])
         n_eqs = sum([1 if s=="=" else 0 for s in seq])
         self.assertEqual(n_ops, n_eqs)
 
     def test_arithmetic_correct_seq(self):
-        task = ArithmeticTask()
+        task = Arithmetic()
         seq, tmask, varbs = task.generate_sample()
         segs = ("".join(seq)).split(",")
         cumu_val = eval("".join(seq[1:4]))
@@ -118,14 +118,14 @@ class TestTasks(unittest.TestCase):
             self.assertEqual(cumu_val, new_cumu)
 
     def test_arithmetic_generate_sample(self):
-        task = ArithmeticTask()
+        task = Arithmetic()
         seq, tmask, varbs = task.generate_sample()
         print("Arithmetic sample:", seq)
         print("Arithmetic Tmask :", tmask)
         print("Arithmetic Meta  :", varbs[-1])
 
     def test_arithmetic_generate_samples(self):
-        task = ArithmeticTask()
+        task = Arithmetic()
         n_samples = 3
         seqs, tmasks, metas = task.generate_samples(n_samples=n_samples)
         print("Arithmetic samples:", seqs)

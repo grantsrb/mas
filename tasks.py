@@ -160,13 +160,13 @@ class SameObjectRound(SameObject):
 ################################################################
 # Arithmetic Tasks
 ################################################################
-class ArithmeticTask(Task):
+class Arithmetic(Task):
     def __init__(self, info=None, *args, **kwargs):
         self.cmodel = causal_models.ArithmeticCmodel(*args, **kwargs)
         if info is None:
             info = copy.deepcopy(arithmetic_info)
-            minc,maxc = self.cmodel.min_count,self.cmodel.max_count
-            info["number_tokens"] = [str(i) for i in range(minc,maxc+1)]
+            minv,maxv = self.cmodel.min_val,self.cmodel.max_val
+            info["number_tokens"] = [str(i) for i in range(minv,maxv+1)]
             info = self.prep_info(info, **kwargs)
         self.info = info
         self.bos_token = self.info["bos_token_id"]

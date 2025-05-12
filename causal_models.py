@@ -235,15 +235,15 @@ class CountUpDownRound(CountUpDown):
 
 class ArithmeticCmodel(CausalModel):
     def __init__(self,
-            min_count=0,
-            max_count=20,
+            min_val=0,
+            max_val=20,
             max_ops=20,
             blank_state=False,
             *args, **kwargs,
         ):
         super().__init__()
-        self.min_count = min_count
-        self.max_count = max_count
+        self.min_val = min_val
+        self.max_val = max_val
         self.max_ops = max_ops
         # each of these are the real values, not token ids,
         # except for next_token_id
@@ -269,8 +269,8 @@ class ArithmeticCmodel(CausalModel):
     def sample_op(self, varbs):
         """Samples the evaluatable value"""
         cumu = varbs["cumu_val"]
-        if cumu==self.max_count: op = "-"
-        elif cumu==self.min_count: op = "+"
+        if cumu==self.max_val: op = "-"
+        elif cumu==self.min_val: op = "+"
         else: op = "-" if np.random.random()>0.5 else "+"
         return op
 
@@ -283,9 +283,9 @@ class ArithmeticCmodel(CausalModel):
         """Samples the evaluatable value"""
         cumu = varbs["cumu_val"]
         if varbs["op"]=="-":
-            operand = np.random.randint(0,cumu-self.min_count+1)
+            operand = np.random.randint(0,cumu-self.min_val+1)
         else:
-            operand = np.random.randint(0,self.max_count-cumu+1)
+            operand = np.random.randint(0,self.max_val-cumu+1)
         return str(operand)
 
     def sample_operand_id(self, varbs, info):
@@ -321,7 +321,7 @@ class ArithmeticCmodel(CausalModel):
                 varbs["tmask"] = 0
             elif varbs["cumu_val"] is None:
                 varbs["cumu_val"] = int(np.random.randint(
-                    self.min_count, self.max_count+1))
+                    self.min_val, self.max_val+1))
                 varbs["next_token_id"] = self.get_num_tok_id(
                     varbs["cumu_val"],info)
                 varbs["tmask"] = 0

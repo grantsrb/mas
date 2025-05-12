@@ -10,14 +10,15 @@ import copy
 
 ## Update these values
 root = "make_models" # the name of the directory in which this script resides
-main_save_directory = "/mnt/fs2/grantsrb/mas_neurips2025/"
+main_save_directory = "/mnt/fs2/grantsrb/mas_moreseeds_neurips2025/"
 main_d_model = 128
 n_epochs = 2500
-seeds =    [12345, 23456,]
-devices =  [0,1,2,3,4,5,6,7,8,9]
+seeds =    [12345, 23456, 34567, 45678,] #[12345, 23456,]
+devices =  [8,9,0,1,2,3,4,5,6,7,]
+rnn_unk = False # set to true if you want to include void tokens in rnns
 unk_p = 0.2
-tasks = ["MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
-tformer_tasks = ["MultiObject", "MultiObjectMod", "MultiObjectRound"]
+tasks = ["Arithmetic", ] #"MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
+tformer_tasks = ["Arithmetic", ] #"MultiObject", "MultiObjectMod", "MultiObjectRound"]
 tformer_lr = 0.0005
 tformer_layers = 4
 rnns = ["GRU", "LSTM"]
@@ -136,8 +137,8 @@ og_config = config
 
 # Make RNN Configs
 config = copy.deepcopy(og_config)
-unk = ""
-incr = len(devices)//len(tasks)
+unk = "_unk" if rnn_unk else ""
+incr = max(len(devices)//len(tasks), 1)
 for rnn in rnns:
     print(rnn)
     run_script = f"#!/bin/bash\n\n"
@@ -164,10 +165,10 @@ for rnn in rnns:
         save_json(ranges, rpath)
 
         # Make Meta Config
-        start = ti*incr
+        start = (ti*incr)
         end = (ti+1)*incr
-        ds = devices[start:end]
-        print(ds)
+        ds = [devices[di%len(devices)] for di in range(start,end)]
+        print(exp_name, "ds:", ds)
         meta = {
             "devices": ds,
             "key_order": ["seed"],
@@ -186,7 +187,7 @@ for rnn in rnns:
 # Make Transformer Configs
 config = copy.deepcopy(og_config)
 unks = ["_unk",]
-incr = len(devices)//(len(tformer_tasks) * len(unks))
+incr = max(len(devices)//(len(tformer_tasks) * len(unks)), 1)
 for enc_type in ["rope"]:
     print("Tformer", enc_type)
     run_script = f"#!/bin/bash\n\n"
@@ -220,10 +221,10 @@ for enc_type in ["rope"]:
             save_json(ranges, rpath)
 
             # Make Meta Config
-            start = int((ti*len(unks)+ui)*incr)
-            end = int((ti*len(unks)+ui+1)*incr)
-            ds = devices[start: end]
-            print("ds:", ds)
+            start = (ti*incr)
+            end = (ti+1)*incr
+            ds = [devices[di%len(devices)] for di in range(start,end)]
+            print(exp_name, "ds:", ds)
             meta = {
                 "devices": ds,
                 "key_order": ["seed"],
