@@ -1,4 +1,5 @@
 import torch
+import copy
 import numpy as np
 import time
 from tqdm import tqdm
@@ -110,12 +111,14 @@ def get_datasets(config):
     n_valid = config.get("n_train_samples", 500)
     task_config = config.get("task_config", dict())
     task = getattr(tasks, config["task_type"])(**task_config)
-    info = task.info
-    tokenizer = make_tokenizer_from_info( info=info )
-    info = add_token_ids_to_info(info, tokenizer)
 
     train_samps, train_tmasks, _ = task.generate_samples(n_train)
     valid_samps, valid_tmasks, _ = task.generate_samples(n_valid)
+
+    info = copy.deepcopy(task.info)
+    tokenizer = make_tokenizer_from_info( info=info )
+    info = add_token_ids_to_info(info, tokenizer)
+
     train_samps, tokenizer, info, tmax_len = tokenize_samples(
         samples=train_samps, info=info, tokenizer=tokenizer, **config)
     valid_samps, _, _, vmax_len = tokenize_samples(
