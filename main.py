@@ -75,6 +75,13 @@ def config_prep(config):
         for s in range(n_models):
             for t in range(n_models):
                 config["train_directions"].append((s,t))
+    else:
+        config["train_directions"] = [tuple(td) for td in config["train_directions"]]
+
+    if config["cl_directions"] in {None, "none"}:
+        config["cl_directions"] = []
+    else:
+        config["cl_directions"] = [tuple(td) for td in config["cl_directions"]]
 
     config["layers"] = [
             "inpt_identity" if l=="embeddings" else l for l in config["layers"]]
@@ -179,6 +186,7 @@ def forward_pass(
         verbose=False,
         vidx=None,
         tforce=False,
+        track_grad=True,
     ):
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
     const_targ_inpt_id = config.get("const_targ_inpt_id", False)
@@ -219,12 +227,15 @@ def forward_pass(
         comms_dict["trg_swap_idxs"] = tsm
 
     ## Run model
+    prev_grad_state = torch.is_grad_enabled()
+    torch.set_grad_enabled(track_grad)
     outputs = model(
         input_ids=batch["input_ids"],
         attention_mask=batch["inpt_attn_mask"],
         task_mask=batch["input_tmask"],
         tforce=tforce,
     )
+    torch.set_grad_enabled(prev_grad_state)
 
     # Calc Loss
     if "logits" in outputs:
@@ -254,10 +265,32 @@ def forward_pass(
     #    print("Label:", tensor2str(batch["labels"][i][lmask[i]]))
     #    print()
 
+    ##################
+    ## MAS LOSS
+    ##################
+    prev_grad_state = torch.is_grad_enabled()
+    enable = track_grad and (sidx,tidx) in config["train_directions"]
+    torch.set_grad_enabled(enable)
     loss = F.cross_entropy(
         flat[lmask.reshape(-1)],
         labels[lmask.reshape(-1)]
     )
+    torch.set_grad_enabled(prev_grad_state)
+    
+    ##################
+    ## CL LOSS
+    ##################
+    cl_loss = torch.zeros(1).to(device)
+    if "cl_latents" in batch and "intrv_vecs" in comms_dict:
+        prev_grad_state = torch.is_grad_enabled()
+        enable = track_grad and (sidx,tidx) in config["cl_directions"]
+        torch.set_grad_enabled(enable)
+        cl_loss = cl_loss_fxn(
+            intrv_vecs=torch.cat(comms_dict["intrv_vecs"],dim=0),
+            cl_latents=batch["cl_latents"],
+            swap_mask=batch["trg_swap_masks"],
+        )
+        torch.set_grad_enabled(prev_grad_state)
 
     if "outp_tmask" in batch:
         tmask = batch["outp_tmask"].to(device)
@@ -346,7 +379,7 @@ def forward_pass(
             #print("GenIds:", outs[i][tmask[i]])
             #print()
 
-    return loss, tok_acc, trial_acc
+    return loss, cl_loss, tok_acc, trial_acc
 
 def get_embedding_name(model, layer=""):
     """
@@ -370,6 +403,52 @@ def get_embedding_name(model, layer=""):
                 shortest_len = len(name.split("."))
                 simplist_name = name
     return simplist_name
+
+def mse_loss(x,y, *args, **kwargs):
+    return torch.nn.functional.mse_loss(x,y,reduction="none").mean(-1)
+
+def cosine_loss(x,y, targs=None, *args, **kwargs):
+    if targs is None:
+        device = device_fxn(x.get_device())
+        targs = torch.ones(len(x)).to(device)
+    return torch.nn.functional.cosine_embedding_loss(
+        x,y,targs,reduction="none"
+    )
+
+def cos_and_mse_loss(x,y,targs=None,*args,**kwargs):
+    return (cosine_loss(x,y,targs) + mse_loss(x,y))/2.
+
+def get_loss_fxn(fxn_name):
+    if "mse" in fxn_name:
+        print("Using mse aux loss")
+        return mse_loss
+    if "cosine" in fxn_name or "cos" in fxn_name:
+        print("Using cosine aux loss")
+        return cosine_loss
+    if "both" in fxn_name:
+        return cos_and_mse_loss
+    print("Invalid aux function name")
+    raise NotImplemented
+
+def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
+    """
+    Args:
+        intrv_vecs: torch tensor (B,S,D)
+            the intervened vectors
+        cl_latents: torch tensor (B,S,D)
+            the target vectors
+        swap_mask: torch tensor (B,S)
+            a mask where trues denote positions to use for the cl loss.
+        loss_type: str {"mse", "cos", "both"}
+            optionally pick the loss function
+    Returns
+        cl_loss: torch tensor (1,)
+            the counterfactual latent loss
+    """
+    preds = intrv_vecs[swap_mask]
+    labls = cl_latents[swap_mask]
+    loss_fxn = get_loss_fxn(loss_type)
+    return loss_fxn(preds,labls)
 
 def main():
     arg_config, command_keys = get_command_line_args(sys.argv)
@@ -443,6 +522,11 @@ def main():
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
+        "cl_directions": None,
+            # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
+            # the first index in the tuple specifies the src idx, and the second
+            # specifies the target for the counterfactual latent loss. None
+            # defaults to no directions.
 
         "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
         "debugging": False,
@@ -843,42 +927,35 @@ def main():
                     runtime = time.time()
                     (sidx,tidx,vidx) = dirvar_tup
                     accum = config.get("grad_accumulation_steps", 1)
-                    if (sidx,tidx) in config["train_directions"]:
-                        loss, tok_acc, trial_acc = forward_pass(
-                            sidx=sidx,
-                            tidx=tidx,
-                            vidx=vidx,
-                            model=models[tidx],
-                            comms_dict=comms_dict,
-                            batch_indices=batch_indices,
-                            dataset=tokenized_datasets["train"][dirvar_tup],
-                            src_activations=all_src_activations["train"][dirvar_tup],
-                            device=devices[tidx],
-                            config=config,
-                            tforce=True,
-                        )
-                        loss = loss/accum/(len(models)**2)
-                        if config["conserve_memory"]:
-                            n_tups = len(list(tokenized_datasets["train"].keys()))
-                            (loss/float(n_tups)).backward()
-                    else:
-                        with torch.no_grad():
-                            loss, tok_acc, trial_acc = forward_pass(
-                                sidx=sidx,
-                                tidx=tidx,
-                                vidx=vidx,
-                                model=models[tidx],
-                                comms_dict=comms_dict,
-                                batch_indices=batch_indices,
-                                dataset=tokenized_datasets["train"][dirvar_tup],
-                                src_activations=all_src_activations["train"][dirvar_tup],
-                                device=devices[tidx],
-                                config=config,
-                                tforce=True,
-                            )
-                            loss = loss/accum/(len(models)**2)
+                    loss, cl_loss, tok_acc, trial_acc = forward_pass(
+                        sidx=sidx,
+                        tidx=tidx,
+                        vidx=vidx,
+                        model=models[tidx],
+                        comms_dict=comms_dict,
+                        batch_indices=batch_indices,
+                        dataset=tokenized_datasets["train"][dirvar_tup],
+                        src_activations=all_src_activations["train"][dirvar_tup],
+                        device=devices[tidx],
+                        config=config,
+                        tforce=True,
+                        track_grad=(sidx,tidx) in config["train_directions"] or\
+                                    (sidx,tidx) in config["cl_directions"]
+                    )
+                    cl_loss = cl_loss/accum/(len(models)**2)
+                    loss = loss/accum/(len(models)**2)
+                    eps = config.get("cl_eps",0.9)
+                    combo_loss = (1-eps)*loss + eps*cl_loss
+
+                    if config["conserve_memory"]:
+                        n_tups = len(list(tokenized_datasets["train"].keys()))
+                        try:
+                            (combo_loss/float(n_tups)).backward()
+                        except:
+                            assert False, "need to catch specific error"
+
                     losses[dirvar_tup] = loss.item()
-                    tot_loss += loss.to(devices[0])
+                    tot_loss += combo_loss.to(devices[0])
 
                     tot_trial += trial_acc.item()/(len(models)**2)
                     tot_tok += tok_acc.item()/(len(models)**2)
@@ -900,29 +977,29 @@ def main():
                         val_loss = 0
                         val_tok = 0
                         val_trial = 0
-                        with torch.no_grad():
-                            for val_indices in valid_loader:
-                                vloss, vtok, vtrial = forward_pass(
-                                    sidx=sidx,
-                                    tidx=tidx,
-                                    vidx=vidx,
-                                    model=models[tidx],
-                                    comms_dict=comms_dict,
-                                    batch_indices=val_indices,
-                                    dataset=tokenized_datasets["valid"][dirvar_tup],
-                                    src_activations=all_src_activations["valid"][dirvar_tup],
-                                    device=devices[tidx],
-                                    tokenizer=tokenizers[tidx],
-                                    config=config,
-                                    verbose=True,
-                                    tforce=False,
-                                )
-                                val_loss  += vloss.item() /len(valid_loader)
-                                val_tok   += vtok.item()  /len(valid_loader)
-                                val_trial += vtrial.item()/len(valid_loader)
-                            val_losses[dirvar_tup] = val_loss
-                            val_tok_accs[dirvar_tup] = val_tok
-                            val_trial_accs[dirvar_tup] = val_trial
+                        for val_indices in valid_loader:
+                            vloss, vcl_loss, vtok, vtrial = forward_pass(
+                                sidx=sidx,
+                                tidx=tidx,
+                                vidx=vidx,
+                                model=models[tidx],
+                                comms_dict=comms_dict,
+                                batch_indices=val_indices,
+                                dataset=tokenized_datasets["valid"][dirvar_tup],
+                                src_activations=all_src_activations["valid"][dirvar_tup],
+                                device=devices[tidx],
+                                tokenizer=tokenizers[tidx],
+                                config=config,
+                                verbose=True,
+                                tforce=False,
+                                track_grad=False,
+                            )
+                            val_loss  += vloss.item() /len(valid_loader)
+                            val_tok   += vtok.item()  /len(valid_loader)
+                            val_trial += vtrial.item()/len(valid_loader)
+                        val_losses[dirvar_tup] = val_loss
+                        val_tok_accs[dirvar_tup] = val_tok
+                        val_trial_accs[dirvar_tup] = val_trial
 
                 if not config["conserve_memory"]:
                     tot_loss.backward()
