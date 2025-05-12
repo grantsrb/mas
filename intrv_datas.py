@@ -218,6 +218,36 @@ def sample_swaps(df, filter, info=None, stepwise=False):
         swap_varbs.append(dict(sample))
     return swap_masks, swap_idxs, swap_varbs
 
+def sample_cl_indices(df, varbs, keys=None):
+    """
+    A helper function for sampling indices from the data frame that have
+    the argued variable makeup.
+
+    Args:
+        df: pd dataframe
+        varbs: list of dicts (B,)
+            a list of variables that should provide the desired makeup
+            for the cl indices.
+    Returns:
+        cl_indices: list of lists of ints (B,2)
+            a tuple of indices for each counterfactual latent. The index
+            indicates the sample index and the sequence index for each
+            sample.
+    """
+    if keys is None: keys = list(varbs[0].keys())
+    keys = [k for k in keys if k in varbs[0]]
+    cl_indices = []
+    start_idx = np.ones(len(df)).astype(bool)
+    for varb in varbs:
+        idx = start_idx.copy()
+        for k in keys:
+            idx = idx&(df[k]==varb[k])
+        samp = df.loc[idx].sample()
+        cl_indices.append([
+            int(samp.iloc[0]["sample_idx"]), int(samp.iloc[0]["step_idx"]),
+        ])
+    return cl_indices
+
 def make_counterfactual_seqs(
         trg_seqs,
         trg_swap_keys,
@@ -284,8 +314,8 @@ def make_counterfactual_seqs(
     intrv_seqs = []
     intrv_varbs_list = []
     intrv_tmasks = []
-    pad_id = trg_info.get("pad_token_id", 0)
-    eos_id = trg_info.get("eos_token_id", 0)
+    pad_id =  trg_info.get("pad_token_id", 0)
+    eos_id =  trg_info.get("eos_token_id", 0)
     fill_id = trg_info.get("demo_ids", [3])[-1]
     for seq_i, tup in enumerate(z):
         (trg_seq,trg_idx,trg_tmask,src_varbs,trg_varbs, src_seq, src_idx) = tup
@@ -351,6 +381,7 @@ def make_intrv_data_from_seqs(
         trg_filter,
         stepwise=False,
         sample_w_replacement=True,
+        use_src_as_cl_latents=False,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -387,6 +418,9 @@ def make_intrv_data_from_seqs(
         stepwise: bool
         sample_w_replacement: bool
             if true, will sample the source sequences with replacement
+        use_src_as_cl_latents: bool
+            if true, will use the exact source latents used in the
+            intervention as the counterfactual latents for the cl loss
     Returns:
         intrv_data: dict
             'src_seqs': list of lists of tokenized strings
@@ -446,6 +480,9 @@ def make_intrv_data_from_seqs(
                 post_varbs=False,)\
                 for tseq,tidx in zip(trg_seqs,trg_swap_idxs)
         ]
+        # Can use the cl masks to collect latents from the source
+        # latents in the main script. 
+        cl_idxs = None
     else:
         trg_swap_masks, trg_swap_idxs, trg_swap_varbs = sample_swaps(
             df=trg_df,
@@ -453,6 +490,11 @@ def make_intrv_data_from_seqs(
             info=trg_info,
             stepwise=False,
         )
+        # Can use the cl indices to collect latents from the source
+        # latents in the main script. 
+        if use_src_as_cl_latents: cl_idxs = None
+        else:
+            cl_idxs = sample_cl_indices(df=src_df, varbs=src_swap_varbs)
 
     # 3. Using the variables, seqs, and swap indices, create
     # intervention data.
@@ -485,6 +527,7 @@ def make_intrv_data_from_seqs(
         "src_task_masks": src_task_masks,
         "trg_swap_idxs": trg_swap_idxs,
         "src_swap_idxs": src_swap_idxs,
+        "cl_idxs": cl_idxs,
     }
 
     max_len = int(max(
