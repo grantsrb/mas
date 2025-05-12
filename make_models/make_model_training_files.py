@@ -13,14 +13,14 @@ root = "make_models" # the name of the directory in which this script resides
 main_save_directory = "/mnt/fs2/grantsrb/mas_moreseeds_neurips2025/"
 main_d_model = 128
 n_epochs = 2500
-seeds =    [12345, 23456, 34567, 45678,] #[12345, 23456,]
+seeds =    [34567, 45678,] #[12345, 23456,]
 devices =  [8,9,0,1,2,3,4,5,6,7,]
 rnn_unk = False # set to true if you want to include void tokens in rnns
 unk_p = 0.2
 tasks = ["Arithmetic", ] #"MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
-tformer_tasks = ["Arithmetic", ] #"MultiObject", "MultiObjectMod", "MultiObjectRound"]
+tformer_tasks = ["MultiObject", "MultiObjectMod", "MultiObjectRound"] #"Arithmetic", ] #
 tformer_lr = 0.0005
-tformer_layers = 4
+tformer_layers = 2
 rnns = ["GRU", "LSTM"]
 
 if len(sys.argv)>=2:
