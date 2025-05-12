@@ -1,0 +1,81 @@
+exp_name: "stitch"
+save_root: "/data2/grantsrb/mas_neurips2025/"
+seed: 123456
+
+# Specify your models here
+model_names: 
+  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+
+# Specify your dataset here
+dataset_names:
+    - "task"
+    - "task"
+n_train_samples: 10000
+n_valid_samples: 1000
+
+train_data_paths:
+    - "./data/multiobj_systematic_10000.json"
+    - "./data/multiobj_systematic_10000.json"
+    #- "./data/multiobj.json"
+    #- "./data/multiobj.json"
+valid_data_paths:
+    - "./data/multiobj_systematic_1000.json"
+    - "./data/multiobj_systematic_1000.json"
+    #- "./data/multiobj.json"
+    #- "./data/multiobj.json"
+filter_by_correct: False
+filtered_dataset_path: null
+
+padding_sides:
+    - "right"
+    - "right"
+
+dataset_kwargs:
+  - name: "main"
+    split: "train"
+  - name: "main"
+    split: "train"
+
+layers: # layers at which to attach the hooks
+  - "identities.0"
+  - "identities.0"
+  #- "embeddings"
+  #- "embeddings"
+# If true, will shuffle the target tokens within the swap mask
+shuffle_targ_ids: False
+const_targ_inpt_id: False
+incl_empty_varbs: False
+
+swap_keys:
+  - 
+    - "full"
+  - 
+    - "full"
+
+mtx_types: 
+  - "RotationMatrix"
+  - "RotationMatrix"
+identity_init: False
+identity_rot: False
+
+#mask_type: ZeroMask #FixedMask #BoundlessMask
+#learnable_addition: True
+#n_units: 600
+mask_type: "FixedMask" #ZeroMask #BoundlessMask
+learnable_addition: False
+n_units: 1000000 # the size of the intervened subspace (n_neurons)
+
+num_training_steps: 20000
+print_every: 100
+batch_size: 128
+grad_accumulation_steps: 1
+lr: 0.001
+max_length: null
+eval_batch_size: 1000
+
+stepwise: False
+train_directions:
+  - 
+    - 0
+    - 1
