@@ -75,7 +75,8 @@ max_length: null
 eval_batch_size: 1000
 
 stepwise: False
-train_directions: null
+train_directions:
+    -
 cl_directions:
   - 
     - 0
