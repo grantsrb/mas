@@ -71,7 +71,9 @@ def config_prep(config):
             config["swap_keys"][si] = [sks]
     
     if type(config["train_directions"])==list:
-        config["train_directions"] = [tuple(td) for td in config["train_directions"]]
+        if len(config["train_directions"])>0:
+            config["train_directions"] = [
+                tuple(td) for td in config["train_directions"] if td is not None]
     elif config["train_directions"] in {None, "all"}:
         config["train_directions"] = []
         for s in range(n_models):
@@ -207,6 +209,7 @@ def forward_pass(
     comms_dict["loop_count"] = 0
     comms_dict["intrv_module"].to(device)
     comms_dict["intrv_module"].reset()
+    comms_dict["intrv_vecs"] = None
     comms_dict["src_activations"] =\
         src_activations[batch_indices].to(device)
     input_ids = batch["input_ids"].clone()
@@ -283,7 +286,7 @@ def forward_pass(
         labels[lmask.reshape(-1)]
     )
     torch.set_grad_enabled(prev_grad_state)
-    
+
     ##################
     ## CL LOSS
     ##################
@@ -294,7 +297,7 @@ def forward_pass(
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
         cl_loss = cl_loss_fxn(
-            intrv_vecs=torch.cat(comms_dict["intrv_vecs"],dim=0),
+            intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
             cl_latents=cl_latents,
             swap_mask=batch["trg_swap_masks"],
         )
@@ -456,7 +459,7 @@ def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
     preds = intrv_vecs[swap_mask]
     labls = cl_latents[swap_mask]
     loss_fxn = get_loss_fxn(loss_type)
-    return loss_fxn(preds,labls)
+    return loss_fxn(preds,labls).mean()
 
 def main():
     arg_config, command_keys = get_command_line_args(sys.argv)
@@ -972,10 +975,7 @@ def main():
 
                     if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
-                        try:
-                            (combo_loss/float(n_tups)).backward()
-                        except RuntimeError:
-                            assert False, "
+                        (combo_loss/float(n_tups)).backward()
 
                     losses[dirvar_tup] = loss.item()
                     tot_loss += combo_loss.to(devices[0])
