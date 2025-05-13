@@ -1,9 +1,9 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="stch"
-gpus=( 0 1 2 3 4 5 6 7 ) # 8 9 )
-root_folder="/data2/grantsrb/mas_neurips2025/"
+exp_name="clmas"
+gpus=( 0 1 2 3 4 5 6 7 8 9 )
+root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
