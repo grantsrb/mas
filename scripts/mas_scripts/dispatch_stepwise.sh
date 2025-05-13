@@ -2,11 +2,10 @@
 # Use this script to run the DAS experiments
 
 exp_name="mas"
-gpus=( 0 1 2 3 4 5 6 7 8 9 )
+gpus=( 6 7 8 9 0 1 2 3 4 5 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
-#exp_folders1=( "multiobject_rope_tformer_unk" "multiobjectmod_rope_tformer_unk" ) #"multiobject_gru" "sameobject_gru" ) #"multiobject_lstm" "sameobject_lstm" )
 exp_folders1=( "multiobjectmod_gru" "multiobject_gru"  "multiobject_rope_tformer_unk" "multiobjectround_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
 exp_folders2=( "multiobjectmod_gru"   )
 config="configs/general_stepwise.yaml"

@@ -3,12 +3,13 @@
 
 gpus=( 0 1 2 3 4 5 6 7 8 9 )
 exp_name="sweep"
-model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobjectmod_gru/multiobjectmod_gru_0_seed12345"
-model_path2=" "
+model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_rope_tformer_unk/multiobject_rope_tformer_unk_0_seed23456/"
+model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_rope_tformer_unk/multiobject_rope_tformer_unk_0_seed23456/"
+#model_path2=" "
 
-config="configs/general_indywise.yaml"
-search1=( "n_units=96" "n_units=64" "n_units=128" )
-search2=( "mtx_types=RotationMatrix" ) 
+config="configs/general_stepwise.yaml"
+search1=( "n_units=16" "n_units=32" "n_units=48"  "n_units=64" )
+search2=( "lr=0.0005" "lr=0.001" "lr=0.005" ) 
 arg1="swap_keys=full"
 arg2=""
 arg3=""
