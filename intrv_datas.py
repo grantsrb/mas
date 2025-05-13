@@ -527,8 +527,9 @@ def make_intrv_data_from_seqs(
         "src_task_masks": src_task_masks,
         "trg_swap_idxs": trg_swap_idxs,
         "src_swap_idxs": src_swap_idxs,
-        "cl_idxs": cl_idxs,
     }
+    if cl_idxs is not None:
+        d["cl_idxs"] = cl_idxs
 
     max_len = int(max(
         np.max([len(seq) for seq in d["trg_input_ids"]]),
