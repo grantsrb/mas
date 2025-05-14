@@ -51,8 +51,8 @@ swap_keys:
     - "full"
 
 mtx_types: 
-  - "RotationMatrix"
-  - "RotationMatrix"
+  - "FCARotationMatrix"
+  - "FCARotationMatrix"
 identity_init: False
 identity_rot: False
 
