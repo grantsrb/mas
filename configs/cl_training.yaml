@@ -82,6 +82,7 @@ train_directions:
   - 
     - 0
     - 0
+cl_eps: 0.85
 cl_directions:
   - 
     - 0
