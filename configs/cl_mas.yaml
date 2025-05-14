@@ -1,4 +1,4 @@
-exp_name: "clloss"
+exp_name: "clmas"
 save_root: "/data2/grantsrb/mas_neurips2025/"
 seed: 123456
 
