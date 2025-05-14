@@ -906,6 +906,11 @@ def get_save_name(
                     val = "".join([e[:3]+e[-2:] for e in kwargs[k]])
             elif hasattr(kwargs[k], "__name__"):
                 val = kwargs[k].__name__[:5]
+            elif type(kwargs[k]) in {int, float}:
+                sci = "{:e}".format(kwargs[k])
+                val = str(kwargs[k])
+                if len(val)>len(sci):
+                    val = sci
             else:
                 val = str(kwargs[k])[:5]
         save_name += abbrevs.get(k, k).replace("_","")[:7]+val+"_"
