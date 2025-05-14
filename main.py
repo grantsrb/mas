@@ -461,6 +461,49 @@ def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
     loss_fxn = get_loss_fxn(loss_type)
     return loss_fxn(preds,labls).mean()
 
+def get_cl_latents(
+    model,
+    swap_mask,
+    input_ids,
+    idxs,
+    layer,
+    device,
+    bsize=500,
+):
+    """
+    A helper function for collecting the counterfactual
+    latents.
+
+    Args:
+        model: torch module
+        swap_mask: bool tensor (B,S)
+        input_ids: long tensor (B,S)
+        idxs: torch Long tensor (N,2)
+            a tensor in which the first column denotes
+            the row index and the second column denotes
+            the column index from which to take the
+            latent vectors. N should be equal to the sum
+            of all entries in the swap mask.
+    """
+    model.eval()
+    model.to(device)
+    actvs = collect_activations(
+        model,
+        input_ids=input_ids,
+        layers=[layer],
+        tforce=True,
+        ret_pred_ids=False,
+        batch_size=bsize,
+        to_cpu=True,
+        verbose=True,
+    )[layer]
+    shape = tuple([*swap_mask.shape, actvs.shape[-1]])
+    assert swap_mask.long().sum()==len(idxs)
+    cl_latents = torch.empty(shape)
+    cl_latents[idxs[:,0],idxs[:,1]] = actvs[idxs[:,0],idxs[:,1]]
+    return cl_latents
+
+
 def main():
     arg_config, command_keys = get_command_line_args(sys.argv)
     ##########################
@@ -538,6 +581,7 @@ def main():
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target for the counterfactual latent loss. None
             # defaults to no directions.
+        "cl_eps": 0.9,
 
         "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
         "debugging": False,
@@ -570,6 +614,7 @@ def main():
         kwargs=arg_config,
         config=config)
     print("Saving to:", save_folder)
+    print("Save Name:", save_name)
 
     jpath = os.path.join(save_folder, save_name + ".json")
     if not config.get("debugging", False):
@@ -719,6 +764,8 @@ def main():
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
                     print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
+                    ttype1 = model_configs[sidx]["task_type"]
+                    ttype2 = model_configs[tidx]["task_type"]
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
@@ -731,6 +778,8 @@ def main():
                         trg_info=config["infos"][tidx],
                         trg_filter=config["filters"][tidx],
                         stepwise=config.get("stepwise", False),
+                        use_cl=(sidx,tidx) in config["cl_directions"],
+                        use_src_data_for_cl=ttype1==ttype2,
                     )
                     intrv_datasets[k][(sidx,tidx,vidx)] =\
                         Dataset.from_dict(intrv_data)
@@ -763,7 +812,7 @@ def main():
                 src_idx,trg_idx,varb_idx = dirvar_tup
                 dirvar_tup = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
                 src_model = models[src_idx].eval()
-                trg_model = models[trg_idx]
+                trg_model = models[trg_idx].eval()
                 startt = time.time()
                 device = devices[src_idx]
                 print("Trg Model", trg_idx, config["model_names"][trg_idx])
@@ -809,14 +858,14 @@ def main():
                 ## Collect cl latents
                 cl_latents[k][dirvar_tup] = None
                 if (src_idx,trg_idx) in config["cl_directions"]:
-                    cl_lats = torch.empty_like(src_actvs)
-                    mask = batch["trg_swap_masks"]
-                    if "cl_idxs" in batch:
-                        idxs = batch["cl_idxs"].long()
-                        cl_lats[mask] = src_actvs[idxs[:,0],idxs[:,1]]
-                    else:
-                        cl_lats[mask] = src_actvs[batch["src_swap_masks"]]
-                    cl_latents[k][dirvar_tup] = cl_lats
+                    cl_latents[k][dirvar_tup] = get_cl_latents(
+                        model=trg_model,
+                        device=devices[trg_idx],
+                        swap_mask=batch["trg_swap_masks"],
+                        input_ids=batch["cl_input_ids"],
+                        idxs=batch["cl_idxs"],
+                        layer=config["layers"][trg_idx],
+                    )
 
                 pad_id = tokenizers[src_idx].pad_token_id
                 pad_mask = ~batch["src_outp_attn_mask"]
@@ -951,8 +1000,9 @@ def main():
                     runtime = time.time()
                     (sidx,tidx,vidx) = dirvar_tup
                     accum = config.get("grad_accumulation_steps", 1)
-                    track_grad = (sidx,tidx) in config["train_directions"]\
-                                or (sidx,tidx) in config["cl_directions"]
+                    track_train = (sidx,tidx) in config["train_directions"]
+                    track_cl = (sidx,tidx) in config["cl_directions"]
+                    track_grad = track_train or track_cl
                     loss, cl_loss, tok_acc, trial_acc = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
@@ -970,8 +1020,11 @@ def main():
                     )
                     cl_loss = cl_loss/accum/(len(models)**2)
                     loss = loss/accum/(len(models)**2)
-                    eps = config.get("cl_eps",0.9)
-                    combo_loss = (1-eps)*loss + eps*cl_loss
+                    combo_loss = torch.zeros_like(loss)
+                    if track_train: combo_loss = loss
+                    if track_cl:
+                        eps = config.get("cl_eps",0.9)
+                        combo_loss = (1-eps)*combo_loss + eps*cl_loss
 
                     if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
@@ -1042,6 +1095,12 @@ def main():
                                 "- FSR:", config["fsr"],
                                 "- Const Inpt:", config["const_targ_inpt_id"],
                                 "- Units:", intrv_module.swap_mask.n_units)
+                        print("Trn Dirs:",
+                            " ".join(sorted(
+                                [str(d) for d in config["train_directions"]])))
+                        print("CL Dirs:",
+                            " ".join(sorted(
+                                [str(d) for d in config["cl_directions"]])))
                         print()
 
                         print("Step:", global_step, "| Train Loss:", tot_loss.item())
@@ -1116,9 +1175,9 @@ def main():
                 
                 ### Save loss and state dict
                 svsteps = config.get("save_every_steps", 100)
-                if config.get("debugging", False):
+                if config.get("debugging", False) and global_step%svsteps==0:
                     print("Skipping saving due to debugging flag")
-                elif end_training or global_step%svsteps:
+                elif end_training or global_step%svsteps==0:
                     #print("Saving To", os.path.join(save_folder, save_name))
                     csv = os.path.join(save_folder, save_name + ".csv")
                     df = pd.DataFrame(df_dict)

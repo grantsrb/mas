@@ -1101,6 +1101,15 @@ def rolling_window(array, window, time_axis=0):
     else:
         return arr
 
+def get_nonzero_entries(arr):
+    """
+    Returns a list of row,col tuples for each nonzero entry.
+    """
+    idxs = []
+    for row,a in enumerate(arr):
+        for col,aa in enumerate(a):
+            if aa: idxs.append([row,col])
+    return idxs
 
 if __name__=="__main__":
     arr = torch.Tensor([

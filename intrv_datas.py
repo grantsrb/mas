@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from datasets import Dataset
 
-from dl_utils.utils import pad_to
+from dl_utils.utils import pad_to, get_nonzero_entries
 from utils import tensor2str, run_cmodel_to_completion
 
 def pad_seqs(data, max_len, truncate=False):
@@ -190,8 +190,8 @@ def sample_swaps(df, filter, info=None, stepwise=False):
             input index should be swapped
         swap_idxs: list of ints
             the last index of the swaps for each sample
-        swap_varbs: list of dicts
-            a snapshot of the variables at the last swap index
+        swap_varbs: list of lists of dicts
+            a snapshot of the variables at each of the swap indexes
         max_len: int
             the maximum sequence length
     """
@@ -211,41 +211,68 @@ def sample_swaps(df, filter, info=None, stepwise=False):
         swap_mask = np.zeros(int(sample["max_step"]), dtype=bool)
         if stepwise:
             swap_mask[:swap_idx+1] = True
+            # Collect a list of varbs leading up to the swap idx
+            samp_df = df.loc[df["sample_idx"]==int(sample["sample_idx"])]\
+                .sort_values(by="step_idx")
+            varbs = []
+            for si in range(swap_idx+1):
+                varbs.append(dict(samp_df.iloc[si]))
+            swap_varbs.append(varbs)
         else:
             swap_mask[swap_idx] = True
+            swap_varbs.append([dict(sample)])
         swap_masks.append(swap_mask)
         swap_idxs.append(swap_idx)
-        swap_varbs.append(dict(sample))
     return swap_masks, swap_idxs, swap_varbs
 
-def sample_cl_indices(df, varbs, keys=None):
+def sample_cl_indices(
+    df,
+    varbs,
+    keys=["obj_count", "phase", "count"],
+    flatten=True,
+):
     """
     A helper function for sampling indices from the data frame that have
     the argued variable makeup.
 
     Args:
         df: pd dataframe
-        varbs: list of dicts (B,)
-            a list of variables that should provide the desired makeup
-            for the cl indices.
+        varbs: list of lists of dicts
+            each dict is a dict of variables that should provide the
+            desired makeup for the cl indices.
+        flatten: bool
+            if true, will flatten the returned list of lists to a
+            single list
     Returns:
-        cl_indices: list of lists of ints (B,2)
-            a tuple of indices for each counterfactual latent. The index
-            indicates the sample index and the sequence index for each
-            sample.
+        cl_indices: list of lists of ints (or list of ints if flatten)
+            a tuple of indices for each counterfactual latent. The
+            index indicates the sample index and the sequence index
+            for each sample.
     """
-    if keys is None: keys = list(varbs[0].keys())
-    keys = [k for k in keys if k in varbs[0]]
+    if not keys: keys = list(varbs[0][0].keys())
+    keys = [k for k in keys if k in varbs[0][0]]
+    assert len(keys)>0
     cl_indices = []
     start_idx = np.ones(len(df)).astype(bool)
-    for varb in varbs:
-        idx = start_idx.copy()
-        for k in keys:
-            idx = idx&(df[k]==varb[k])
-        samp = df.loc[idx].sample()
-        cl_indices.append([
-            int(samp.iloc[0]["sample_idx"]), int(samp.iloc[0]["step_idx"]),
-        ])
+    for varb_list in varbs:
+        indices = []
+        for varb in varb_list:
+            idx = start_idx.copy()
+            for k in keys:
+                idx = idx&(df[k]==varb[k])
+            samp = df.loc[idx]
+            if len(samp)>0:
+                samp = samp.sample()
+                indices.append([
+                    int(samp.iloc[0]["sample_idx"]),
+                    int(samp.iloc[0]["step_idx"]),
+                ])
+            else:
+                print("Failed to find CL Match!!")
+        if flatten:
+            cl_indices += indices
+        else:
+            cl_indices.append(indices)
     return cl_indices
 
 def make_counterfactual_seqs(
@@ -277,10 +304,10 @@ def make_counterfactual_seqs(
         trg_swap_idxs: list of bools
             a list of indexes corresponding to the intervention
             index in the target sequence for each sequence pair
-        src_swap_varbs: list of dicts
+        src_swap_varbs: list of lists of dicts
             a list of input varbs corresponding to the intervention
             index in the source sequence for each sequence pair
-        trg_swap_varbs: list of dicts
+        trg_swap_varbs: list of lists of dicts
             a list of input varbs corresponding to the intervention
             index in the target sequence for each sequence pair
         trg_task_masks: list of lists of bools
@@ -319,6 +346,8 @@ def make_counterfactual_seqs(
     fill_id = trg_info.get("demo_ids", [3])[-1]
     for seq_i, tup in enumerate(z):
         (trg_seq,trg_idx,trg_tmask,src_varbs,trg_varbs, src_seq, src_idx) = tup
+        src_varbs = src_varbs[-1]
+        trg_varbs = trg_varbs[-1]
         zkeys = zip(trg_swap_keys, src_swap_keys)
         intrv_varbs = {tkey: src_varbs[skey] for tkey,skey in zkeys}
         trg_cmodel.queue_intervention(intrv_varbs)
@@ -381,7 +410,8 @@ def make_intrv_data_from_seqs(
         trg_filter,
         stepwise=False,
         sample_w_replacement=True,
-        use_src_as_cl_latents=False,
+        use_cl=False,
+        use_src_data_for_cl=True,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -418,9 +448,11 @@ def make_intrv_data_from_seqs(
         stepwise: bool
         sample_w_replacement: bool
             if true, will sample the source sequences with replacement
-        use_src_as_cl_latents: bool
-            if true, will use the exact source latents used in the
-            intervention as the counterfactual latents for the cl loss
+        use_cl: bool
+            if true, will collect cl indices and sequences for the
+            cl loss.
+        use_src_data_for_cl: bool
+            if true, will provide the cl data from the src sequences
     Returns:
         intrv_data: dict
             'src_seqs': list of lists of tokenized strings
@@ -468,21 +500,19 @@ def make_intrv_data_from_seqs(
         info=trg_info,
         post_varbs=False,
     )
+
     if stepwise:
         trg_swap_masks = copy.deepcopy(src_swap_masks)
         trg_swap_idxs  = copy.deepcopy(src_swap_idxs)
         trg_swap_varbs = [
-            get_varbs_at_idx(
+            [get_varbs_at_idx(
                 seq=tseq,
                 cmodel=trg_cmodel,
                 idx=tidx,
                 info=trg_info,
-                post_varbs=False,)\
+                post_varbs=False,)]\
                 for tseq,tidx in zip(trg_seqs,trg_swap_idxs)
         ]
-        # Can use the cl masks to collect latents from the source
-        # latents in the main script. 
-        cl_idxs = None
     else:
         trg_swap_masks, trg_swap_idxs, trg_swap_varbs = sample_swaps(
             df=trg_df,
@@ -490,11 +520,17 @@ def make_intrv_data_from_seqs(
             info=trg_info,
             stepwise=False,
         )
-        # Can use the cl indices to collect latents from the source
-        # latents in the main script. 
-        if use_src_as_cl_latents: cl_idxs = None
+
+    cl_idxs = None
+    if use_cl:
+        # Will use the cl indices and seqs to collect latents in the main script.
+        if use_src_data_for_cl:
+            cl_idxs = get_nonzero_entries(src_swap_masks)
+            cl_seqs = src_seqs
         else:
-            cl_idxs = sample_cl_indices(df=src_df, varbs=src_swap_varbs)
+            cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
+            cl_seqs = trg_seqs
+        assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)) for s in src_swap_masks])
 
     # 3. Using the variables, seqs, and swap indices, create
     # intervention data.
@@ -518,11 +554,9 @@ def make_intrv_data_from_seqs(
     ]
     d = {
         "trg_input_ids": intrv_seqs,
-        "trg_varbs": intrv_varbs,
         "trg_swap_masks": intrv_swap_masks,
         "trg_task_masks": intrv_task_masks,
         "src_input_ids": src_seqs,
-        "src_varbs": src_swap_varbs,
         "src_swap_masks": src_swap_masks,
         "src_task_masks": src_task_masks,
         "trg_swap_idxs": trg_swap_idxs,
@@ -530,6 +564,7 @@ def make_intrv_data_from_seqs(
     }
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
+        d["cl_input_ids"] = cl_seqs
 
     max_len = int(max(
         np.max([len(seq) for seq in d["trg_input_ids"]]),
