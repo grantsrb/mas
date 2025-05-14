@@ -581,7 +581,7 @@ def main():
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target for the counterfactual latent loss. None
             # defaults to no directions.
-        "cl_eps": 0.9,
+        "cl_eps": 7, # raw multiplicative factor does not affect normal loss
 
         "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
         "debugging": False,
@@ -1023,8 +1023,8 @@ def main():
                     combo_loss = torch.zeros_like(loss)
                     if track_train: combo_loss = loss
                     if track_cl:
-                        eps = config.get("cl_eps",0.9)
-                        combo_loss = (1-eps)*combo_loss + eps*cl_loss
+                        eps = config.get("cl_eps",1)
+                        combo_loss = combo_loss + eps*cl_loss
 
                     if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
