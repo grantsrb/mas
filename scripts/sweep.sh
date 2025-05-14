@@ -9,10 +9,10 @@ model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_1
 #model_path2=" "
 
 config="configs/cl_training.yaml"
-search1=( "cl_eps=0.2" "cl_eps=0.5" "cl_eps=0.8")
-search2=( "lr=0.0005" "lr=0.001" "lr=0.005" ) 
+search1=( "cl_eps=0.5" "cl_eps=7" "cl_eps=14" "cl_eps=9" )
+search2=( "lr=0.0005" "lr=0.001" ) 
 arg1="swap_keys=full"
-arg2="n_units=32"
+arg2="n_units=64"
 arg3=""
 arg4=""
 arg5=""
