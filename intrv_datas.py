@@ -521,9 +521,9 @@ def make_intrv_data_from_seqs(
             stepwise=False,
         )
 
+    # Collect the counterfactual latent data if needed
     cl_idxs = None
     if use_cl:
-        # Will use the cl indices and seqs to collect latents in the main script.
         if use_src_data_for_cl:
             cl_idxs = get_nonzero_entries(src_swap_masks)
             cl_seqs = src_seqs

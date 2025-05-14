@@ -95,6 +95,7 @@ def config_prep(config):
     if config.get("debugging", False):
         config["n_train_samples"] = 100
         config["n_valid_samples"] = 100
+        config["print_every"] = 25
     return config
 
 def fill_in_prompts_and_replacements(config):
@@ -500,7 +501,7 @@ def get_cl_latents(
     shape = tuple([*swap_mask.shape, actvs.shape[-1]])
     assert swap_mask.long().sum()==len(idxs)
     cl_latents = torch.empty(shape)
-    cl_latents[idxs[:,0],idxs[:,1]] = actvs[idxs[:,0],idxs[:,1]]
+    cl_latents[swap_mask] = actvs[idxs[:,0],idxs[:,1]]
     return cl_latents
 
 
