@@ -1,17 +1,18 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-gpus=( 0 1 2 3 4 5 6 7 8 9 )
+#gpus=( 0 1 2 3 4 5 6 7 8 9 )
+gpus=( 1 2 3 4 5 6 7 8 9 )
 exp_name="sweep"
-model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_rope_tformer_unk/multiobject_rope_tformer_unk_0_seed23456/"
-model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_rope_tformer_unk/multiobject_rope_tformer_unk_0_seed23456/"
+model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_0_seed12345/"
+model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_1_seed23456/"
 #model_path2=" "
 
-config="configs/general_stepwise.yaml"
-search1=( "n_units=16" "n_units=32" "n_units=48"  "n_units=64" )
+config="configs/cl_training.yaml"
+search1=( "cl_eps=0.2" "cl_eps=0.5" "cl_eps=0.8")
 search2=( "lr=0.0005" "lr=0.001" "lr=0.005" ) 
 arg1="swap_keys=full"
-arg2=""
+arg2="n_units=32"
 arg3=""
 arg4=""
 arg5=""
