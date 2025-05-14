@@ -8,7 +8,7 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
-config="configs/cl_training.yaml"
+config="configs/cl_mas.yaml"
 search1=( "n_units=10000" )
 search2=( "swap_keys=full" ) # "swap_keys=count" ) 
 
