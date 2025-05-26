@@ -101,3 +101,9 @@ TASK2CMODEL = {
     "Arithmetic": "Arithmetic",
 }
 
+if __name__=="__main__":
+    p = PROMPTS["deepseek-ai/DeepSeek-R1-Distill-Llama-8B"]
+    r = REPLACEMENTS["deepseek-ai/DeepSeek-R1-Distill-Llama-8B"]
+    for k in r:
+        p = p.replace(k, r[k])
+    print(p)
