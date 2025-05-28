@@ -137,6 +137,7 @@ def fill_in_prompts_and_replacements(config):
 def get_model_and_tokenizer(model_name, padding_side="left"):
     print(f"Loading model and tokenizer for {model_name}...")
     try:
+        # Custom Models  
         checkpt = load_checkpoint(model_name)
         mconfig = checkpt["config"]
         temp = smods.make_model(mconfig)
@@ -157,6 +158,7 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
                 word2id=None,
                 padding_side=padding_side)
     except:
+        # Huggingface Models
         try:
             tokenizer = AutoTokenizer.from_pretrained(
                 model_name,
@@ -171,7 +173,6 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
             tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("okay")
         model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="auto")
-    model.eval()
     return model, tokenizer, mconfig
 
 def forward_pass(
@@ -691,6 +692,7 @@ def main():
             )[mi]
             tconfig = model_configs[mi].get("task_config", None)
             if tconfig: tconfig["unk_p"] = 0
+            # The dataset consists of text (and task masks if applicable)
             dataset = get_dataset(
                 config["dataset_names"][mi],
                 n_samples=n_samples,
@@ -716,6 +718,8 @@ def main():
             kwrgs["dataset_name"] = kwrgs["dataset_names"][mi]
             kwrgs["replacements"] = kwrgs["replacements"][mi]
             kwrgs["prompt"] = kwrgs["prompts"][mi]
+            # The tokenized dataset has replaced text specified in the
+            # replacements dict and has prepended a prompt.
             tokenized_datasets[k].append(
                 tokenize_dataset(
                     dataset=datasets[k][mi],

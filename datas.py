@@ -39,6 +39,10 @@ def get_dataset(
         task_type=None,
         task_config=None,
         **kwargs):
+    """
+    Returns sequences that do not have a bos token, but do have some sort
+    of eos indication due to the task.
+    """
     if dataset_name=="gsm8k":
         return load_dataset(dataset_name, **kwargs)
     elif dataset_name=="task":
@@ -47,16 +51,16 @@ def get_dataset(
             task_type=task_type,
             task_config=task_config,
         )
-    elif dataset_name=="num_equivalence":
-        if kwargs.get("split", "train")=="train":
-            if not data_path:
-                data_path = "./data/multiobj_systematic_10000.json"
-            path = os.path.abspath(os.path.expanduser(data_path))
-        else:
-            if not data_path:
-                data_path = "./data/multiobj_systematic_1000.json"
-            path = os.path.abspath(os.path.expanduser(data_path))
-        d = load_json(path) #[{"text": t} for t in load_text(file_name=path)]
+    ###elif dataset_name=="num_equivalence":
+    ###    if kwargs.get("split", "train")=="train":
+    ###        if not data_path:
+    ###            data_path = "./data/multiobj_systematic_10000.json"
+    ###        path = os.path.abspath(os.path.expanduser(data_path))
+    ###    else:
+    ###        if not data_path:
+    ###            data_path = "./data/multiobj_systematic_1000.json"
+    ###        path = os.path.abspath(os.path.expanduser(data_path))
+    ###    d = load_json(path) #[{"text": t} for t in load_text(file_name=path)]
     return Dataset.from_dict(d)
 
 def generate_token_ids_from_cmodel(n_samples, cmodel, info):
@@ -296,47 +300,45 @@ def make_tokenized_info(replacements, tokenizer, config):
     return info
 
 def tokenize_dataset(dataset, tokenizer, config):
+    """
+    Replaces text specified in the replacements dict, prepends a prompt,
+    and tokenizes the text.
+    """
     prompt = config.get("prompt", "")
 
-
-    bos = tokenizer.bos_token
     reps = config.get("replacements", DEFAULT_REPLACEMENTS)
     prompt = replace_text(text=prompt, replacement_dict=reps)
     text = dataset.map(
         lambda ex: {
             "text": replace_text(
-                text=bos+" "+prompt+ex["text"],
+                text=ex["text"],
                 replacement_dict=reps
             )
         },
         batched=False,
     )
     text = text["text"]
-    add_eos = tokenizer.eos_token != reps["done_word"]
-    for i,t in enumerate(text):
-        if add_eos: text[i] = text[i] + tokenizer.eos_token
+    add_eos = tokenizer.eos_token != reps["E"]
+    if add_eos: 
+        for i,t in enumerate(text):
+            text[i] = text[i] + tokenizer.eos_token
 
 
     print("Text Sample:", text[0])
     print("Tokenizing...")
-    try:
-        tok_dict = tokenizer(
-            text,
-            padding="max_length",
-            return_tensors="pt",
-            #max_length=max_length,
-            add_bos=False,
-        )
-    except:
-        tok_dict = tokenizer(
-            text,
-            padding="max_length",
-            return_tensors="pt",
-            #max_length=max_length,
-            truncation=True,
-        )
-    print("Tok Shape:", tok_dict["input_ids"].shape)
-    idx = tok_dict["input_ids"]==tokenizer.bos_token_id
+    tok_dict = tokenizer(
+        text,
+        padding=None,
+        return_tensors=False,
+        truncation=False,
+    )
+    bos_id = tokenizer.bos_token_id
+    token_ids = tok_dict["input_ids"]
+    token_ids = [[t for t in seq if t!=bos_id] for seq in token_ids]
+    attn_masks = [[1 for t in seq] for seq in token_ids]
+    task_masks = [tmask for tmask in dataset["task_mask"]]
+
+    idx = tok_dict["input_ids"]==bos_id
     dupls = idx.long().sum(-1)>1
     idxs = torch.argmax(idx.long(), dim=-1)[dupls]
     arng = torch.arange(len(idx)).long()[dupls]
@@ -355,38 +357,38 @@ def tokenize_dataset(dataset, tokenizer, config):
     #    print()
     #except: pass
 
-    if "task_mask" in dataset.column_names:
-        max_length = tok_dict["input_ids"].shape[-1]
-        tmasks = []
-        for i,tmask in enumerate(dataset["task_mask"]):
-            # two 0s for annoying HF BOS business...
-            bos_zeros = [0,0] if dupls[i] else [0]
-            eos_zero = [0] if add_eos else []
-            tmask = bos_zeros + tmask + eos_zero
-            tmasks.append(pad_to(
-                arr=tmask,
-                tot_len=max_length,
-                fill_val=0,
-                side=tokenizer.padding_side,
-            ))
-        tok_dict["task_mask"] = torch.BoolTensor(tmasks)
-        eos_ids = [tokenizer.eos_token_id]
-        dword = reps["done_word"]
-        try:
-            eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
-        except: pass
-        try:
-            eos_ids.append(
-                int(tokenizer(" "+dword)["input_ids"][-1]))
-        except: pass
-        eos_ids = torch.LongTensor(eos_ids)
-        in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
-        eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
-        tok_dict["inpt_attn_mask"] = tok_dict["inpt_attn_mask"]&~eos_and_tmask
+    #if "task_mask" in dataset.column_names:
+    #    max_length = tok_dict["input_ids"].shape[-1]
+    #    tmasks = []
+    #    for i,tmask in enumerate(dataset["task_mask"]):
+    #        # two 0s for annoying HF BOS business...
+    #        bos_zeros = [0,0] if dupls[i] else [0]
+    #        eos_zero = [0] if add_eos else []
+    #        tmask = bos_zeros + tmask + eos_zero
+    #        tmasks.append(pad_to(
+    #            arr=tmask,
+    #            tot_len=max_length,
+    #            fill_val=0,
+    #            side=tokenizer.padding_side,
+    #        ))
+    #    tok_dict["task_mask"] = torch.BoolTensor(tmasks)
+    #    eos_ids = [tokenizer.eos_token_id]
+    #    dword = reps["done_word"]
+    #    try:
+    #        eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
+    #    except: pass
+    #    try:
+    #        eos_ids.append(
+    #            int(tokenizer(" "+dword)["input_ids"][-1]))
+    #    except: pass
+    #    eos_ids = torch.LongTensor(eos_ids)
+    #    in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
+    #    eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
+    #    tok_dict["inpt_attn_mask"] = tok_dict["inpt_attn_mask"]&~eos_and_tmask
 
-        # Quick Tests
-        tmask = tok_dict["task_mask"][0]
-        assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
+    #    # Quick Tests
+    #    tmask = tok_dict["task_mask"][0]
+    #    assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
     tokenized = Dataset.from_dict(tok_dict)
     return tokenized
 

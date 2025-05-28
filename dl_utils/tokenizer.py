@@ -718,6 +718,7 @@ class Tokenizer():
         """
         if not padding_side: padding_side = self.padding_side
         if return_tensors: as_tensor = True
+        elif return_tensors==False: as_tensor = False
         # I'll allow it
         if type(strings)==type(torch.zeros(0)):
             return self.ids_to_strs( strings )
