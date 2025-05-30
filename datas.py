@@ -190,16 +190,16 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     batch = tokenized_dataset.select(batch_indices)
     d = {
         "input_ids":      torch.tensor(batch["trg_input_ids"])[...,:-1],
-        "inpt_attn_mask": torch.tensor(batch["trg_inpt_attn_masks"]),
-        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"]),
+        "inpt_attn_mask": torch.tensor(batch["trg_inpt_attn_masks"])[...,:-1],
+        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"])[...,1:],
         "labels":         torch.tensor(batch["trg_input_ids"])[...,1:],
         "src_input_ids":  torch.tensor(batch["src_input_ids"])[...,:-1],
     }
     if incl_src:
         d = {
           **d,
-          "src_attention_mask": torch.tensor(batch["src_inpt_attn_masks"]),
-          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"]),
+          "src_attention_mask": torch.tensor(batch["src_inpt_attn_masks"])[...,:-1],
+          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"])[...,1:],
           "src_labels":         torch.tensor(batch["src_input_ids"])[...,1:],
         }
     try:
@@ -299,15 +299,71 @@ def make_tokenized_info(replacements, tokenizer, config):
     info = add_token_ids_to_info(info)
     return info
 
+def add_prompt(
+    data_dict,
+    src_tokenizer,
+    trg_tokenizer,
+    src_prompt,
+    trg_prompt,
+    src_replacements,
+    trg_replacements,
+):
+    """
+    Prepends the prompt to the input ids and appropriately adjusts the
+    indices and masks in the data_dict.
+
+    Args:
+        data_dict: dict
+        src_tokenizer: Tokenizer
+        trg_tokenizer: Tokenizer
+        src_prompt: str
+        trg_prompt: str
+        src_replacements: dict
+        trg_replacements: dict
+    """
+    src_prompt = replace_text(
+        text=src_prompt, replacement_dict=src_replacements)
+    trg_prompt = replace_text(
+        text=trg_prompt, replacement_dict=trg_replacements)
+    prompts = [src_prompt, trg_prompt]
+    tokenizers = [src_tokenizer, trg_tokenizer]
+    keys = ["src", "trg"]
+    for prompt,tokenizer,key in zip(prompts,tokenizers,keys):
+        if len(prompt)==0: continue
+        ids = tokenizer(
+            prompt,
+            padding=None,
+            return_tensors=False,
+            truncation=False,
+        )["input_ids"][0]
+        el = len(ids)
+
+        for k in data_dict:
+            if key in k:
+                if "input_ids" in k:
+                    data_dict[k] = map(lambda x: [*ids] + x, data_dict[k])
+                elif "idxs" in k:
+                    data_dict[k] = map(lambda x: x+el, data_dict[k])
+                elif "attention" in k or "attn" in k:
+                    mask = [1 for _ in range(el)]
+                    data_dict[k] = map(lambda x: mask + x, data_dict[k])
+                elif "swap" in k:
+                    mask = [-1 for _ in range(el)]
+                    data_dict[k] = map(
+                        lambda x: mask + [xx+el for xx in x],
+                        data_dict[k],
+                    )
+                elif "task" in k:
+                    mask = [0 for _ in range(el)]
+                    data_dict[k] = map(lambda x: mask + x, data_dict[k])
+    return data_dict
+
 def tokenize_dataset(dataset, tokenizer, config):
     """
     Replaces text specified in the replacements dict, prepends a prompt,
     and tokenizes the text.
     """
-    prompt = config.get("prompt", "")
-
     reps = config.get("replacements", DEFAULT_REPLACEMENTS)
-    prompt = replace_text(text=prompt, replacement_dict=reps)
     text = dataset.map(
         lambda ex: {
             "text": replace_text(
@@ -335,15 +391,20 @@ def tokenize_dataset(dataset, tokenizer, config):
     bos_id = tokenizer.bos_token_id
     token_ids = tok_dict["input_ids"]
     token_ids = [[t for t in seq if t!=bos_id] for seq in token_ids]
-    attn_masks = [[1 for t in seq] for seq in token_ids]
+    attn_masks = [[1 for _ in seq[:-1]]+[0] for seq in token_ids]
     task_masks = [tmask for tmask in dataset["task_mask"]]
+    return Dataset.from_dict({
+        "input_ids": token_ids,
+        "inpt_attn_mask": attn_masks,
+        "task_mask": task_masks,
+    })
 
-    idx = tok_dict["input_ids"]==bos_id
-    dupls = idx.long().sum(-1)>1
-    idxs = torch.argmax(idx.long(), dim=-1)[dupls]
-    arng = torch.arange(len(idx)).long()[dupls]
-    tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
-    tok_dict["inpt_attn_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
+    #idx = tok_dict["input_ids"]==bos_id
+    #dupls = idx.long().sum(-1)>1
+    #idxs = torch.argmax(idx.long(), dim=-1)[dupls]
+    #arng = torch.arange(len(idx)).long()[dupls]
+    #tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
+    #tok_dict["inpt_attn_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
 
     #try:
     #    print()
@@ -389,8 +450,66 @@ def tokenize_dataset(dataset, tokenizer, config):
     #    # Quick Tests
     #    tmask = tok_dict["task_mask"][0]
     #    assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
-    tokenized = Dataset.from_dict(tok_dict)
-    return tokenized
+
+def pad_data_dict(
+    data_dict,
+    src_pad_id,
+    trg_pad_id,
+    src_pad_side,
+    trg_pad_side,
+):
+    """
+    Utility function for padding the data dict. Operates in place.
+    """
+    max_len = int(max(
+        np.max([len(s) for s in data_dict["trg_input_ids"]]),
+        np.max([len(s) for s in data_dict["src_input_ids"]]),
+    ))
+    for k in data_dict:
+        if "src" in k:
+            left = int(src_pad_side=="left")
+            pad_id = src_pad_id
+            off_key = "src_pad_ids"
+        elif "trg" in k:
+            left = int(trg_pad_side=="left")
+            pad_id = trg_pad_id
+            off_key = "trg_pad_ids"
+        else:
+            print("Skipping", k, "in padding")
+            continue
+
+        for i in range(len(data_dict["trg_input_ids"])):
+            offset = max_len - len(data_dict[off_key][i])
+            if "idx" in k and left:
+                data_dict[k][i] += offset
+            elif "mask" in k:
+                mask = [False for _ in range(offset)]
+            elif "input_id" in k:
+                mask = [pad_id for _ in range(offset)]
+            data_dict[k][i] = left*mask + data_dict[k][i] + mask*(1-left)
+
+    return data_dict
+        
+def add_pad_masks(data_dict, src_info, trg_info):
+    """
+    Adds the keys to the data_dict:
+        - src_inpt_attn_masks
+        - src_outp_attn_masks
+        - trg_inpt_attn_masks
+        - trg_outp_attn_masks
+    """
+    for k,info in zip(["src","trg"], [src_info,trg_info]):
+        pad_id = info["pad_token_id"]
+        bos_id = info["bos_token_id"]
+        eos_id = info["eos_token_id"]
+        inpt_ids = torch.LongTensor(data_dict[k+"_input_ids"])
+        attn_mask = (inpt_ids!=pad_id)
+        eos_mask = torch.ones_like(inpt_ids)
+        rows = torch.arange(len(eos_mask)).long()
+        eos_mask[rows, arglast(inpt_ids==eos_id, axis=-1)] = 1
+        data_dict[k+"_inpt_attn_masks"] = attn_mask&~eos_mask.bool()
+        data_dict[k+"_outp_attn_masks"] = attn_mask&(inpt_ids!=bos_id)
+    return data_dict
 
 if __name__=="__main__":
     text = "hey there foo"
