@@ -19,10 +19,9 @@ def get_stepwise_hook(comms_dict):
         # Prep source vectors, shape (B,S,D)
         src_actvs = comms_dict["src_activations"]
 
-        # Handle case where we have a specific swap mask
         lc = comms_dict["loop_count"]
         comms_dict["loop_count"] += 1
-        batch_bools = comms_dict["src_swap_masks"][:,lc]
+        batch_bools = comms_dict["trg_swap_masks"][:,lc]==lc
         if comms_dict.get("intrv_vecs",None) is None:
             comms_dict["intrv_vecs"] = []
         comms_dict["intrv_vecs"].append(torch.empty_like(trg_actvs))
@@ -31,7 +30,10 @@ def get_stepwise_hook(comms_dict):
 
         placeholder = torch.empty_like(trg_actvs)
         placeholder[~batch_bools] = trg_actvs[~batch_bools]
-        src_actvs = src_actvs[:,lc][batch_bools]
+        src_rows = torch.arange(len(batch_bools)).long()[batch_bools]
+        src_cols = (comms_dict["src_swap_masks"]==lc).long()
+        src_cols = torch.argmax(src_cols, dim=-1)[batch_bools]
+        src_actvs = src_actvs[src_rows,src_cols]
         trg_actvs = trg_actvs[batch_bools]
 
         intrv_module = comms_dict["intrv_module"]

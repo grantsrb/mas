@@ -10,7 +10,8 @@ import torch.nn.functional as F
 
 from datas import (
     get_dataset, tokenize_dataset, ensure_equal_length,
-    collate_fn, make_tokenized_info, add_token_ids_to_info
+    collate_fn, make_tokenized_info, add_token_ids_to_info,
+    add_prompt, pad_data_dict, add_pad_masks,
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
@@ -170,7 +171,7 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
                 padding_side=padding_side)
         if not tokenizer.pad_token:
             tokenizer.pad_token = "<PAD>"
-            tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("okay")
+            tokenizer.pad_token_id = tokenizer.decode(tokenizer.pad_token)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="auto")
     return model, tokenizer, mconfig
@@ -220,7 +221,7 @@ def forward_pass(
     if "trg_swap_masks" in batch:
         comms_dict["trg_swap_masks"] = batch["trg_swap_masks"]
         comms_dict["src_swap_masks"] = batch["src_swap_masks"]
-        mask = batch["trg_swap_masks"]
+        mask = batch["trg_swap_masks"]>=0
     if mask is not None and config.get("stepwise", True):
         if const_targ_inpt_id:
             resp_id = config.get("resp_id", 6)
@@ -260,7 +261,8 @@ def forward_pass(
     labels = batch["labels"].reshape(-1)
     lmask = batch["outp_attn_mask"]
     if "trg_swap_masks" in batch and config.get("stepwise", True):
-        smask = torch.roll(~batch["trg_swap_masks"], -1, dims=-1)
+        smask = batch["trg_swap_masks"]>=0
+        smask = torch.roll(~swpmask, -1, dims=-1)
         smask[...,-1] = True
         lmask = lmask&(smask)
 
@@ -301,7 +303,7 @@ def forward_pass(
         cl_loss = cl_loss_fxn(
             intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
             cl_latents=cl_latents,
-            swap_mask=batch["trg_swap_masks"],
+            swap_mask=batch["trg_swap_masks"]>=0,
         )
         torch.set_grad_enabled(prev_grad_state)
 
@@ -693,6 +695,7 @@ def main():
             tconfig = model_configs[mi].get("task_config", None)
             if tconfig: tconfig["unk_p"] = 0
             # The dataset consists of text (and task masks if applicable)
+            # Will eventually allow vector representations as well
             dataset = get_dataset(
                 config["dataset_names"][mi],
                 n_samples=n_samples,
@@ -718,8 +721,12 @@ def main():
             kwrgs["dataset_name"] = kwrgs["dataset_names"][mi]
             kwrgs["replacements"] = kwrgs["replacements"][mi]
             kwrgs["prompt"] = kwrgs["prompts"][mi]
+
             # The tokenized dataset has replaced text specified in the
-            # replacements dict and has prepended a prompt.
+            # replacements dict, has not prepended a prompt or a bos token,
+            # and has converted the text into tokens and then token ids.
+            # None of the tokenized data is padded, and non are tensors.
+            # fields include: "token_ids", "inpt_attn_mask", "task_mask"
             tokenized_datasets[k].append(
                 tokenize_dataset(
                     dataset=datasets[k][mi],
@@ -785,6 +792,25 @@ def main():
                         stepwise=config.get("stepwise", False),
                         use_cl=(sidx,tidx) in config["cl_directions"],
                         use_src_data_for_cl=ttype1==ttype2,
+                    )
+                    intrv_data = add_prompt(
+                        intrv_data,
+                        src_tokenizer=tokenizers[sidx],
+                        trg_tokenizer=tokenizers[tidx],
+                        src_prompt=config["prompts"][sidx],
+                        trg_prompt=config["prompts"][tidx],
+                    )
+                    intrv_data = pad_data_dict(
+                        intrv_data,
+                        src_pad_id=infos[sidx]["pad_token_id"],
+                        trg_pad_id=infos[tidx]["pad_token_id"],
+                        src_pad_side=padding_sides[sidx],
+                        trg_pad_side=padding_sides[tidx],
+                    )
+                    intrv_data = add_pad_masks(
+                        intrv_data,
+                        src_tokenizer=tokenizers[sidx],
+                        trg_tokenizer=tokenizers[tidx],
                     )
                     intrv_datasets[k][(sidx,tidx,vidx)] =\
                         Dataset.from_dict(intrv_data)
@@ -866,7 +892,7 @@ def main():
                     cl_latents[k][dirvar_tup] = get_cl_latents(
                         model=trg_model,
                         device=devices[trg_idx],
-                        swap_mask=batch["trg_swap_masks"],
+                        swap_mask=batch["trg_swap_masks"]>=0,
                         input_ids=batch["cl_input_ids"],
                         idxs=batch["cl_idxs"],
                         layer=config["layers"][trg_idx],

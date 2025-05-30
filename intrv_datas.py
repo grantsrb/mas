@@ -185,11 +185,14 @@ def sample_swaps(df, filter, info=None, stepwise=False):
             first token in the sequence to the maximum sampled
             intervention index.
     Returns:
-        swap_masks: list of bools
-            returns a list of masks in which true denotes that the
-            input index should be swapped
+        swap_masks: list of int lists
+            returns a list of idx masks in which the value of the entry
+            denotes the ordering of the swaps. The first swap is denoted
+            by 0, the second by 1, and so on. -1 is the default value for
+            positions that will not be swapped.
         swap_idxs: list of ints
-            the last index of the swaps for each sample
+            the last index of the swaps for each sample. This is equivalent
+            to the maximum value along the last dimension of swap_masks.
         swap_varbs: list of lists of dicts
             a snapshot of the variables at each of the swap indexes
         max_len: int
@@ -208,9 +211,9 @@ def sample_swaps(df, filter, info=None, stepwise=False):
     for row_idx in range(len(samples)):
         sample = samples.iloc[row_idx]
         swap_idx = int(sample["step_idx"])
-        swap_mask = np.zeros(int(sample["max_step"]), dtype=bool)
+        swap_mask = -np.ones(int(sample["max_step"]), dtype=bool)
         if stepwise:
-            swap_mask[:swap_idx+1] = True
+            swap_mask[:swap_idx+1] = np.arange(swap_idx+1)
             # Collect a list of varbs leading up to the swap idx
             samp_df = df.loc[df["sample_idx"]==int(sample["sample_idx"])]\
                 .sort_values(by="step_idx")
@@ -219,9 +222,9 @@ def sample_swaps(df, filter, info=None, stepwise=False):
                 varbs.append(dict(samp_df.iloc[si]))
             swap_varbs.append(varbs)
         else:
-            swap_mask[swap_idx] = True
+            swap_mask[swap_idx] = 0
             swap_varbs.append([dict(sample)])
-        swap_masks.append(swap_mask)
+        swap_masks.append(list(swap_mask))
         swap_idxs.append(swap_idx)
     return swap_masks, swap_idxs, swap_varbs
 
@@ -521,16 +524,19 @@ def make_intrv_data_from_seqs(
             stepwise=False,
         )
 
-    # Collect the counterfactual latent data if needed
+    # Collect the counterfactual latent data if needed. cl_idxs are row,col
+    # pairs that can be used to index into and isolate the counterfactual
+    # latents produced using the cl_seqs
     cl_idxs = None
     if use_cl:
+        if stepwise: raise NotImplemented
         if use_src_data_for_cl:
             cl_idxs = get_nonzero_entries(src_swap_masks)
             cl_seqs = src_seqs
         else:
             cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
             cl_seqs = trg_seqs
-        assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)) for s in src_swap_masks])
+        assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
 
     # 3. Using the variables, seqs, and swap indices, create
     # intervention data.
@@ -565,39 +571,5 @@ def make_intrv_data_from_seqs(
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
         d["cl_input_ids"] = cl_seqs
-
-    max_len = int(max(
-        np.max([len(seq) for seq in d["trg_input_ids"]]),
-        np.max([len(seq) for seq in d["src_input_ids"]]),
-    ))
-    d = pad_seqs(d, max_len=max_len, truncate=True)
-    for k in d:
-        if type(d[k])==list:
-            if type(d[k][0])==list:
-                try:
-                    d[k] = torch.tensor(np.asarray(d[k]))
-                except:
-                    print(d[k])
-                    print(k)
-                    print(type(d[k]))
-    d["trg_inpt_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
-    d["src_inpt_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
-    if trg_info.get("eos_token_id", None) is not None:
-        eos_mask = d["trg_input_ids"]==trg_info["eos_token_id"]
-        d["trg_inpt_attn_masks"] = d["trg_inpt_attn_masks"]|eos_mask
-        eos_mask = d["src_input_ids"]==src_info["eos_token_id"]
-        d["src_inpt_attn_masks"] = d["src_inpt_attn_masks"]|eos_mask
-    d["trg_inpt_attn_masks"] = ~d["trg_inpt_attn_masks"][...,:-1]
-    d["src_inpt_attn_masks"] = ~d["src_inpt_attn_masks"][...,:-1]
-
-    d["trg_outp_attn_masks"] = d["trg_input_ids"]==trg_info["pad_token_id"]
-    d["src_outp_attn_masks"] = d["src_input_ids"]==src_info["pad_token_id"]
-    if trg_info.get("bos_token_id", None) is not None:
-        bos_mask = d["trg_input_ids"]==trg_info["bos_token_id"]
-        d["trg_outp_attn_masks"] = d["trg_outp_attn_masks"]|bos_mask
-        bos_mask = d["src_input_ids"]==src_info["bos_token_id"]
-        d["src_outp_attn_masks"] = d["src_outp_attn_masks"]|bos_mask
-    d["trg_outp_attn_masks"] = ~d["trg_outp_attn_masks"][...,1:]
-    d["src_outp_attn_masks"] = ~d["src_outp_attn_masks"][...,1:]
     return d
 
