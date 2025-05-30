@@ -211,9 +211,9 @@ def sample_swaps(df, filter, info=None, stepwise=False):
     for row_idx in range(len(samples)):
         sample = samples.iloc[row_idx]
         swap_idx = int(sample["step_idx"])
-        swap_mask = -np.ones(int(sample["max_step"]), dtype=bool)
+        swap_mask = [-1 for _ in range(int(sample["max_step"]))]
         if stepwise:
-            swap_mask[:swap_idx+1] = np.arange(swap_idx+1)
+            swap_mask[:swap_idx+1] = [int(_) for _ in np.arange(swap_idx+1)]
             # Collect a list of varbs leading up to the swap idx
             samp_df = df.loc[df["sample_idx"]==int(sample["sample_idx"])]\
                 .sort_values(by="step_idx")
@@ -397,7 +397,6 @@ def make_counterfactual_seqs(
             print("Inpt:", tensor2str(torch.LongTensor(inseq[:trg_idx+1])))
             print("Outp:", tensor2str(torch.LongTensor(intrv_seq)))
             print()
-
     return intrv_seqs, intrv_varbs_list, intrv_tmasks
 
 def make_intrv_data_from_seqs(
@@ -556,7 +555,8 @@ def make_intrv_data_from_seqs(
     )
 
     intrv_swap_masks = [
-        pad_to(msk, len(seq)) for msk,seq in zip(trg_swap_masks, intrv_seqs)
+        pad_to(msk, len(seq), fill_val=-1) for msk,seq\
+                      in zip(trg_swap_masks, intrv_seqs)
     ]
     d = {
         "trg_input_ids": intrv_seqs,

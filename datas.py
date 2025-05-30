@@ -329,33 +329,32 @@ def add_prompt(
     tokenizers = [src_tokenizer, trg_tokenizer]
     keys = ["src", "trg"]
     for prompt,tokenizer,key in zip(prompts,tokenizers,keys):
-        if len(prompt)==0: continue
-        ids = tokenizer(
-            prompt,
-            padding=None,
-            return_tensors=False,
-            truncation=False,
-        )["input_ids"][0]
+        if len(prompt)==0:
+            ids = [tokenizer.bos_token_id]
+        else:
+            ids = tokenizer(
+                prompt,
+                padding=None,
+                return_tensors=False,
+                truncation=False,
+            )["input_ids"][0]
         el = len(ids)
 
         for k in data_dict:
             if key in k:
                 if "input_ids" in k:
-                    data_dict[k] = map(lambda x: [*ids] + x, data_dict[k])
+                    data_dict[k] = list(map(lambda x: [*ids] + x, data_dict[k]))
                 elif "idxs" in k:
-                    data_dict[k] = map(lambda x: x+el, data_dict[k])
+                    data_dict[k] = list(map(lambda x: x+el, data_dict[k]))
                 elif "attention" in k or "attn" in k:
                     mask = [1 for _ in range(el)]
-                    data_dict[k] = map(lambda x: mask + x, data_dict[k])
+                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
                 elif "swap" in k:
                     mask = [-1 for _ in range(el)]
-                    data_dict[k] = map(
-                        lambda x: mask + [xx+el for xx in x],
-                        data_dict[k],
-                    )
+                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
                 elif "task" in k:
                     mask = [0 for _ in range(el)]
-                    data_dict[k] = map(lambda x: mask + x, data_dict[k])
+                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
     return data_dict
 
 def tokenize_dataset(dataset, tokenizer, config):
@@ -462,28 +461,36 @@ def pad_data_dict(
     Utility function for padding the data dict. Operates in place.
     """
     max_len = int(max(
-        np.max([len(s) for s in data_dict["trg_input_ids"]]),
-        np.max([len(s) for s in data_dict["src_input_ids"]]),
+        max([len(s) for s in data_dict["src_input_ids"]]),
+        max([len(s) for s in data_dict["trg_input_ids"]]),
     ))
+    src_offsets = [max_len-len(s) for s in data_dict["src_input_ids"]]
+    trg_offsets = [max_len-len(s) for s in data_dict["trg_input_ids"]]
+
     for k in data_dict:
         if "src" in k:
             left = int(src_pad_side=="left")
             pad_id = src_pad_id
-            off_key = "src_pad_ids"
+            offsets = src_offsets
         elif "trg" in k:
             left = int(trg_pad_side=="left")
             pad_id = trg_pad_id
-            off_key = "trg_pad_ids"
+            offsets = trg_offsets
         else:
             print("Skipping", k, "in padding")
             continue
 
         for i in range(len(data_dict["trg_input_ids"])):
-            offset = max_len - len(data_dict[off_key][i])
-            if "idx" in k and left:
-                data_dict[k][i] += offset
+            offset = offsets[i]
+            if "idx" in k:
+                if left:
+                    data_dict[k][i] += offset
+                continue
+            elif "swap" in k:
+                offset = max_len-len(data_dict[k][i])
+                mask = [-1 for _ in range(offset)]
             elif "mask" in k:
-                mask = [False for _ in range(offset)]
+                mask = [0 for _ in range(offset)]
             elif "input_id" in k:
                 mask = [pad_id for _ in range(offset)]
             data_dict[k][i] = left*mask + data_dict[k][i] + mask*(1-left)
@@ -504,11 +511,29 @@ def add_pad_masks(data_dict, src_info, trg_info):
         eos_id = info["eos_token_id"]
         inpt_ids = torch.LongTensor(data_dict[k+"_input_ids"])
         attn_mask = (inpt_ids!=pad_id)
-        eos_mask = torch.ones_like(inpt_ids)
+        eos_mask = torch.zeros_like(inpt_ids)
         rows = torch.arange(len(eos_mask)).long()
         eos_mask[rows, arglast(inpt_ids==eos_id, axis=-1)] = 1
         data_dict[k+"_inpt_attn_masks"] = attn_mask&~eos_mask.bool()
         data_dict[k+"_outp_attn_masks"] = attn_mask&(inpt_ids!=bos_id)
+    return data_dict
+
+def convert_to_tensors(data_dict):
+    """
+    """
+    for k in data_dict:
+        if "attention" in k or "attn" in k or "task" in k:
+            data_dict[k] = torch.BoolTensor(data_dict[k])
+        elif "idx" in k or "swap" in k or "ids" in k:
+            try:
+                data_dict[k] = torch.LongTensor(data_dict[k])
+            except:
+                lens = dict()
+                for samp in data_dict[k]:
+                    lens[len(samp)] = lens.get(len(samp), 0) + 1
+                print(lens)
+                print(samp)
+                assert False
     return data_dict
 
 if __name__=="__main__":

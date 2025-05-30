@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from datas import (
     get_dataset, tokenize_dataset, ensure_equal_length,
     collate_fn, make_tokenized_info, add_token_ids_to_info,
-    add_prompt, pad_data_dict, add_pad_masks,
+    add_prompt, pad_data_dict, add_pad_masks, convert_to_tensors,
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
@@ -326,8 +326,10 @@ def forward_pass(
         outs = torch.argmax(logits, dim=-1)#[perm[:2]]
         if pad_mask is None and "inpt_attn_mask" in batch:
             pmask = batch["inpt_attn_mask"]
+            omask = batch["outp_attn_mask"]
         else:
             pmask = ~pad_mask[batch_indices]
+            omask = batch["outp_attn_mask"]
         input_mask = pmask
         if "input_tmask" in batch:
             input_mask = pmask&(~batch["input_tmask"])
@@ -353,6 +355,8 @@ def forward_pass(
             print("OuTmsk:", tensor2str(batch["outp_tmask"][i].long()))
             print("TrgSwp:", tensor2str(batch["trg_swap_masks"][i].long()))
             print("LosMsk:", tensor2str(lmask[i].long()))
+            print("InptPd:", tensor2str(pmask[i].long()))
+            print("OutpPd:", tensor2str(omask[i].long()))
             print()
             print("Inpts:", tensor2str(inpts[i][:trg_swap]))
             print("Gtrth:", tensor2str(labels[i][trg_swap:]))
@@ -799,6 +803,8 @@ def main():
                         trg_tokenizer=tokenizers[tidx],
                         src_prompt=config["prompts"][sidx],
                         trg_prompt=config["prompts"][tidx],
+                        src_replacements=config["replacements"][sidx],
+                        trg_replacements=config["replacements"][tidx],
                     )
                     intrv_data = pad_data_dict(
                         intrv_data,
@@ -809,9 +815,10 @@ def main():
                     )
                     intrv_data = add_pad_masks(
                         intrv_data,
-                        src_tokenizer=tokenizers[sidx],
-                        trg_tokenizer=tokenizers[tidx],
+                        src_info=infos[sidx],
+                        trg_info=infos[tidx],
                     )
+                    intrv_data = convert_to_tensors(intrv_data)
                     intrv_datasets[k][(sidx,tidx,vidx)] =\
                         Dataset.from_dict(intrv_data)
     tokenized_datasets = intrv_datasets
