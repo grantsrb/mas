@@ -15,14 +15,16 @@ from datas import (
 )
 from utils import (
     collect_activations, device_fxn, get_command_line_args,
-    default_to_list, tensor2str
+    default_to_list, tensor2str, get_len_hist,
 )
 import seq_models as smods
 from dl_utils.save_io import (
     get_save_name, load_checkpoint, get_folder_from_path, save_json,
     load_yaml, get_config,
 )
-from dl_utils.utils import get_git_revision_hash, get_mask_past_arglast, arglast
+from dl_utils.utils import (
+    get_git_revision_hash, get_mask_past_arglast, arglast, get_timestamp,
+)
 from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
 from intrv_modules import InterventionModule
@@ -32,6 +34,7 @@ import constants as consts
 from intrv_datas import make_intrv_data_from_seqs
 from train import make_tokenizer_from_info
 from hooks import get_stepwise_hook, get_indywise_hook, get_hook_module
+from tasks import DEFAULT_INFOS
 
 import pandas as pd # import after transformers to avoid versioning bug
 
@@ -49,8 +52,10 @@ def config_prep(config):
     # reduces risk of error. Just make a new causal model for new interventions
     if config.get("cmodel_names", None) is None:
         mconfigs = [get_config(mname) for mname in config["model_names"]]
+        mconfigs = [ mc if mc is not None else {} for mc in mconfigs ]
         t2c = consts.TASK2CMODEL
-        cnames = [t2c.get(mc["task_type"], "CountUpDown") for mc in mconfigs]
+        cnames = [
+            t2c.get(mc.get("task_type",None), "CountUpDown") for mc in mconfigs]
         config["cmodel_names"] = cnames
         print("Cmodel Names:", cnames)
 
@@ -135,6 +140,15 @@ def fill_in_prompts_and_replacements(config):
         print()
     return config
 
+def get_hf_config(model_name):
+    """
+    Currently a hacky solution to make project compatible with huggingface
+    models.
+    """
+    return {
+        "task_type": "MultiObject",
+    }
+
 def get_model_and_tokenizer(model_name, padding_side="left"):
     print(f"Loading model and tokenizer for {model_name}...")
     try:
@@ -171,9 +185,19 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
                 padding_side=padding_side)
         if not tokenizer.pad_token:
             tokenizer.pad_token = "<PAD>"
-            tokenizer.pad_token_id = tokenizer.decode(tokenizer.pad_token)
+            tokenizer.pad_token_id = tokenizer(tokenizer.pad_token)["input_ids"][-1]
+            tokenizer.pad_token = tokenizer.decode(tokenizer.pad_token_id)[-1]
+        if not tokenizer.eos_token:
+            tokenizer.eos_token = "EOS"
+            tokenizer.eos_token_id = tokenizer(tokenizer.eos_token)["input_ids"][-1]
+            tokenizer.eos_token = tokenizer.decode(tokenizer.eos_token_id)[-1]
+        if not tokenizer.bos_token or tokenizer.bos_token==tokenizer.eos_token:
+            tokenizer.bos_token = "BOS"
+            tokenizer.bos_token_id = tokenizer(tokenizer.bos_token)["input_ids"][-1]
+            tokenizer.bos_token = tokenizer.decode(tokenizer.bos_token_id)[-1]
         model = AutoModelForCausalLM.from_pretrained(
             model_name, device_map="auto")
+        mconfig = get_hf_config(model_name)
     return model, tokenizer, mconfig
 
 def forward_pass(
@@ -262,7 +286,7 @@ def forward_pass(
     lmask = batch["outp_attn_mask"]
     if "trg_swap_masks" in batch and config.get("stepwise", True):
         smask = batch["trg_swap_masks"]>=0
-        smask = torch.roll(~swpmask, -1, dims=-1)
+        smask = torch.roll(~smask, -1, dims=-1)
         smask[...,-1] = True
         lmask = lmask&(smask)
 
@@ -596,6 +620,7 @@ def main():
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
+    config["datetime"] = get_timestamp()
     for k in arg_config: config[k] = arg_config[k]
     for k in command_keys:
         config["save_keys"].append(k)
@@ -696,7 +721,7 @@ def main():
                 f"{k}_data_paths",
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
-            tconfig = model_configs[mi].get("task_config", None)
+            tconfig = model_configs[mi].get("task_config", {})
             if tconfig: tconfig["unk_p"] = 0
             # The dataset consists of text (and task masks if applicable)
             # Will eventually allow vector representations as well
@@ -743,17 +768,24 @@ def main():
                 if type(info["pad_token_id"])==str:
                     info = add_token_ids_to_info(info=info, tokenizer=tokenizer)
             else:
-                info = model_configs[mi].get(
-                    "info",
-                    make_tokenized_info(
-                        replacements=kwrgs["replacements"],
-                        tokenizer=tokenizer,
-                        config=config)
+                #print("Making Info!")
+                #ttype = model_configs[mi].get("task_type", "MultiObject")
+                #info = DEFAULT_INFOS[ttype]
+                info = make_tokenized_info(
+                    replacements=kwrgs["replacements"],
+                    tokenizer=tokenizer,
+                    config=config
                 )
         infos.append(info)
     config["infos"] = infos
     print("Tok Dataset:", tokenized_datasets["train"][0])
     print("Cmodels:", config["cmodels"])
+    for i in range(len(tokenized_datasets["train"])):
+        print(i,"Example:")
+        print("Seq   :", tokenized_datasets["train"][i]["input_ids"][0])
+        print("TMask :", tokenized_datasets["train"][i]["task_mask"][0])
+        print("Decode:", tokenizers[i].decode(tokenized_datasets["train"][i]["input_ids"][0]))
+        print()
 
     ####################################################
     #    Make/Get Intervention Data
@@ -778,10 +810,12 @@ def main():
                 for vidx,(src_swap_keys, trg_swap_keys) in z:
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
+                    print("SSampl Src:", tokenized_datasets[k][sidx]["input_ids"][0][1:])
+                    print("Decode Src:", tokenizers[sidx].decode(tokenized_datasets[k][sidx]["input_ids"][0]))
                     print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
-                    ttype1 = model_configs[sidx]["task_type"]
-                    ttype2 = model_configs[tidx]["task_type"]
+                    ttype1 = model_configs[sidx].get("task_type", "MultiObject")
+                    ttype2 = model_configs[tidx].get("task_type", "MultiObject")
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
@@ -818,6 +852,15 @@ def main():
                         src_info=infos[sidx],
                         trg_info=infos[tidx],
                     )
+                    # for kk in intrv_data:
+                    #     print(kk)
+                    #     hist = get_len_hist(intrv_data[kk])
+                    #     s = []
+                    #     for l in sorted(list(hist.keys())):
+                    #         v = hist[l]
+                    #         s.append(f"{l}: {v}")
+                    #     print(" - ".join(s))
+                    #     print()
                     intrv_data = convert_to_tensors(intrv_data)
                     intrv_datasets[k][(sidx,tidx,vidx)] =\
                         Dataset.from_dict(intrv_data)
@@ -909,12 +952,17 @@ def main():
                 pad_mask = ~batch["src_outp_attn_mask"]
 
                 pred_ids = actvs["pred_ids"].squeeze()
+
+                print("Inpt:", batch["src_input_ids"].shape)
+                print("InptTmask:", batch["src_input_tmask"].shape)
                 if "src_outp_tmask" in batch:
                     tmask = batch["src_outp_tmask"].to(device)
                     flat_tmask = tmask.reshape(-1)
+                    print("OutpTmask:", batch["src_outp_tmask"].shape)
                 else:
                     tmask = batch["src_outp_attn_mask"].to(device)
                     flat_tmask = tmask.reshape(-1)
+                    print("Outpattn:", batch["src_outp_attn_mask"].shape)
                 corrects = torch.ones_like(tmask)
                 pids = pred_ids.to(device)[tmask]
                 tids = batch["src_labels"] .to(device)[tmask]

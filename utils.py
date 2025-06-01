@@ -10,6 +10,19 @@ def device_fxn(device):
     if device<0: return "cpu"
     return device
 
+def get_len_hist(arr):
+    """
+    Creates a histogram of the lengths of the contents of the argued array.
+    Defaults to none in cases of objects with no length
+    """
+    hist = dict()
+    for el in arr:
+        try:
+            hist[len(el)] = hist.get(len(el), 0)+1
+        except:
+            hist[None] = hist.get(None, 0)+1
+    return hist
+
 def get_activations_hook(comms_dict, key="source", to_cpu=False):
     """
     Returns a hook that can be used to collect activations at the

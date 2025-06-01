@@ -28,6 +28,13 @@ arithmetic_info = {
     "comma_token": ",",
 }
 
+DEFAULT_INFOS = {
+    "MultiObject": multiobj_info,
+    "SingleObject": singleobj_info,
+    "SameObject": sameobj_info,
+    "Arithmetic": arithmetic_info,
+}
+
 class Task:
     def __init__(self, cmodel, info=None, *args, **kwargs):
         self.cmodel = cmodel

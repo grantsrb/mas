@@ -21,7 +21,8 @@ def get_stepwise_hook(comms_dict):
 
         lc = comms_dict["loop_count"]
         comms_dict["loop_count"] += 1
-        batch_bools = comms_dict["trg_swap_masks"][:,lc]==lc
+        tsmask = comms_dict["trg_swap_masks"][:,lc]
+        batch_bools = tsmask>=0
         if comms_dict.get("intrv_vecs",None) is None:
             comms_dict["intrv_vecs"] = []
         comms_dict["intrv_vecs"].append(torch.empty_like(trg_actvs))
@@ -30,8 +31,11 @@ def get_stepwise_hook(comms_dict):
 
         placeholder = torch.empty_like(trg_actvs)
         placeholder[~batch_bools] = trg_actvs[~batch_bools]
-        src_rows = torch.arange(len(batch_bools)).long()[batch_bools]
-        src_cols = (comms_dict["src_swap_masks"]==lc).long()
+        device = device_fxn(batch_bools.get_device())
+        src_rows = torch.arange(len(batch_bools)).long().to(device)[batch_bools]
+        # Find the locations in the src swap mask that have the same swap
+        # order as the trg swap mask for this loop
+        src_cols = (comms_dict["src_swap_masks"]==tsmask[:,None]).long()
         src_cols = torch.argmax(src_cols, dim=-1)[batch_bools]
         src_actvs = src_actvs[src_rows,src_cols]
         trg_actvs = trg_actvs[batch_bools]
