@@ -131,12 +131,12 @@ def get_swap_idxs(token_ids, replace_dict, tokenizer):
     Args:
         token_ids: torch tensor (B,S)
         replace_dict: dict
-            'demo_word0': str
-            'demo_word1': str
-            'demo_word2': str
-            'trig_word': str
-            'resp_word': str
-            'done_word': str
+            'D0': str
+            'D1': str
+            'D2': str
+            'T': str
+            'R': str
+            'E': str
             'user_word': str
             'asst_word': str
     """
@@ -244,11 +244,11 @@ def add_token_ids_to_info(info, tokenizer):
             key_id = k[:-1] + "_ids"
             try:
                 token_ids = [
-                    int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
+                  int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
                 ]
             except:
                 token_ids = [
-                    int(tokenizer.word2id[tok]) for tok in info[k]
+                  int(tokenizer.word2id[tok]) for tok in info[k]
                 ]
             info[key_id] = token_ids
         elif "token" in k and not "_id" in k:
@@ -279,15 +279,15 @@ def make_tokenized_info(replacements, tokenizer, config):
     info["pad_token"] = tokenizer.pad_token
     for k in replacements:
         info_key = "_tokens"
-        if "demo" in k:
+        if "D" in k:
             info_key = "demo" + info_key
-        elif "resp" in k:
+        elif "R" in k:
             info_key = "resp" + info_key
-        elif "done" in k:
+        elif "E" in k:
             info_key = "eos_token"
             info[info_key] = replacements[k]
             continue
-        elif "trig" in k:
+        elif "T" in k:
             info_key = "trig" + info_key
         else:
             continue
@@ -296,7 +296,7 @@ def make_tokenized_info(replacements, tokenizer, config):
         if replacements[k]:
             info[info_key].append(replacements[k])
     
-    info = add_token_ids_to_info(info)
+    info = add_token_ids_to_info(info, tokenizer=tokenizer)
     return info
 
 def add_prompt(
@@ -334,10 +334,9 @@ def add_prompt(
         else:
             ids = tokenizer(
                 prompt,
-                padding=None,
-                return_tensors=False,
+                padding="do_not_pad",
                 truncation=False,
-            )["input_ids"][0]
+            )["input_ids"]
         el = len(ids)
 
         for k in data_dict:
@@ -363,9 +362,10 @@ def tokenize_dataset(dataset, tokenizer, config):
     and tokenizes the text.
     """
     reps = config.get("replacements", DEFAULT_REPLACEMENTS)
+    prespace = not hasattr(tokenizer, "word2id")
     text = dataset.map(
         lambda ex: {
-            "text": replace_text(
+            "text": " "*prespace + replace_text(
                 text=ex["text"],
                 replacement_dict=reps
             )
@@ -373,82 +373,27 @@ def tokenize_dataset(dataset, tokenizer, config):
         batched=False,
     )
     text = text["text"]
-    add_eos = tokenizer.eos_token != reps["E"]
-    if add_eos: 
-        for i,t in enumerate(text):
-            text[i] = text[i] + tokenizer.eos_token
-
 
     print("Text Sample:", text[0])
     print("Tokenizing...")
     tok_dict = tokenizer(
         text,
-        padding=None,
-        return_tensors=False,
+        padding="do_not_pad",
         truncation=False,
     )
-    bos_id = tokenizer.bos_token_id
     token_ids = tok_dict["input_ids"]
-    token_ids = [[t for t in seq if t!=bos_id] for seq in token_ids]
+    task_masks = dataset["task_mask"]
+    if prespace:
+        token_ids =  [[t for t in seq] for seq in token_ids]
+    else:
+        token_ids = [[t for t in seq[1:]] for seq in token_ids]
     attn_masks = [[1 for _ in seq[:-1]]+[0] for seq in token_ids]
-    task_masks = [tmask for tmask in dataset["task_mask"]]
+    task_masks = [[t for t in tmask] for tmask in task_masks]
     return Dataset.from_dict({
         "input_ids": token_ids,
         "inpt_attn_mask": attn_masks,
         "task_mask": task_masks,
     })
-
-    #idx = tok_dict["input_ids"]==bos_id
-    #dupls = idx.long().sum(-1)>1
-    #idxs = torch.argmax(idx.long(), dim=-1)[dupls]
-    #arng = torch.arange(len(idx)).long()[dupls]
-    #tok_dict["input_ids"][arng, idxs] = tokenizer.pad_token_id
-    #tok_dict["inpt_attn_mask"] = tok_dict["input_ids"]!=tokenizer.pad_token_id
-
-    #try:
-    #    print()
-    #    print("Swaps:")
-    #    for i in range(3):
-    #        print("Full:", tok_dict["input_ids"][i][-20:])
-    #        print("Swap:", tok_dict["input_ids"][i][swap_idxs[i]])
-    #        print("Full:", [tokenizer.decode(t) for t in tok_dict["input_ids"][i][-20:]])
-    #        print("Swap:", tokenizer.decode(tok_dict["input_ids"][i][swap_idxs[i]]))
-    #        print()
-    #    print()
-    #except: pass
-
-    #if "task_mask" in dataset.column_names:
-    #    max_length = tok_dict["input_ids"].shape[-1]
-    #    tmasks = []
-    #    for i,tmask in enumerate(dataset["task_mask"]):
-    #        # two 0s for annoying HF BOS business...
-    #        bos_zeros = [0,0] if dupls[i] else [0]
-    #        eos_zero = [0] if add_eos else []
-    #        tmask = bos_zeros + tmask + eos_zero
-    #        tmasks.append(pad_to(
-    #            arr=tmask,
-    #            tot_len=max_length,
-    #            fill_val=0,
-    #            side=tokenizer.padding_side,
-    #        ))
-    #    tok_dict["task_mask"] = torch.BoolTensor(tmasks)
-    #    eos_ids = [tokenizer.eos_token_id]
-    #    dword = reps["done_word"]
-    #    try:
-    #        eos_ids.append(int(tokenizer(dword)["input_ids"][-1]))
-    #    except: pass
-    #    try:
-    #        eos_ids.append(
-    #            int(tokenizer(" "+dword)["input_ids"][-1]))
-    #    except: pass
-    #    eos_ids = torch.LongTensor(eos_ids)
-    #    in_eos_ids = torch.isin(tok_dict["input_ids"].long(),eos_ids)
-    #    eos_and_tmask = in_eos_ids&tok_dict["task_mask"]
-    #    tok_dict["inpt_attn_mask"] = tok_dict["inpt_attn_mask"]&~eos_and_tmask
-
-    #    # Quick Tests
-    #    tmask = tok_dict["task_mask"][0]
-    #    assert torch.isin(tok_dict["input_ids"][0][tmask], eos_ids).float().sum()<=1
 
 def pad_data_dict(
     data_dict,
