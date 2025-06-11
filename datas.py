@@ -236,15 +236,17 @@ def get_max_length(text, tokenizer):
     toks = tokenizer(text, return_tensors="pt")["input_ids"]
     return toks.shape[-1] + 20*2 + 2
 
-def add_token_ids_to_info(info, tokenizer):
+def add_token_ids_to_info(info, tokenizer, prespace=False):
     keys = list(info.keys())
+    prechar = prespace*" "
     for k in keys:
         if not info[k]: continue
         if "tokens" in k and not "_id" in k:
             key_id = k[:-1] + "_ids"
             try:
                 token_ids = [
-                  int(tokenizer(tok)["input_ids"][-1]) for tok in info[k]
+                  int(tokenizer(prechar+tok)["input_ids"][-1]) for
+                                                        tok in info[k]
                 ]
             except:
                 token_ids = [
@@ -254,7 +256,7 @@ def add_token_ids_to_info(info, tokenizer):
         elif "token" in k and not "_id" in k:
             key_id = k + "_id"
             try:
-                info[key_id] = int(tokenizer(info[k])["input_ids"][-1])
+                info[key_id] = int(tokenizer(prechar + info[k])["input_ids"][-1])
             except:
                 info[key_id] = int(tokenizer.word2id[info[k]])
     return info
@@ -296,7 +298,8 @@ def make_tokenized_info(replacements, tokenizer, config):
         if replacements[k]:
             info[info_key].append(replacements[k])
     
-    info = add_token_ids_to_info(info, tokenizer=tokenizer)
+    prespace = not hasattr(tokenizer, "word2id")
+    info = add_token_ids_to_info(info, tokenizer=tokenizer, prespace=prespace)
     return info
 
 def add_prompt(
@@ -382,13 +385,19 @@ def tokenize_dataset(dataset, tokenizer, config):
         truncation=False,
     )
     token_ids = tok_dict["input_ids"]
+    bos = token_ids[0][0]==tokenizer.bos_token_id
     task_masks = dataset["task_mask"]
-    if prespace:
-        token_ids =  [[t for t in seq] for seq in token_ids]
+    if prespace and bos or not prespace:
+        token_ids =  [[t for t in seq[1:]] for seq in token_ids]
     else:
-        token_ids = [[t for t in seq[1:]] for seq in token_ids]
+        token_ids =  [[t for t in seq] for seq in token_ids]
     attn_masks = [[1 for _ in seq[:-1]]+[0] for seq in token_ids]
     task_masks = [[t for t in tmask] for tmask in task_masks]
+    if len(task_masks[0])!=len(token_ids[0]):
+        print("Text:", text[0])
+        print("Ids :", token_ids[0])
+        print("Task:", task_masks[0])
+        assert False
     return Dataset.from_dict({
         "input_ids": token_ids,
         "inpt_attn_mask": attn_masks,
@@ -412,6 +421,12 @@ def pad_data_dict(
     src_offsets = [max_len-len(s) for s in data_dict["src_input_ids"]]
     trg_offsets = [max_len-len(s) for s in data_dict["trg_input_ids"]]
 
+    ### START TESTING
+    for i in range(len(src_offsets)):
+        assert src_offsets[i]==(max_len-len(data_dict["src_swap_masks"][i]))
+        assert trg_offsets[i]==(max_len-len(data_dict["trg_swap_masks"][i]))
+    ### END TESTING
+
     for k in data_dict:
         if "src" in k:
             left = int(src_pad_side=="left")
@@ -432,7 +447,6 @@ def pad_data_dict(
                     data_dict[k][i] += offset
                 continue
             elif "swap" in k:
-                offset = max_len-len(data_dict[k][i])
                 mask = [-1 for _ in range(offset)]
             elif "mask" in k:
                 mask = [0 for _ in range(offset)]
