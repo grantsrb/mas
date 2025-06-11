@@ -538,6 +538,30 @@ class ZeroMask(Mask):
         if self.learnable_add and add_size>0:
             self.add_vec = torch.nn.Parameter(0.01*torch.randn(add_size))
 
+    def forward(self, target, source):
+        """
+        target: torch tensor (B,H)
+            the main vector that will receive new neurons for
+            causal interchange
+        source: torch tensor (B,H)
+            the vector that will give neurons to create a
+            causal interchange in the other sequence
+            
+        Returns:
+            target: torch tensor (B,H)
+                the vector that received new neurons for
+                a causal interchange
+        """
+        mask = self.mask
+        masked_trg = torch.zeros_like(target)
+        masked_src = mask[:source.shape[-1]]*source
+        if masked_trg.shape[-1]<=masked_src.shape[-1]:
+            swapped = masked_trg + masked_src[...,:masked_trg.shape[-1]]
+        else:
+            swapped = masked_trg
+            swapped[...,:masked_src.shape[-1]] += masked_src
+        return swapped
+
 class BoundlessMask(FixedMask):
     def __init__(self,
                  size,
