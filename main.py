@@ -195,8 +195,7 @@ def get_model_and_tokenizer(model_name, padding_side="left"):
             tokenizer.bos_token = "BOS"
             tokenizer.bos_token_id = tokenizer(tokenizer.bos_token)["input_ids"][-1]
             tokenizer.bos_token = tokenizer.decode(tokenizer.bos_token_id)[-1]
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, device_map="auto")
+        model = smods.HFTransformer(hf_model_type=model_name, device_map="auto")
         mconfig = get_hf_config(model_name)
     return model, tokenizer, mconfig
 
@@ -266,12 +265,18 @@ def forward_pass(
     ## Run model
     prev_grad_state = torch.is_grad_enabled()
     torch.set_grad_enabled(track_grad)
-    outputs = model(
-        input_ids=batch["input_ids"],
-        attention_mask=batch["inpt_attn_mask"],
-        task_mask=batch["input_tmask"],
-        tforce=tforce,
-    )
+    try:
+        outputs = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["inpt_attn_mask"],
+            task_mask=batch["input_tmask"],
+            tforce=tforce,
+        )
+    except:
+        outputs = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["inpt_attn_mask"],
+        )
     torch.set_grad_enabled(prev_grad_state)
 
     # Calc Loss
@@ -289,6 +294,9 @@ def forward_pass(
         smask = torch.roll(~smask, -1, dims=-1)
         smask[...,-1] = True
         lmask = lmask&(smask)
+    #if "outp_tmask" in batch and config.get("stepwise", True):
+    #    smask = batch["outp_tmask"]
+    #    lmask = lmask&(smask)
 
     ### TODO
     #pids = torch.argmax(logits, dim=-1)
@@ -395,13 +403,13 @@ def forward_pass(
             target_text = tokenizer.decode(labels[i][trg_swap:])
             if type(target_text)!=str:
                 target_text = target_text[0]
-            target_text = target_text.replace(trg_pad_tok, "")
+            #target_text = target_text.replace(trg_pad_tok, "")
 
             # Generated Text
             generated_text = tokenizer.decode(outs[i][trg_swap:])
             if type(generated_text)!=str:
                 generated_text = generated_text[0]
-            generated_text = generated_text.replace(trg_pad_tok, "")
+            #generated_text = generated_text.replace(trg_pad_tok, "")
 
             if shuffle_targ_ids:
                 print("Shuffled Input IDs")
@@ -687,11 +695,19 @@ def main():
                 model, config["layers"][mi])
             print("Decided Layer Name:", config["layers"][mi])
 
-        if hasattr(model, "hf_device_map"):
-            if config["layers"][mi] in model.hf_device_map:
-                devices.append(model.hf_device_map[config["layers"][mi]])
+        if hasattr(model, "hf_device_map") or hasattr(model, "hf_encoder"):
+            try:
+                dmap = model.hf_encoder.hf_device_map
+            except:
+                dmap = model.hf_device_map
+            if config["layers"][mi] in dmap:
+                devices.append(dmap[config["layers"][mi]])
             else:
-                devices.append(model.hf_device_map[""])
+                try:
+                    devices.append(dmap[""])
+                except:
+                    print(dmap.keys())
+                    devices.append(0)
         else:
             devices.append(poss_devices[mi])
             model.to(devices[-1])
@@ -701,7 +717,7 @@ def main():
         with torch.no_grad():
             actvs = collect_activations(
                 model,
-                input_ids=torch.LongTensor([[0]]),
+                input_ids=torch.LongTensor([[1,2,3,4]]),
                 layers=[config["layers"][mi]],
                 batch_size=500,
                 to_cpu=True,)
@@ -722,6 +738,9 @@ def main():
                 ["./data/multiobj.json", "./data/multiobj.json"]
             )[mi]
             tconfig = model_configs[mi].get("task_config", {})
+            if tconfig is None: tconfig = {}
+            if "max_count" in config:
+                tconfig["max_count"] = config["max_count"]
             if tconfig: tconfig["unk_p"] = 0
             # The dataset consists of text (and task masks if applicable)
             # Will eventually allow vector representations as well
@@ -809,6 +828,8 @@ def main():
                 z = enumerate(zip(skeys,tkeys))
                 for vidx,(src_swap_keys, trg_swap_keys) in z:
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
+                    print(sidx, "Info:", infos[sidx])
+                    print(tidx, "Info:", infos[tidx])
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
                     print("SSampl Src:", tokenized_datasets[k][sidx]["input_ids"][0][1:])
                     print("Decode Src:", tokenizers[sidx].decode(tokenized_datasets[k][sidx]["input_ids"][0]))
@@ -830,6 +851,7 @@ def main():
                         stepwise=config.get("stepwise", False),
                         use_cl=(sidx,tidx) in config["cl_directions"],
                         use_src_data_for_cl=ttype1==ttype2,
+                        tokenizer=tokenizers[tidx],
                     )
                     intrv_data = add_prompt(
                         intrv_data,
@@ -852,15 +874,12 @@ def main():
                         src_info=infos[sidx],
                         trg_info=infos[tidx],
                     )
-                    # for kk in intrv_data:
-                    #     print(kk)
-                    #     hist = get_len_hist(intrv_data[kk])
-                    #     s = []
-                    #     for l in sorted(list(hist.keys())):
-                    #         v = hist[l]
-                    #         s.append(f"{l}: {v}")
-                    #     print(" - ".join(s))
-                    #     print()
+                    print("Post Src:", intrv_data["src_input_ids"][0])
+                    print("Post Decode Src:", tokenizers[sidx].decode(intrv_data["src_input_ids"][0]))
+                    print("Post Trg:", intrv_data["trg_input_ids"][0])
+                    print("Post Decode Trg:", tokenizers[tidx].decode(intrv_data["trg_input_ids"][0]))
+                    print()
+                    print()
                     intrv_data = convert_to_tensors(intrv_data)
                     intrv_datasets[k][(sidx,tidx,vidx)] =\
                         Dataset.from_dict(intrv_data)
@@ -925,7 +944,7 @@ def main():
                     input_ids=batch["src_input_ids"],
                     attention_mask=batch["src_attention_mask"],
                     task_mask=batch["src_input_tmask"],
-                    layers=[config["layers"][src_idx], "lm_head"],
+                    layers=[config["layers"][src_idx]],
                     tforce=False,
                     ret_pred_ids=True,
                     batch_size=vbsize,
@@ -948,9 +967,6 @@ def main():
                         layer=config["layers"][trg_idx],
                     )
 
-                pad_id = tokenizers[src_idx].pad_token_id
-                pad_mask = ~batch["src_outp_attn_mask"]
-
                 pred_ids = actvs["pred_ids"].squeeze()
 
                 print("Inpt:", batch["src_input_ids"].shape)
@@ -962,7 +978,7 @@ def main():
                 else:
                     tmask = batch["src_outp_attn_mask"].to(device)
                     flat_tmask = tmask.reshape(-1)
-                    print("Outpattn:", batch["src_outp_attn_mask"].shape)
+                    print("OutpAttn:", batch["src_outp_attn_mask"].shape)
                 corrects = torch.ones_like(tmask)
                 pids = pred_ids.to(device)[tmask]
                 tids = batch["src_labels"] .to(device)[tmask]
@@ -977,19 +993,43 @@ def main():
                 #print("pids:", pids.shape)
                 #print("tids:", tids.shape)
                 #print("idx:", idx.shape)
-                #print("Preds:", pred_ids[0,:20].long())
-                #print("Labels:", batch["src_labels"][0,:20].long())
-                #print("Corrects:", corrects[:20].long())
+                tmask = batch["src_outp_tmask"]
+                sidx = src_idx
+                tidx = trg_idx
+                print(sidx,tidx,"Preds:")
+                for i in range(3):
+                    if i < len(pred_ids):
+                        print("\tRawPredIds:", pred_ids[i])
+                        print("\tRawLabeIds:", batch["src_labels"][i])
+                        print("\tTskPredIds:", pred_ids[i][tmask[i].bool()])
+                        print("\tTskLabeIds:", batch["src_labels"][i][tmask[i].bool()])
+                        print("\tRawPreds:",  tokenizers[sidx].decode(pred_ids[i]))
+                        print()
+                        print("\tRawLabels:", tokenizers[sidx].decode(batch["src_labels"][i]))
+                        print()
+                        print("\tTskPreds:",  tokenizers[sidx].decode(pred_ids[i][tmask[i].bool()]))
+                        print()
+                        print("\tTskLabels:", tokenizers[sidx].decode(batch["src_labels"][i][tmask[i].bool()]))
+                        print()
+                        print("\tCorrects:", corrects[i])
+                        print("----")
 
                 # Generated Text
                 idx = 0
                 input_text = tokenizers[src_idx].decode(batch["src_input_ids"][idx])
-                if type(input_text)!=str:
-                    input_text = input_text[0]
+                if type(input_text)!=str: input_text = input_text[0]
                 input_text = input_text.replace(tokenizers[src_idx].pad_token, "")
-                print("ExIds :", batch["src_input_ids"][idx][:10])
+                print("InpIds:", batch["src_input_ids"][idx][:10])
+                print("PrdIds:", pred_ids[idx][:10])
                 print(
-                    "ExInpt:", input_text.replace("\n", "\\n")\
+                    "Inpt:", input_text.replace("\n", "\\n")\
+                                         .replace("<BOS>", "B")\
+                                         .replace("<EOS>", "E")
+                )
+                pred_text = tokenizers[src_idx].decode(pred_ids[idx])
+                if type(pred_text)!=str: pred_text = pred_text[0]
+                print(
+                    "Pred:", pred_text.replace("\n", "\\n")\
                                          .replace("<BOS>", "B")\
                                          .replace("<EOS>", "E")
                 )

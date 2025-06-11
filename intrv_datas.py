@@ -211,7 +211,7 @@ def sample_swaps(df, filter, info=None, stepwise=False):
     for row_idx in range(len(samples)):
         sample = samples.iloc[row_idx]
         swap_idx = int(sample["step_idx"])
-        swap_mask = [-1 for _ in range(int(sample["max_step"]))]
+        swap_mask = [-1 for _ in range(int(sample["max_step"]+1))]
         if stepwise:
             swap_mask[:swap_idx+1] = [int(_) for _ in np.arange(swap_idx+1)]
             # Collect a list of varbs leading up to the swap idx
@@ -344,9 +344,9 @@ def make_counterfactual_seqs(
     intrv_seqs = []
     intrv_varbs_list = []
     intrv_tmasks = []
-    pad_id =  trg_info.get("pad_token_id", 0)
-    eos_id =  trg_info.get("eos_token_id", 0)
-    fill_id = trg_info.get("demo_ids", [3])[-1]
+    pad_id =  trg_info["pad_token_id"]
+    eos_id =  trg_info["eos_token_id"]
+    fill_id = trg_info["demo_token_ids"][-1]
     for seq_i, tup in enumerate(z):
         (trg_seq,trg_idx,trg_tmask,src_varbs,trg_varbs, src_seq, src_idx) = tup
         src_varbs = src_varbs[-1]
@@ -380,23 +380,23 @@ def make_counterfactual_seqs(
             print("Intrv Varbs:", trg_cmodel.swap_varbs)
             assert False
         if stepwise:
-            inseq = [t if t!=pad_id and t!=eos_id else fill_id for t in trg_seq[:trg_idx+1]]
-            if len(inseq)<trg_idx+1:
-                inseq += [fill_id for _ in range(trg_idx+1-len(inseq))]
-            seq = inseq + intrv_seq
-            tmask = [0 for t in inseq] + intrv_tmask
+            preseq = [t if t!=pad_id and t!=eos_id else fill_id for t in trg_seq[:trg_idx+1]]
+            if len(preseq)<trg_idx+1:
+                preseq += [fill_id for _ in range(trg_idx+1-len(preseq))]
+            seq = preseq + intrv_seq
+            tmask = [0 for t in preseq] + intrv_tmask
         else:
-            inseq = trg_seq[:trg_idx+1]
-            seq = inseq + intrv_seq
+            preseq = trg_seq[:trg_idx+1]
+            seq = preseq + intrv_seq
             tmask = trg_tmask[:trg_idx+1] + intrv_tmask
         intrv_seqs.append( seq )
         intrv_tmasks.append( tmask )
         if seq_i%500==0:
-            print("Src :", tensor2str(torch.LongTensor(src_seq[:src_idx+1])))
-            print("SOut:", tensor2str(torch.LongTensor(src_seq[src_idx+1:])))
-            print("Inpt:", tensor2str(torch.LongTensor(inseq[:trg_idx+1])))
-            print("Outp:", tensor2str(torch.LongTensor(intrv_seq)))
-            print()
+            print("Samp:", seq_i)
+            print("\tSrc :", tensor2str(torch.tensor(src_seq[:src_idx+1]),n=5))
+            print("\tSOut:", tensor2str(torch.tensor(src_seq[src_idx+1:]),n=5))
+            print("\tInpt:", tensor2str(torch.tensor(preseq[:trg_idx+1]),n=5))
+            print("\tOutp:", tensor2str(torch.tensor(intrv_seq),n=5))
     return intrv_seqs, intrv_varbs_list, intrv_tmasks
 
 def make_intrv_data_from_seqs(
@@ -414,6 +414,7 @@ def make_intrv_data_from_seqs(
         sample_w_replacement=True,
         use_cl=False,
         use_src_data_for_cl=True,
+        tokenizer=None,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -491,6 +492,7 @@ def make_intrv_data_from_seqs(
         info=src_info,
         stepwise=stepwise,
     )
+    assert len(src_swap_masks[0])==len(src_seqs[0])
 
     # 2. get the target variables and swap indices
     trg_seqs = trg_data["input_ids"]
@@ -554,9 +556,13 @@ def make_intrv_data_from_seqs(
         stepwise=stepwise,
     )
 
+    if tokenizer is not None:
+        print("Outids :", intrv_seqs[0])
+        print("Outputs:", tokenizer.decode(intrv_seqs[0]))
+
     intrv_swap_masks = [
-        pad_to(msk, len(seq), fill_val=-1) for msk,seq\
-                      in zip(trg_swap_masks, intrv_seqs)
+        pad_to(msk, len(seq), fill_val=-1)[:len(seq)] for msk,seq\
+                                in zip(trg_swap_masks, intrv_seqs)
     ]
     d = {
         "trg_input_ids": intrv_seqs,
@@ -568,6 +574,7 @@ def make_intrv_data_from_seqs(
         "trg_swap_idxs": trg_swap_idxs,
         "src_swap_idxs": src_swap_idxs,
     }
+
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
         d["cl_input_ids"] = cl_seqs
