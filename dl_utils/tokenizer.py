@@ -531,6 +531,9 @@ class Tokenizer():
         Returns:
             X: list of lists of ids | torch long tensor (N,seq_len)
         """
+        if padding=="do_not_pad":
+            padding = False
+            as_tensor = False
         if not padding_side: padding_side = self.padding_side
         assert not as_tensor or (seq_len and as_tensor) 
         if seq_len is None: seq_len = np.inf
@@ -616,12 +619,12 @@ class Tokenizer():
             strings: list of str
                 a list of the joined string values of the argued indices
         """
-        if type(ids) != torch.Tensor:
+        if type(ids) not in {torch.Tensor, list, np.array}:
             if "pred_ids" in ids:
                 ids = ids["pred_ids"]
             elif "logits" in ids:
                 ids = torch.argmax(ids["logits"], dim=-1)
-            elif hasattr(ids, logits):
+            elif hasattr(ids, "logits"):
                 ids = torch.argmax(ids.logits, dim=-1)
         return self.ids_to_strs(ids)
 
@@ -664,6 +667,9 @@ class Tokenizer():
                 a list of the integer indices of each token in the
                 argued strings
         """
+        if padding=="do_not_pad":
+            padding = False
+            as_tensor = False
         if not padding_side: padding_side = self.padding_side
         if type(strings)==str: strings = [strings]
         toks,max_len,_ = self.tokenize(
@@ -716,8 +722,13 @@ class Tokenizer():
                 a list of the integer indices of each token in the
                 argued strings
         """
+        if padding=="do_not_pad":
+            padding = False
+            return_tensors = False
+            as_tensor = False
         if not padding_side: padding_side = self.padding_side
         if return_tensors: as_tensor = True
+        elif return_tensors==False: as_tensor = False
         # I'll allow it
         if type(strings)==type(torch.zeros(0)):
             return self.ids_to_strs( strings )

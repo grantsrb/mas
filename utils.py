@@ -10,6 +10,19 @@ def device_fxn(device):
     if device<0: return "cpu"
     return device
 
+def get_len_hist(arr):
+    """
+    Creates a histogram of the lengths of the contents of the argued array.
+    Defaults to none in cases of objects with no length
+    """
+    hist = dict()
+    for el in arr:
+        try:
+            hist[len(el)] = hist.get(len(el), 0)+1
+        except:
+            hist[None] = hist.get(None, 0)+1
+    return hist
+
 def get_activations_hook(comms_dict, key="source", to_cpu=False):
     """
     Returns a hook that can be used to collect activations at the
@@ -75,6 +88,7 @@ def register_activation_hooks(
         missing_layers = set(layers)-hooked_layers
         if len(missing_layers) > 0:
             print("Layers", missing_layers, "not found")
+            print(model)
     except:
         print("Failed to analyze missing layers")
         print("layers:", layers)
@@ -95,6 +109,7 @@ def collect_activations(
         to_cpu=True,
         ret_attns=False,
         ret_pred_ids=False,
+        ret_logits=False,
         tforce=False,
         n_steps=0,
         ret_gtruth=False,
@@ -120,6 +135,8 @@ def collect_activations(
             if true, will return the attention values as well.
         ret_pred_ids: bool
             if true, will return the prediction ids under "pred_ids"
+        ret_logits: bool
+            if true, will return the prediction logits under "logits"
         tforce: bool
             will use teacher forcing on all inputs if true. if false,
             uses the task mask to determine when to teacher force.
@@ -154,6 +171,7 @@ def collect_activations(
         assert len(input_ids)<=batch_size
         outputs["attentions"] = []
     if ret_pred_ids: outputs["pred_ids"] = []
+    if ret_logits: outputs["logits"] = []
     rnge = range(0,len(input_ids), batch_size)
     if verbose: rnge = tqdm(rnge)
     for batch in rnge:
@@ -183,6 +201,8 @@ def collect_activations(
                 output_attentions=ret_attns,)
         if ret_attns:
             outputs["attentions"].append(out_dict["attentions"][0])
+        if ret_logits:
+            outputs["logits"].append(out_dict["logits"])
         if ret_pred_ids:
             if "pred_ids" in out_dict:
                 outputs["pred_ids"].append(out_dict["pred_ids"])

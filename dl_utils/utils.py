@@ -29,6 +29,12 @@ def try_key(d, key, val):
 def get_datetime_str():
     return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
+def get_timestamp():
+    """
+    Returns a string indicating the date and time
+    """
+    return get_datetime_str()
+
 def remove_ending_slash(path):
     """
     Removes the slash from the end of the path if it exists.
