@@ -5,7 +5,8 @@ seed: 123456
 # Specify your models here
 model_names: 
   - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
-  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+  #- "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+  - "gpt2"
 
 # Specify your dataset here
 dataset_names:

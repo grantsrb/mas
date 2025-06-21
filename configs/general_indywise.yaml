@@ -5,7 +5,7 @@ seed: 123456
 # Specify your models here
 model_names: 
   - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
-  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_1_seed12345"
 
 # Specify your dataset here
 dataset_names:
@@ -63,7 +63,7 @@ identity_rot: False
 #n_units: 600
 mask_type: "FixedMask" #ZeroMask #BoundlessMask
 learnable_addition: False
-n_units: 16 # the size of the intervened subspace (n_neurons)
+n_units: 32 # the size of the intervened subspace (n_neurons)
 
 num_training_steps: 20000
 print_every: 100
