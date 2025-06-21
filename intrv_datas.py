@@ -415,6 +415,7 @@ def make_intrv_data_from_seqs(
         use_cl=False,
         use_src_data_for_cl=True,
         tokenizer=None,
+        ret_src_df=False,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -456,6 +457,9 @@ def make_intrv_data_from_seqs(
             cl loss.
         use_src_data_for_cl: bool
             if true, will provide the cl data from the src sequences
+        ret_src_df: bool
+            if true, will return the source data dataframe containing
+            the high-level variable values for each step in the sequence.
     Returns:
         intrv_data: dict
             'src_seqs': list of lists of tokenized strings
@@ -469,6 +473,8 @@ def make_intrv_data_from_seqs(
                 the swap mask for the source sequences
             'trg_swap_masks': list of lists of bools
                 the swap mask for the target sequences
+        source_df: dict
+            optionally return the source dataframe
     """
     if sample_w_replacement:
         indices = np.random.randint(0,len(src_data),len(src_data))
@@ -578,5 +584,7 @@ def make_intrv_data_from_seqs(
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
         d["cl_input_ids"] = cl_seqs
+    if ret_src_df:
+        return d, src_df
     return d
 
