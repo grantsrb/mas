@@ -24,6 +24,7 @@ from dl_utils.save_io import (
 )
 from dl_utils.utils import (
     get_git_revision_hash, get_mask_past_arglast, arglast, get_timestamp,
+    analytical_linear_regression,
 )
 from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
@@ -810,6 +811,7 @@ def main():
     #    Make/Get Intervention Data
     ####################################################
     intrv_datasets = {k: dict() for k in tokenized_datasets }
+    src_dfs = {k: dict() for k in tokenized_datasets}
     n_subspaces = 0
     print("Info:")
     print("1:", config["infos"][0])
@@ -837,7 +839,7 @@ def main():
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
                     ttype1 = model_configs[sidx].get("task_type", "MultiObject")
                     ttype2 = model_configs[tidx].get("task_type", "MultiObject")
-                    intrv_data = make_intrv_data_from_seqs(
+                    intrv_data, src_df = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
                         src_swap_keys=src_swap_keys,
@@ -852,7 +854,9 @@ def main():
                         use_cl=(sidx,tidx) in config["cl_directions"],
                         use_src_data_for_cl=ttype1==ttype2,
                         tokenizer=tokenizers[tidx],
+                        ret_src_df=True,
                     )
+                    src_dfs[k][(sidx,tidx,vidx)] = src_df
                     intrv_data = add_prompt(
                         intrv_data,
                         src_tokenizer=tokenizers[sidx],
@@ -910,7 +914,8 @@ def main():
         for k in all_src_activations:
             for dirvar_tup in tokenized_datasets[k].keys():
                 src_idx,trg_idx,varb_idx = dirvar_tup
-                dirvar_tup = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
+                if varb_idx>0: raise NotImplemented
+                #dirvar_tup = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
                 src_model = models[src_idx].eval()
                 trg_model = models[trg_idx].eval()
                 startt = time.time()
@@ -1038,6 +1043,29 @@ def main():
                 print(k.capitalize(), "FullAcc:", fullacc)
                 print("Exec Time:", time.time()-startt)
                 print()
+
+    ##########################
+    #    Test Linear Decodability of Features
+    ##########################
+    print("Linear Decoding Results:")
+    for k in all_src_activations:
+        for dirvar_tup in all_src_activations[k].keys():
+            sidx,tidx,vidx = dirvar_tup
+            actvs = all_src_activations[k][dirvar_tup]
+            actvs = actvs.reshape(-1, actvs.shape[-1])
+            src_df = src_dfs[k][dirvar_tup]
+            pad_id = infos[sidx]["pad_token_id"]
+            eos_id = infos[sidx]["eos_token_id"]
+            valid_idxs = ~src_df["inpt_token_id"].isin({pad_id, eos_id})
+            labels = torch.FloatTensor(src_df[config["swap_keys"][sidx][vidx]])
+            _, verr, vpreds, vlabs = analytical_linear_regression(
+                X=actvs[valid_idxs],
+                y=labels[valid_idxs],
+                ret_preds_and_labels=True)
+            acc = (torch.round(vpreds)==vlabs).float().mean()
+            print(k,"Model:", sidx, "- Var:", config["swap_keys"][sidx][vidx])
+            print("\tErr:",verr.item(), "- Acc:", acc.item())
+    print()
 
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker
