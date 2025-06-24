@@ -9,8 +9,10 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
 config="configs/cl_mas.yaml"
-search1=( "n_units=10000" )
-search2=( "swap_keys=full" ) # "swap_keys=count" ) 
+search1=( "lr=0.001" "lr=0.003" )
+search2=( "cl_eps=8" "cl_eps=11" ) # "swap_keys=count" ) 
+arg1="swap_keys=full"
+arg2="n_units=128"
 
 echo Dispatching
 cuda_idx=0
@@ -32,7 +34,7 @@ do
                            echo Search1 ${search1[@]}
                            echo Search2 ${search2[@]}
 
-                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" &
+                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" $arg1 $arg2 &
 
                            cuda_idx=$((1+$cuda_idx))
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
