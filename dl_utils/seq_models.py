@@ -12,12 +12,6 @@ from .utils import (
 import math
 
 try:
-    from mamba_ssm import Mamba
-    from mamba_ssm.utils.generation import InferenceParams
-except:
-    print("You must install mamba")
-
-try:
     from transformers import (
         CONFIG_MAPPING,
         GPT2Config,

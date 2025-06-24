@@ -65,9 +65,7 @@ def get_stepwise_hook(comms_dict):
 def get_indywise_hook(comms_dict):
     def hook(module, inp, out):
         """
-        out: tensor (B,M,D)
-            the mamba recurrent states where M is the number of SSM
-            states
+        out: tensor (B,M,D) or dict
         """
         h = out
         if type(out)==dict:

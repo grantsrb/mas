@@ -13,7 +13,7 @@ import copy
 
 ## Update these values
 root = "make_models" # the name of the directory in which this script resides relative to where you run this script (probably don't want to change this)
-main_save_directory = "../models/" # the directory you wish to save your files to
+main_save_directory = "./models/" # the directory you wish to save your files to
 main_d_model = 128
 n_epochs = 2500
 seeds =    [12345,] #23456, 34567, 45678, 56789,]
@@ -37,7 +37,9 @@ if len(sys.argv)>=2:
             seeds = arg.split("seeds=")[-1].split(",")
             seeds = [int(s) for s in seeds]
 
+main_save_directory = os.path.abspath(os.path.expanduser(main_save_directory))
 print("Making Config Files")
+print("Save Dir:", main_save_directory)
 print("Devices:", devices)
 print("Seeds:", seeds)
 print("DModels:", main_d_model)
