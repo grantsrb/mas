@@ -1,11 +1,11 @@
 exp_name: "clmas"
-save_root: "/data2/grantsrb/mas_neurips2025/"
+save_root: "./models/"
 seed: 123456
 
 # Specify your models here
 model_names: 
-  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
-  - "/mnt/fs2/grantsrb/mas_neurips2025/multiobject_lstm/multiobject_lstm_0_seed23456"
+  - "./models/multiobject_gru/multiobject_gru_0_seed12345"
+  - "./models/multiobject_gru/multiobject_gru_1_seed23456"
 
 # Specify your dataset here
 dataset_names:
