@@ -2,17 +2,17 @@
 # Use this script to run the DAS experiments
 
 #gpus=( 0 1 2 3 4 5 6 7 8 9 )
-gpus=( 0 1 2 3 4 5 6 7 8 )
+gpus=( 7 9 )
 exp_name="sweep"
-model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_0_seed12345/"
-model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_1_seed23456/"
+model_path1="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_1_seed23456/"
+model_path2="/mnt/fs2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_0_seed12345/"
 #model_path2=" "
 
-config="configs/cl_baseline.yaml"
-search1=( "cl_eps=1" "cl_eps=7" "cl_eps=0.1"  "cl_eps=10" )
-search2=( "lr=0.0005" "lr=0.001" ) 
-arg1="swap_keys=full"
-arg2="n_units=128"
+config="configs/model_stitching.yaml"
+search1=( "n_units=32" )
+search2=( "swap_keys=full" ) 
+arg1=""
+arg2=""
 arg3=""
 arg4=""
 arg5=""

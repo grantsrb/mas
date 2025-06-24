@@ -1,8 +1,9 @@
 #!/bin/bash/
 
-layers="identities.0,identities.0"
-root_folder="/mnt/fs2/grantsrb/mas_neurips2025"
-exp_folders=( "multiobject_gru" "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobject_rope_tformer_unk" )
+cuda=9
+layers="inpt_identity,inpt_identity"
+root_folder="/mnt/fs2/grantsrb"
+exp_folders=( "mas_neurips2025/multiobject_gru" "mas_moreseeds_neurips2025/multiobject_gru" "multiobject_rope_tformer_unk" )
 #"multiobjectmod_gru"
 #"multiobjectround_rope_tformer_unk"
 
@@ -13,4 +14,4 @@ do
 done
 
 echo python3 similarity.py $all_exp_folders layers=$layers
-python3 similarity.py $all_exp_folders layers=$layers
+CUDA_VISIBLE_DEVICES=$cuda python3 similarity.py $all_exp_folders layers=$layers
