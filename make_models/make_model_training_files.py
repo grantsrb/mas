@@ -1,5 +1,8 @@
 """
-Run this script to update the model creation files.
+Run this script from the top directory to update the model creation files.
+
+$ python make_models/make_model_training_files.py
+
 """
 import os
 import sys
@@ -9,16 +12,16 @@ import copy
 
 
 ## Update these values
-root = "make_models" # the name of the directory in which this script resides
-main_save_directory = "/mnt/fs2/grantsrb/mas_moreseeds_neurips2025/"
+root = "make_models" # the name of the directory in which this script resides relative to where you run this script (probably don't want to change this)
+main_save_directory = "../models/" # the directory you wish to save your files to
 main_d_model = 128
 n_epochs = 2500
-seeds =    [34567, 45678,] #[12345, 23456,]
-devices =  [8,9,0,1,2,3,4,5,6,7,]
+seeds =    [12345,] #23456, 34567, 45678, 56789,]
+devices =  [0,1,2,3,4,5,6,7,8,9,]
 rnn_unk = False # set to true if you want to include void tokens in rnns
 unk_p = 0.2
-tasks = ["Arithmetic", ] #"MultiObject", "SameObject", "MultiObjectMod", "MultiObjectRound"]
-tformer_tasks = ["MultiObject", "MultiObjectMod", "MultiObjectRound"] #"Arithmetic", ] #
+tasks = [ "MultiObject", ] #"SameObject", "MultiObjectMod", "MultiObjectRound", "Arithmetic",]
+tformer_tasks = ["MultiObject",] # "MultiObjectMod", "MultiObjectRound"] #"Arithmetic", ] #
 tformer_lr = 0.0005
 tformer_layers = 2
 rnns = ["GRU", "LSTM"]
@@ -37,7 +40,7 @@ if len(sys.argv)>=2:
 print("Making Config Files")
 print("Devices:", devices)
 print("Seeds:", seeds)
-print("DModels:", seeds)
+print("DModels:", main_d_model)
 
 if os.path.exists(root):
     os.chdir(root)

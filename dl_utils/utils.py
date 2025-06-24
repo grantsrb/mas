@@ -1117,6 +1117,57 @@ def get_nonzero_entries(arr):
             if aa: idxs.append([row,col])
     return idxs
 
+def analytical_linear_regression(
+    X, y,
+    val_split=0.2,
+    l2_reg=0.0,
+    ret_preds_and_labels=False,
+):
+    """
+    Perform linear regression using closed-form analytical solution with PyTorch.
+
+    Args:
+        X: (numpy.ndarray)
+            Feature matrix of shape (N, D)
+        y: (numpy.ndarray)
+            Label vector of shape (N,)
+        val_split: (float)
+            Fraction of data to use for validation
+        l2_reg: (float)
+            L2 regularization strength (lambda). Default is 0 (no regularization)
+
+    Returns:
+        weights: Fitted weights (torch.Tensor of shape (D+1,))
+        val_loss: Mean squared error on validation set
+    """
+    # Add bias term (column of 1s)
+    ones = torch.ones(len(X), 1)
+    X = torch.cat([X, ones], dim=1)
+
+    perm = torch.randperm(len(X)).long()
+    vi = int(len(X)*val_split)
+    X_val,X_train = X[perm[:vi]], X[perm[vi:]]
+    y_val,y_train = y[perm[:vi]].reshape(-1), y[perm[vi:]].reshape(-1)
+
+
+    # Closed-form solution: w = (XᵀX)⁻¹Xᵀy
+    XtX = torch.matmul(X_train.T, X_train)
+    if l2_reg > 0:
+            reg_matrix = torch.eye(XtX.shape[0])
+            reg_matrix[-1, -1] = 0  # Don't regularize bias
+            XtX += l2_reg * reg_matrix
+    Xty = X_train.T @ y_train
+    weights = torch.linalg.solve(XtX, Xty)  # or torch.inverse(XtX) @ Xty
+
+    # Evaluate on validation set
+    y_pred = X_val @ weights
+    val_loss = torch.mean((y_pred - y_val) ** 2).item()
+
+    if ret_preds_and_labels:
+        return weights.flatten(), val_loss, y_pred, y_val
+    return weights.flatten(), val_loss
+
+
 if __name__=="__main__":
     arr = torch.Tensor([
         [0,1,0,0],
