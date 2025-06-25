@@ -51,6 +51,9 @@ def config_prep(config):
 
     # can assume different cmodels will default to appropriate parameters. This
     # reduces risk of error. Just make a new causal model for new interventions
+    if type(config.get("cmodel_names",None))==str:
+        cname = config["cmodel_names"]
+        config["cmodel_names"] = [cname for _ in config["model_names"]]
     if config.get("cmodel_names", None) is None:
         mconfigs = [get_config(mname) for mname in config["model_names"]]
         mconfigs = [ mc if mc is not None else {} for mc in mconfigs ]
@@ -811,7 +814,6 @@ def main():
     #    Make/Get Intervention Data
     ####################################################
     intrv_datasets = {k: dict() for k in tokenized_datasets }
-    src_dfs = {k: dict() for k in tokenized_datasets}
     n_subspaces = 0
     print("Info:")
     print("1:", config["infos"][0])
@@ -839,7 +841,7 @@ def main():
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
                     ttype1 = model_configs[sidx].get("task_type", "MultiObject")
                     ttype2 = model_configs[tidx].get("task_type", "MultiObject")
-                    intrv_data, src_df = make_intrv_data_from_seqs(
+                    intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
                         src_swap_keys=src_swap_keys,
@@ -854,9 +856,8 @@ def main():
                         use_cl=(sidx,tidx) in config["cl_directions"],
                         use_src_data_for_cl=ttype1==ttype2,
                         tokenizer=tokenizers[tidx],
-                        ret_src_df=True,
+                        ret_src_labels=True,
                     )
-                    src_dfs[k][(sidx,tidx,vidx)] = src_df
                     intrv_data = add_prompt(
                         intrv_data,
                         src_tokenizer=tokenizers[sidx],
@@ -1047,25 +1048,54 @@ def main():
     ##########################
     #    Test Linear Decodability of Features
     ##########################
-    print("Linear Decoding Results:")
-    for k in all_src_activations:
-        for dirvar_tup in all_src_activations[k].keys():
+    if "src_labels" in intrv_data:
+        print("Linear Decoding Results:")
+        for dirvar_tup in all_src_activations["train"].keys():
             sidx,tidx,vidx = dirvar_tup
-            actvs = all_src_activations[k][dirvar_tup]
+            swap_key = config["swap_keys"][sidx][vidx]
+            if swap_key=="full": continue
+
+            # Training
+            actvs = all_src_activations["train"][dirvar_tup]
             actvs = actvs.reshape(-1, actvs.shape[-1])
-            src_df = src_dfs[k][dirvar_tup]
-            pad_id = infos[sidx]["pad_token_id"]
-            eos_id = infos[sidx]["eos_token_id"]
-            valid_idxs = ~src_df["inpt_token_id"].isin({pad_id, eos_id})
-            labels = torch.FloatTensor(src_df[config["swap_keys"][sidx][vidx]])
+            labels = torch.tensor(
+                tokenized_datasets["train"][dirvar_tup]["src_labels"]
+            )[...,:-1]#.reshape(-1).float()
+            tids = torch.tensor(
+                tokenized_datasets["train"][dirvar_tup]["src_input_ids"]
+            )[...,:-1]#.reshape(-1)
+            mask = (labels>-1)&(tids!=infos[sidx]["eos_token_id"])
+            mask = mask&(tids!=infos[sidx]["trig_token_ids"][0])
+            labels = labels.reshape(-1).float()
+            mask = mask.reshape(-1)
+
+            # Validation
+            vactvs = all_src_activations["valid"][dirvar_tup]
+            vactvs = vactvs.reshape(-1, vactvs.shape[-1])
+            vlabels = torch.tensor(
+                tokenized_datasets["valid"][dirvar_tup]["src_labels"]
+            )[...,:-1]
+            tids = torch.tensor(
+                tokenized_datasets["valid"][dirvar_tup]["src_input_ids"]
+            )[...,:-1]
+            vmask = (vlabels>-1)&(tids!=infos[sidx]["eos_token_id"])
+            vmask = vmask&(tids!=infos[sidx]["trig_token_ids"][0])
+            vlabels = vlabels.reshape(-1).float()
+            vmask = vmask.reshape(-1)
+
+            # Linear Regression
             _, verr, vpreds, vlabs = analytical_linear_regression(
-                X=actvs[valid_idxs],
-                y=labels[valid_idxs],
+                X=actvs[mask],
+                y=labels[mask],
+                X_val=vactvs[vmask],
+                y_val=vlabels[vmask],
                 ret_preds_and_labels=True)
-            acc = (torch.round(vpreds)==vlabs).float().mean()
-            print(k,"Model:", sidx, "- Var:", config["swap_keys"][sidx][vidx])
-            print("\tErr:",verr.item(), "- Acc:", acc.item())
-    print()
+            corrects = torch.round(vpreds)==vlabs
+            acc = corrects.float().mean()
+            print("Model:", sidx, "- Var:", config["swap_keys"][sidx][vidx])
+            print("\tErr:", verr, "- Acc:", acc.item())
+            print("\tValues:", sorted(list(set(labels[mask].cpu().tolist()))))
+        print()
 
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker

@@ -351,7 +351,7 @@ def add_prompt(
                 elif "attention" in k or "attn" in k:
                     mask = [1 for _ in range(el)]
                     data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
-                elif "swap" in k:
+                elif "swap" in k or "src_labels" in k:
                     mask = [-1 for _ in range(el)]
                     data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
                 elif "task" in k:
@@ -446,7 +446,7 @@ def pad_data_dict(
                 if left:
                     data_dict[k][i] += offset
                 continue
-            elif "swap" in k:
+            elif "swap" in k or "src_labels" in k:
                 mask = [-1 for _ in range(offset)]
             elif "mask" in k:
                 mask = [0 for _ in range(offset)]
