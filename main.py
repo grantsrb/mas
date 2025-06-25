@@ -40,6 +40,17 @@ from tasks import DEFAULT_INFOS
 import pandas as pd # import after transformers to avoid versioning bug
 
 def config_prep(config):
+    # Catch plural errors:
+    for k in [
+        "cmodel_names", "swap_keys", "mtx_types", "model_names",
+        "dataset_names", "padding_sides", "layers", 
+    ]:
+        singular = k[:-1]
+        assert singular not in config, f"Must use {k} instead of {singular}"
+
+    if type(config["model_names"])==str:
+        config["model_names"] = config["model_names"].split(",")
+
     n_models = len(config["model_names"])
     if type(config["mtx_types"])==str:
         config["mtx_types"] = [config["mtx_types"] for _ in range(n_models)]
