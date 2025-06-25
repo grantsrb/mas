@@ -134,8 +134,9 @@ def make_df_from_seqs(seqs, cmodel, info=None, post_varbs=False):
                 'inpt_token_id': int
                 'outp_token_id': int
                 '<varb_key1>': object
-                    the input variable value corresponding to
-                    <varb1>
+                    the variable value corresponding to <varb1> either
+                    before or after processing by the causal model
+                    depending on the value of `post_varbs`
     """
     df_dict = {
         "sample_idx": [],
@@ -399,6 +400,26 @@ def make_counterfactual_seqs(
             print("\tOutp:", tensor2str(torch.tensor(intrv_seq),n=5))
     return intrv_seqs, intrv_varbs_list, intrv_tmasks
 
+def get_labels(varb_df, key):
+    """
+    Returns the value of the variable at each index in the df based on
+    step and ep indices.
+
+    Args:
+        varb_df: dataframe
+            the variables at each step in the sequences. Needs keys:
+            "step_idx" and "sample_idx"
+        key: str
+            the key to extract
+    """
+    varb_df = varb_df.sort_values(by=["sample_idx", "step_idx"])
+    sample_idxs = sorted(list(set(varb_df["sample_idx"])))
+    labels = []
+    for samp_idx in sample_idxs:
+        samp = varb_df.loc[varb_df["sample_idx"]==samp_idx, key]
+        labels.append( list(samp) )
+    return labels
+
 def make_intrv_data_from_seqs(
         trg_data,
         src_data,
@@ -415,7 +436,7 @@ def make_intrv_data_from_seqs(
         use_cl=False,
         use_src_data_for_cl=True,
         tokenizer=None,
-        ret_src_df=False,
+        ret_src_labels=True,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -457,9 +478,9 @@ def make_intrv_data_from_seqs(
             cl loss.
         use_src_data_for_cl: bool
             if true, will provide the cl data from the src sequences
-        ret_src_df: bool
-            if true, will return the source data dataframe containing
-            the high-level variable values for each step in the sequence.
+        ret_src_labels: bool
+            if true, will return linear regression labels for the source
+            data.
     Returns:
         intrv_data: dict
             'src_seqs': list of lists of tokenized strings
@@ -498,6 +519,11 @@ def make_intrv_data_from_seqs(
         info=src_info,
         stepwise=stepwise,
     )
+    ret_src_labels = ret_src_labels and src_swap_keys[0]!="full"
+    if ret_src_labels:
+        key = src_swap_keys
+        if type(key)==list: key = key[0]
+        src_labels = get_labels(varb_df=src_df, key=key)
     assert len(src_swap_masks[0])==len(src_seqs[0])
 
     # 2. get the target variables and swap indices
@@ -580,11 +606,11 @@ def make_intrv_data_from_seqs(
         "trg_swap_idxs": trg_swap_idxs,
         "src_swap_idxs": src_swap_idxs,
     }
+    if ret_src_labels:
+        d["src_labels"] = src_labels
 
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
         d["cl_input_ids"] = cl_seqs
-    if ret_src_df:
-        return d, src_df
     return d
 

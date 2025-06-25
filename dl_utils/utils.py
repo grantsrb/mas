@@ -1119,6 +1119,8 @@ def get_nonzero_entries(arr):
 
 def analytical_linear_regression(
     X, y,
+    X_val=None,
+    y_val=None,
     val_split=0.2,
     l2_reg=0.0,
     ret_preds_and_labels=False,
@@ -1127,10 +1129,14 @@ def analytical_linear_regression(
     Perform linear regression using closed-form analytical solution with PyTorch.
 
     Args:
-        X: (numpy.ndarray)
-            Feature matrix of shape (N, D)
-        y: (numpy.ndarray)
-            Label vector of shape (N,)
+        X: torch tensor (N, D)
+            Feature matrix
+        y: torch tensor (N,)
+            Label vector
+        X_val: (optional) torch tensor (N, D) or None
+            Validation feature matrix
+        y_val: (optional) torch tensor (N,) or None
+            Validation label vector
         val_split: (float)
             Fraction of data to use for validation
         l2_reg: (float)
@@ -1144,10 +1150,15 @@ def analytical_linear_regression(
     ones = torch.ones(len(X), 1)
     X = torch.cat([X, ones], dim=1)
 
-    perm = torch.randperm(len(X)).long()
-    vi = int(len(X)*val_split)
-    X_val,X_train = X[perm[:vi]], X[perm[vi:]]
-    y_val,y_train = y[perm[:vi]].reshape(-1), y[perm[vi:]].reshape(-1)
+    if X_val is None:
+        perm = torch.randperm(len(X)).long()
+        vi = int(len(X)*val_split)
+        X_val,X_train = X[perm[:vi]], X[perm[vi:]]
+        y_val,y_train = y[perm[:vi]].reshape(-1), y[perm[vi:]].reshape(-1)
+    else:
+        X_train, y_train = X, y
+        ones = torch.ones(len(X_val), 1)
+        X_val = torch.cat([X_val, ones], dim=1)
 
 
     # Closed-form solution: w = (XᵀX)⁻¹Xᵀy
@@ -1161,7 +1172,9 @@ def analytical_linear_regression(
 
     # Evaluate on validation set
     y_pred = X_val @ weights
-    val_loss = torch.mean((y_pred - y_val) ** 2).item()
+    val_loss = None
+    if y_val is not None:
+        val_loss = torch.mean((y_pred - y_val) ** 2).item()
 
     if ret_preds_and_labels:
         return weights.flatten(), val_loss, y_pred, y_val
