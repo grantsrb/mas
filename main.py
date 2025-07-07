@@ -95,7 +95,7 @@ def config_prep(config):
         if len(config["train_directions"])>0:
             config["train_directions"] = [
                 tuple(td) for td in config["train_directions"] if td is not None]
-    elif config["train_directions"] in {None, "all"}:
+    elif config["train_directions"] in {None, "all", "none"}:
         config["train_directions"] = []
         for s in range(n_models):
             for t in range(n_models):
@@ -105,6 +105,11 @@ def config_prep(config):
         config["cl_directions"] = [tuple(td) for td in config["cl_directions"]]
     elif config["cl_directions"] in {None, "none"}:
         config["cl_directions"] = []
+    elif config["cl_directions"] =="all":
+        config["cl_directions"] = []
+        for s in range(n_models):
+            for t in range(n_models):
+                config["cl_directions"].append((s,t))
 
     config["layers"] = [
             "inpt_identity" if l=="embeddings" else l for l in config["layers"]]
@@ -231,12 +236,16 @@ def forward_pass(
         vidx=None,
         tforce=False,
         track_grad=True,
+        cl_divergence=False,
     ):
     """
     Args:
         src_activations: torch tensor (B,S,D)
         cl_latents: torch tensor (B,S,D)
             use the trg_swap_mask to isolate the cl latent targets
+        cl_divergence: bool
+            track the kl divergence between the intervened vectors
+            and the counterfactual latents.
     """
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
     const_targ_inpt_id = config.get("const_targ_inpt_id", False)
@@ -342,6 +351,7 @@ def forward_pass(
     ## CL LOSS
     ##################
     cl_loss = torch.zeros(1).to(device)
+    cl_div = torch.zeros(1).to(device)
     if cl_latents is not None and "intrv_vecs" in comms_dict:
         cl_latents = cl_latents[batch_indices].to(device)
         prev_grad_state = torch.is_grad_enabled()
@@ -353,6 +363,13 @@ def forward_pass(
             swap_mask=batch["trg_swap_masks"]>=0,
         )
         torch.set_grad_enabled(prev_grad_state)
+        if cl_divergence:
+            cl_div = cl_kl_divergence(
+                intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
+                cl_vecs=cl_latents,
+                swap_mask=batch["trg_swap_masks"]>=0,
+                laplace=1,
+            )
 
     if "outp_tmask" in batch:
         tmask = batch["outp_tmask"].to(device)
@@ -445,6 +462,8 @@ def forward_pass(
             #print("GenIds:", outs[i][tmask[i]])
             #print()
 
+    if cl_divergence:
+        return loss, cl_loss, tok_acc, trial_acc, cl_div
     return loss, cl_loss, tok_acc, trial_acc
 
 def get_embedding_name(model, layer=""):
@@ -495,6 +514,46 @@ def get_loss_fxn(fxn_name):
         return cos_and_mse_loss
     print("Invalid aux function name")
     raise NotImplemented
+
+def np_kl_divergence(p, q):
+    prob_logs = p*np.log(p/(q+1e-10)+1e-10)
+    prob_logs[prob_logs!=prob_logs] = 100
+    return prob_logs.sum()
+
+def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
+    """
+    Args:
+        intrv_vecs: torch tensor (B,S,D)
+            the intervened vectors
+        cl_vecs: torch tensor (B,S,D)
+            the target vectors
+        swap_mask: torch tensor (B,S)
+            a mask where trues denote positions to use for the cl loss.
+    Returns
+        cl_loss: torch tensor (1,)
+            the counterfactual latent kl divergence
+    """
+    intrv_vecs = intrv_vecs[swap_mask]
+    cl_vecs = cl_vecs[swap_mask]
+    if type(intrv_vecs) is torch.Tensor:
+        intrv_vecs = intrv_vecs.cpu().numpy()
+    if type(cl_vecs) is torch.Tensor:
+        cl_vecs = cl_vecs.cpu().numpy()
+    rang = [
+        min(intrv_vecs.min(), cl_vecs.min()),
+        max(intrv_vecs.max(), cl_vecs.max())
+    ]
+    cl_hist, bins = np.histogram(cl_vecs, range=rang, density=False)
+    cl_hist += laplace
+    cl_density = cl_hist/cl_hist.sum()
+    intrv_hist, _ = np.histogram(intrv_vecs, bins=bins, density=False)
+    intrv_hist += laplace
+    intrv_density = intrv_hist/intrv_hist.sum()
+
+    return np.mean([
+        np_kl_divergence(intrv_density, cl_density),
+        np_kl_divergence(cl_density, intrv_density),
+    ])
 
 def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
     """
@@ -606,13 +665,24 @@ def main():
             # training of the extraneous information, encouraging
             # it to be a null operation.
         "mtx_types": ["RotationMatrix", "RotationMatrix"],
+        "nonlin_align_fn": "identity", # Inverse of a function applied
+            # before the rotation matrix during interventions. options:
+            # "identity", "tanh", "sigmoid"
+        ## Not Implmented Yet
+        ##"normalize_alignment": False, # If true, will normalize the reps
+        ##    # before alignment. Normalization is applied after the
+        ##    # nonlinearity.
         "identity_init": False,
         "identity_rot": False,
         "mask_type":   "FixedMask", # BoundlessMask
         "n_units": None,
         "learnable_addition": False,
         "const_targ_inpt_id": False, # If true, will use the resp_id for all target input ids
-        "fsr": False, # (Functionally sufficient representations) only applies if using fca. Discards the excess components. Equivalent to using a vector of 0s for all input embeddings
+        "fsr": False, # (Functionally sufficient representations) only applies
+            # if using fca. Discards the excess components in the target
+            # representation during an intervention. Ends up being equivalent
+            # to using a vector of 0s for input embeddings at the intervention
+            # positions
 
         "num_training_steps": 50000,
         "print_every": 100,
@@ -631,12 +701,17 @@ def main():
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
-        "cl_directions": None,
+        "cl_directions": "all", # "all" will default to all directions.
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target for the counterfactual latent loss. None
-            # defaults to no directions.
-        "cl_eps": 7, # raw multiplicative factor does not affect normal loss
+            # defaults to no directions. Set cl_eps to 0 if you wish to
+            # track the cl_loss without training it.
+        "cl_eps": 0, # raw multiplicative factor for the cl_loss does not
+            # affect the normal loss
+        "track_intrv_distr": False, # if true, will track the difference
+            # between the intervention distribution and the original distribution.
+            # Uses kl divergence, mse, and cosine similarity
 
         "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
         "debugging": False,
@@ -651,7 +726,6 @@ def main():
     print("Config:")
     for k in sorted(list(config.keys())):
         print(k, config[k])
-
 
     config = config_prep(config) # general error catching
     config = fill_in_prompts_and_replacements(config)
@@ -852,6 +926,9 @@ def main():
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
                     ttype1 = model_configs[sidx].get("task_type", "MultiObject")
                     ttype2 = model_configs[tidx].get("task_type", "MultiObject")
+                    sk1 = config["swap_keys"][sidx]=="full"
+                    sk2 = config["swap_keys"][tidx]=="full"
+                    usdfc = ttype1==ttype2 and sk1 and sk2
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
@@ -865,7 +942,7 @@ def main():
                         trg_filter=config["filters"][tidx],
                         stepwise=config.get("stepwise", False),
                         use_cl=(sidx,tidx) in config["cl_directions"],
-                        use_src_data_for_cl=ttype1==ttype2,
+                        use_src_data_for_cl=usdfc,
                         tokenizer=tokenizers[tidx],
                         ret_src_labels=True,
                     )
@@ -971,8 +1048,9 @@ def main():
 
                 src_actvs = actvs[config["layers"][src_idx]].squeeze()
                 all_src_activations[k][dirvar_tup] = src_actvs
-                
-                ## Collect cl latents
+
+                ## Collect cl latents by generating them from cl sequences
+                ## paired with cl indices to pick out the correct latents.
                 cl_latents[k][dirvar_tup] = None
                 if (src_idx,trg_idx) in config["cl_directions"]:
                     cl_latents[k][dirvar_tup] = get_cl_latents(
@@ -1116,6 +1194,7 @@ def main():
         mtx_kwarg_keys = {
             "rank", "identity_init", "bias", "mu",
             "sigma", "identity_rot", "orthogonal_map",
+            "nonlin_align_fn",
         }
         mtx_kwargs = dict()
         for key in mtx_kwarg_keys:
@@ -1171,6 +1250,8 @@ def main():
         "valid_loss": [],
         "valid_tok_acc": [],
         "valid_trial_acc": [],
+        "cl_loss": [],
+        "cl_divergence": [],
         "src_idx": [],
         "trg_idx": [],
         "varb_idx": [],
@@ -1190,6 +1271,8 @@ def main():
                 val_losses = dict()
                 val_trial_accs = dict()
                 val_tok_accs = dict()
+                val_cl_loss = dict()
+                val_cl_div = dict()
                 startt = time.time()
                 for dirvar_tup in tokenized_datasets["train"]:
                     runtime = time.time()
@@ -1249,7 +1332,7 @@ def main():
                         val_tok = 0
                         val_trial = 0
                         for val_indices in valid_loader:
-                            vloss, vcl_loss, vtok, vtrial = forward_pass(
+                            vloss, vcl_loss, vtok, vtrial, vcl_div = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
                                 vidx=vidx,
@@ -1265,6 +1348,7 @@ def main():
                                 verbose=True,
                                 tforce=False,
                                 track_grad=False,
+                                cl_divergence=True,
                             )
                             val_loss  += vloss.item() /len(valid_loader)
                             val_tok   += vtok.item()  /len(valid_loader)
@@ -1272,6 +1356,8 @@ def main():
                         val_losses[dirvar_tup] = val_loss
                         val_tok_accs[dirvar_tup] = val_tok
                         val_trial_accs[dirvar_tup] = val_trial
+                        val_cl_loss[dirvar_tup] = vcl_loss.item() if vcl_loss is not None else 0
+                        val_cl_div[dirvar_tup] = vcl_div.item() if vcl_div is not None else 0
 
                 if not config["conserve_memory"]:
                     tot_loss.backward()
@@ -1286,6 +1372,7 @@ def main():
                         print("Layers:", config["layers"])
                         print("Swap Keys:", config["swap_keys"])
                         print("Mtx  Type:", config["mtx_types"][0])
+                        print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
                         print("Mask Type:", type(intrv_module.swap_mask).__name__,
                                 "- FSR:", config["fsr"],
                                 "- Const Inpt:", config["const_targ_inpt_id"],
@@ -1296,6 +1383,7 @@ def main():
                         print("CL Dirs:",
                             " ".join(sorted(
                                 [str(d) for d in config["cl_directions"]])))
+                        print("CL Eps:", config.get("cl_eps", 0))
                         print()
 
                         print("Step:", global_step, "| Train Loss:", tot_loss.item())
@@ -1331,6 +1419,23 @@ def main():
                             s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
                             s += "| M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
                         print(s)
+                        print()
+
+                        print("Valid CL Loss:")
+                        s = "\tM1->M1: " + str(round(val_cl_loss[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(val_cl_loss[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(val_cl_loss[(1,1,vidx)],5))
+                        print(s)
+                        print("Valid CL Divergence:")
+                        s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += "| M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
+                            s += "\n\tM2->M1:" + str(round(val_cl_div[(1,0,vidx)], 5))
+                            s += "| M2->M2:" + str(round(val_cl_div[(1,1,vidx)],5))
+                        print(s)
+
                         print("Experiment:", os.path.join(save_folder, save_name))
                         print("M1:", config["model_names"][0])
                         if len(config["model_names"])>1:
@@ -1347,6 +1452,8 @@ def main():
                         df_dict["valid_loss"].append(float(val_losses[tup]))
                         df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
                         df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
+                        df_dict["cl_loss"].append(float(val_cl_loss[tup]))
+                        df_dict["cl_divergence"].append(float(val_cl_div[tup]))
                         df_dict["src_idx"].append(s)
                         df_dict["trg_idx"].append(t)
                         df_dict["varb_idx"].append(v)
