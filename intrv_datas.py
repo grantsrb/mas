@@ -273,6 +273,11 @@ def sample_cl_indices(
                 ])
             else:
                 print("Failed to find CL Match!!")
+                samp = df.loc[start_idx].sample()
+                indices.append([
+                    int(samp.iloc[0]["sample_idx"]),
+                    int(samp.iloc[0]["step_idx"]),
+                ])
         if flatten:
             cl_indices += indices
         else:
@@ -523,7 +528,9 @@ def make_intrv_data_from_seqs(
     if ret_src_labels:
         key = src_swap_keys
         if type(key)==list: key = key[0]
-        src_labels = get_labels(varb_df=src_df, key=key)
+        if key!="full":
+            src_labels = get_labels(varb_df=src_df, key=key)
+        else: ret_src_labels = False
     assert len(src_swap_masks[0])==len(src_seqs[0])
 
     # 2. get the target variables and swap indices
@@ -559,7 +566,7 @@ def make_intrv_data_from_seqs(
 
     # Collect the counterfactual latent data if needed. cl_idxs are row,col
     # pairs that can be used to index into and isolate the counterfactual
-    # latents produced using the cl_seqs
+    # latents produced using the cl_seqs from the target model.
     cl_idxs = None
     if use_cl:
         if stepwise: raise NotImplemented
