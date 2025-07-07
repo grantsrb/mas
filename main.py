@@ -351,7 +351,10 @@ def forward_pass(
     ## CL LOSS
     ##################
     cl_loss = torch.zeros(1).to(device)
-    cl_div = torch.zeros(1).to(device)
+    cl_div = 0
+    cl_sdx = 0 # Amount that the max value of the intervened latents 
+        # exceeds the max value of the cl latents measured in standard 
+        # deviations
     if cl_latents is not None and "intrv_vecs" in comms_dict:
         cl_latents = cl_latents[batch_indices].to(device)
         prev_grad_state = torch.is_grad_enabled()
@@ -364,7 +367,7 @@ def forward_pass(
         )
         torch.set_grad_enabled(prev_grad_state)
         if cl_divergence:
-            cl_div = cl_kl_divergence(
+            cl_div, cl_sdx = cl_kl_divergence(
                 intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
                 cl_vecs=cl_latents,
                 swap_mask=batch["trg_swap_masks"]>=0,
@@ -463,7 +466,7 @@ def forward_pass(
             #print()
 
     if cl_divergence:
-        return loss, cl_loss, tok_acc, trial_acc, cl_div
+        return loss, cl_loss, tok_acc, trial_acc, cl_div, cl_sdx
     return loss, cl_loss, tok_acc, trial_acc
 
 def get_embedding_name(model, layer=""):
@@ -530,8 +533,12 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
         swap_mask: torch tensor (B,S)
             a mask where trues denote positions to use for the cl loss.
     Returns
-        cl_loss: torch tensor (1,)
+        cl_divergence: torch tensor (1,)
             the counterfactual latent kl divergence
+        cl_sdx: torch tensor (1,)
+            the amount that the maximum extreme of the intrvened latents
+            exceeds that of the corresponding extreme from the natural
+            distribution measured in standard deviations.
     """
     intrv_vecs = intrv_vecs[swap_mask]
     cl_vecs = cl_vecs[swap_mask]
@@ -539,6 +546,10 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
         intrv_vecs = intrv_vecs.cpu().numpy()
     if type(cl_vecs) is torch.Tensor:
         cl_vecs = cl_vecs.cpu().numpy()
+    cl_sdx = max(
+        intrv_vecs.max() - cl_vecs.max(),
+        cl_vecs.min() - intrv_vecs.min(),
+    )/cl_vecs.std()
     rang = [
         min(intrv_vecs.min(), cl_vecs.min()),
         max(intrv_vecs.max(), cl_vecs.max())
@@ -553,7 +564,7 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
     return np.mean([
         np_kl_divergence(intrv_density, cl_density),
         np_kl_divergence(cl_density, intrv_density),
-    ])
+    ]), cl_sdx
 
 def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
     """
@@ -1273,6 +1284,10 @@ def main():
                 val_tok_accs = dict()
                 val_cl_loss = dict()
                 val_cl_div = dict()
+                val_cl_sdx = dict() # Amount that the max value of the
+                    # cl_latents exceeds the max value and the natural 
+                    # latents max value measured in standard deviations 
+                    # from the natural mean
                 startt = time.time()
                 for dirvar_tup in tokenized_datasets["train"]:
                     runtime = time.time()
@@ -1332,7 +1347,7 @@ def main():
                         val_tok = 0
                         val_trial = 0
                         for val_indices in valid_loader:
-                            vloss, vcl_loss, vtok, vtrial, vcl_div = forward_pass(
+                            vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
                                 vidx=vidx,
@@ -1357,7 +1372,8 @@ def main():
                         val_tok_accs[dirvar_tup] = val_tok
                         val_trial_accs[dirvar_tup] = val_trial
                         val_cl_loss[dirvar_tup] = vcl_loss.item() if vcl_loss is not None else 0
-                        val_cl_div[dirvar_tup] = vcl_div.item() if vcl_div is not None else 0
+                        val_cl_div[dirvar_tup] =  vcl_div if vcl_div is not None else 0
+                        val_cl_sdx[dirvar_tup] = vcl_sdx if vcl_sdx is not None else 0
 
                 if not config["conserve_memory"]:
                     tot_loss.backward()
@@ -1383,7 +1399,7 @@ def main():
                         print("CL Dirs:",
                             " ".join(sorted(
                                 [str(d) for d in config["cl_directions"]])))
-                        print("CL Eps:", config.get("cl_eps", 0))
+                        print("\tCL Eps:", config.get("cl_eps", 0))
                         print()
 
                         print("Step:", global_step, "| Train Loss:", tot_loss.item())
@@ -1428,7 +1444,8 @@ def main():
                             s += "\n\tM2->M1:" + str(round(val_cl_loss[(1,0,vidx)], 5))
                             s += "| M2->M2:" + str(round(val_cl_loss[(1,1,vidx)],5))
                         print(s)
-                        print("Valid CL Divergence:")
+                        max_diff = max([v for v in val_cl_sdx.values()])
+                        print(f"Valid CL Divergence: (Excess in SDs: {max_diff})")
                         s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += "| M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
