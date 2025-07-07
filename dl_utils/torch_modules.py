@@ -1762,6 +1762,34 @@ def print_tensor(t, n_tab=0):
             print_tensor(tt, n_tab=n_tab+1)
             print()
 
+class InvSigmoid(nn.Module):
+    """
+    Inverse sigmoid activation function.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def forward(self, x: Tensor, *args, **kwargs) -> Tensor:
+        """
+        Arguments:
+            x: Tensor
+        """
+        return torch.log(x/(1-x))
+
+class InvTanh(nn.Module):
+    """
+    Inverse tanh activation function.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def forward(self, x: Tensor, *args, **kwargs) -> Tensor:
+        """
+        Arguments:
+            x: Tensor
+        """
+        return torch.atanh(x)
+
 class IdentityModule(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
