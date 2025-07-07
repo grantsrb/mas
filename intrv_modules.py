@@ -4,6 +4,7 @@ import copy
 
 from fca import FunctionalComponentAnalysis
 from utils import device_fxn
+from dl_utils.torch_modules import IdentityModule, InvTanh, InvSigmoid
 
 class RankRotationMatrix(torch.nn.Module):
     def __init__(self,
@@ -15,6 +16,7 @@ class RankRotationMatrix(torch.nn.Module):
             sigma=1,
             identity_rot=False,
             orthogonal_map=None,
+            nonlin_align_fn=None,
             **kwargs):
         """
         size: int
@@ -33,12 +35,15 @@ class RankRotationMatrix(torch.nn.Module):
         identity_rot: bool
             if true, will always reset the rotation matrix to the
             identity. Used for debugging.
+        nonlin_align_fn: callable
+            inverse of a function to apply to the input before the rotation matrix.
         """
         super().__init__()
         if rank is None or not rank: rank = size
         self.rank = rank
         self.identity_rot = identity_rot
         self.identity_init = identity_init
+        self.set_nonlin_fn(nonlin_align_fn)
 
         if type(mu)==float or type(mu)==int:
             self.mu = mu
@@ -102,13 +107,32 @@ class RankRotationMatrix(torch.nn.Module):
     def get_condition(self, p=None):
         return torch.linalg.cond(self.weight, p=p)
 
+    def set_nonlin_fn(self, nonlin_align_fn):
+        """
+        Sets the non-linear function to apply to the input before the
+        rotation matrix. Actually uses the inverse first!!
+        """
+        if nonlin_align_fn is None or nonlin_align_fn=="identity":
+            self.nonlin_fwd = IdentityModule()
+            self.nonlin_inv = IdentityModule()
+        elif nonlin_align_fn=="tanh":
+            self.nonlin_fwd = InvTanh()
+            self.nonlin_inv = torch.nn.Tanh()
+        elif nonlin_align_fn=="sigmoid":
+            self.nonlin_fwd = InvSigmoid()
+            self.nonlin_inv = torch.nn.Sigmoid()
+        else:
+            raise ValueError("nonlin_align_fn must be identity, tanh, or sigmoid, got: {}".format(nonlin_align_fn))
+
     def rot_forward(self, h):
+        h = self.nonlin_fwd(h)
         h = (h-self.mu)/self.sigma
         return torch.matmul(h+self.bias, self.weight)
 
     def rot_inv(self, h):
         h = torch.matmul(h, self.weight_inv)-self.bias
         h = h*self.sigma + self.mu
+        h = self.nonlin_inv(h)
         return h
 
     def forward(self, h, inverse=False):
@@ -286,7 +310,7 @@ class PSDRotationMatrix(RotationMatrix):
     def rot_inv(self, h):
         h = torch.matmul(h, self.rot_module.inv())
         h = h*self.sigma + self.mu
-        return h
+        return self.nonlin_inv(h)
 
 class SDRotationMatrix(PSDRotationMatrix):
     """
@@ -337,6 +361,7 @@ class RelaxedRotationMatrix(RankRotationMatrix):
             self.diag.data[perm] = -self.diag.data[perm]
         self.eps = eps
         self.rot_first = rot_first
+        assert kwargs.get("nonlin_align_fn") in {None, "identity"}
 
     @property
     def scale_mtx(self):
@@ -393,62 +418,6 @@ class ScaledRotationMatrix(RankRotationMatrix):
     def unit_forward(self, h, inverse=False):
         if inverse: return self.rot_inv(h)-self.bias
         return self.rot_forward(h+self.bias)
-
-class InvertibleMatrix(RotationMatrix):
-    def __init__(self,
-            identity_init=False,
-            bias=False,
-            eps=1,
-            **kwargs):
-        """
-        identity_init: bool
-            if true, will initialize the rotation matrix to the identity
-            matrix.
-        bias: bool
-            if true, will include a shifting term in the rotation matrix
-        """
-        raise NotImplemented
-        self.eps = eps
-        super().__init__(**kwargs)
-
-        lin = torch.nn.Linear(self.size, self.size, bias=False)
-        if identity_init:
-            lin.weight.data = torch.eye(
-                size,dtype=lin.weight.data.dtype)
-
-        # Shifting parameters
-        if bias:
-            self.bias = torch.nn.Parameter(
-                torch.zeros(size,dtype=lin.weight.data.dtype))
-        else:
-            self.bias = 0
-
-        self.rot_module = lin
-        self.diag_idx = torch.eye(self.size)==1
-
-    @property
-    def weight(self):
-        weight = self.rot_module.weight.clone()
-        weight[self.diag_idx] += self.eps*torch.sign(weight[self.diag_idx])
-        return weight
-
-    def get_determinant(self):
-        return torch.linalg.det(self.weight)
-
-    def get_condition(self, p="fro"):
-        return torch.linalg.cond(self.weight,p=p)
-
-    def rot_forward(self, h):
-        return torch.matmul(h+self.bias, self.weight)
-
-    def rot_inv(self, h):
-        inv = torch.linalg.inv(self.weight)
-        h = torch.matmul(h, inv)-self.bias
-        return h
-
-    def forward(self, h, inverse=False):
-        if inverse: return self.rot_inv(h)
-        return self.rot_forward(h)
 
 class Mask(torch.nn.Module):
     @property
