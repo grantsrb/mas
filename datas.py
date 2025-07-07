@@ -420,6 +420,9 @@ def pad_data_dict(
     ))
     src_offsets = [max_len-len(s) for s in data_dict["src_input_ids"]]
     trg_offsets = [max_len-len(s) for s in data_dict["trg_input_ids"]]
+    if "cl_input_ids" in data_dict:
+        cl_max_len = max([len(s) for s in data_dict["cl_input_ids"]])
+        cl_offsets = [cl_max_len-len(s) for s in data_dict["cl_input_ids"]]
 
     ### START TESTING
     for i in range(len(src_offsets)):
@@ -436,6 +439,10 @@ def pad_data_dict(
             left = int(trg_pad_side=="left")
             pad_id = trg_pad_id
             offsets = trg_offsets
+        elif "cl" in k:
+            left = int(trg_pad_side=="left")
+            pad_id = trg_pad_id
+            offsets = cl_offsets
         else:
             print("Skipping", k, "in padding")
             continue
@@ -490,6 +497,7 @@ def convert_to_tensors(data_dict):
                 lens = dict()
                 for samp in data_dict[k]:
                     lens[len(samp)] = lens.get(len(samp), 0) + 1
+                print(k)
                 print(lens)
                 print(samp)
                 assert False
