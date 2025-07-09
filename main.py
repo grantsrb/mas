@@ -1459,16 +1459,16 @@ def main():
                         s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(tok_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(tok_accs[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(tok_accs[(1,1,vidx)],5))
                         print(s)
 
                         print("Train Trial Acc:",tot_trial)
                         s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(trial_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(trial_accs[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(trial_accs[(1,1,vidx)],5))
                         print(s)
                         print()
 
@@ -1476,16 +1476,16 @@ def main():
                         s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(val_tok_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_tok_accs[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_tok_accs[(1,1,vidx)],5))
                         print(s)
 
                         print("Valid Trial Acc:")
                         s = "\tM1->M1: " + str(round(val_trial_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_trial_accs[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_trial_accs[(1,1,vidx)],5))
                         print(s)
                         print()
 
@@ -1493,16 +1493,16 @@ def main():
                         s = "\tM1->M1: " + str(round(val_cl_loss[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(val_cl_loss[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(val_cl_loss[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_cl_loss[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_cl_loss[(1,1,vidx)],5))
                         print(s)
                         max_diff = max([v for v in val_cl_sdx.values()])
                         print(f"Valid CL Divergence: (Excess in SDs: {max_diff})")
                         s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
-                            s += "\n\tM2->M1:" + str(round(val_cl_div[(1,0,vidx)], 5))
-                            s += " | M2->M2:" + str(round(val_cl_div[(1,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_cl_div[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_cl_div[(1,1,vidx)],5))
                         print(s)
 
                         print("Experiment:", os.path.join(save_folder, save_name))
