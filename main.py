@@ -92,6 +92,9 @@ def config_prep(config):
             config["swap_keys"][si] = [sks]
         if config.get("incl_empty_varbs", False):
             config["swap_keys"][si].append("")
+    if len(config["swap_keys"])<n_models:
+        config["swap_keys"] = config["swap_keys"]*n_models
+
     config["n_subspaces"] = len(config["swap_keys"][0])-int(config.get(
         "incl_empty_varbs", False))
     
@@ -117,6 +120,8 @@ def config_prep(config):
 
     config["layers"] = [
             "inpt_identity" if l=="embeddings" else l for l in config["layers"]]
+    if len(config["layers"])<n_models:
+        config["layers"] = config["layers"]*n_models
 
     if "learning_rate" in config:
         print("use lr instead of learning_rate keyword")
@@ -962,6 +967,10 @@ def main():
                     config["swap_keys"][tidx],
                 ))
                 for vidx,(src_swap_key, trg_swap_key) in z:
+                    if src_swap_key=="" and trg_swap_key=="" and tidx!=sidx:
+                        # Only want to include empty training on within model
+                        # interventions
+                        continue
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print(sidx, "Info:", infos[sidx])
                     print(tidx, "Info:", infos[tidx])
@@ -1316,6 +1325,20 @@ def main():
                     # cl_latents exceeds the max value and the natural 
                     # latents max value measured in standard deviations 
                     # from the natural mean
+                
+                # Reset the tracking dictionaries for this step.
+                tracking_dicts = [
+                    losses, trial_accs, tok_accs,
+                    val_losses, val_trial_accs, val_tok_accs,
+                    val_cl_loss, val_cl_div, val_cl_sdx,
+                ]
+                for tidx in range(len(models)):
+                    for sidx in range(len(models)):
+                        for vidx in range(len(config["swap_keys"][sidx])):
+                            dirvar_tup = (sidx, tidx, vidx)
+                            for d in tracking_dicts:
+                                d[dirvar_tup] = 0
+
                 startt = time.time()
                 accum = config.get("grad_accumulation_steps", 1)
                 n_varbs = len(config["swap_keys"][0])
@@ -1435,51 +1458,51 @@ def main():
                         print("Train Tok Acc:",  tot_tok)
                         s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(tok_accs[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(tok_accs[(1,1,vidx)],5))
                         print(s)
 
                         print("Train Trial Acc:",tot_trial)
                         s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(trial_accs[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(trial_accs[(1,1,vidx)],5))
                         print(s)
                         print()
 
                         print("Valid Tok Acc:")
                         s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(val_tok_accs[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(val_tok_accs[(1,1,vidx)],5))
                         print(s)
 
                         print("Valid Trial Acc:")
                         s = "\tM1->M1: " + str(round(val_trial_accs[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(val_trial_accs[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(val_trial_accs[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(val_trial_accs[(1,1,vidx)],5))
                         print(s)
                         print()
 
                         print("Valid CL Loss:")
                         s = "\tM1->M1: " + str(round(val_cl_loss[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(val_cl_loss[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(val_cl_loss[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(val_cl_loss[(1,1,vidx)],5))
                         print(s)
                         max_diff = max([v for v in val_cl_sdx.values()])
                         print(f"Valid CL Divergence: (Excess in SDs: {max_diff})")
                         s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += "| M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
                             s += "\n\tM2->M1:" + str(round(val_cl_div[(1,0,vidx)], 5))
-                            s += "| M2->M2:" + str(round(val_cl_div[(1,1,vidx)],5))
+                            s += " | M2->M2:" + str(round(val_cl_div[(1,1,vidx)],5))
                         print(s)
 
                         print("Experiment:", os.path.join(save_folder, save_name))
