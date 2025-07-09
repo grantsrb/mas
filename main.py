@@ -90,6 +90,10 @@ def config_prep(config):
             config["swap_keys"][si] = ["full"]
         elif type(sks)==str:
             config["swap_keys"][si] = [sks]
+        if config.get("incl_empty_varbs", False):
+            config["swap_keys"][si].append("")
+    config["n_subspaces"] = len(config["swap_keys"][0])-int(config.get(
+        "incl_empty_varbs", False))
     
     if type(config["train_directions"])==list:
         if len(config["train_directions"])>0:
@@ -594,6 +598,7 @@ def get_cl_latents(
     layer,
     device,
     bsize=500,
+    tmask=None,
 ):
     """
     A helper function for collecting the counterfactual
@@ -612,16 +617,33 @@ def get_cl_latents(
     """
     model.eval()
     model.to(device)
-    actvs = collect_activations(
+    outputs = collect_activations(
         model,
         input_ids=input_ids,
         layers=[layer],
         tforce=True,
-        ret_pred_ids=False,
+        ret_pred_ids=True,
         batch_size=bsize,
         to_cpu=True,
         verbose=True,
-    )[layer]
+    )
+
+    # Quick Accuracy Check
+    pred_ids = outputs["pred_ids"]
+    corrects = torch.ones_like(pred_ids[:,:-1]).float()
+    tmask = tmask.clone().bool() if tmask is not None else torch.ones_like(input_ids).bool()
+    pids = pred_ids[:,:-1]
+    oids = input_ids[:,1:]
+    tmask = tmask[:,1:] # remove the last token from the mask
+    acc = pids[tmask].long()==oids[tmask].long()
+    corrects[tmask] = acc.float()
+    corrects = corrects.sum(-1)==corrects.shape[-1]
+    print()
+    print("CL Token Acc:", acc.float().mean().item())
+    print("CL Trial Acc:", corrects.float().mean().item())
+    print()
+
+    actvs = outputs[layer]
     shape = tuple([*swap_mask.shape, actvs.shape[-1]])
     assert swap_mask.long().sum()==len(idxs)
     cl_latents = torch.empty(shape)
@@ -674,7 +696,7 @@ def main():
             # keys for each model.
         "incl_empty_varbs": False, # if true, includes an explicit
             # training of the extraneous information, encouraging
-            # it to be a null operation.
+            # it to be a functionally null subspace.
         "mtx_types": ["RotationMatrix", "RotationMatrix"],
         "nonlin_align_fn": "identity", # Inverse of a function applied
             # before the rotation matrix during interventions. options:
@@ -724,7 +746,9 @@ def main():
             # between the intervention distribution and the original distribution.
             # Uses kl divergence, mse, and cosine similarity
 
-        "save_keys": ["mtx_types", "layers", "n_units","stepwise", "swap_keys"],
+        "save_keys": [
+            "mtx_types", "layers", "n_units","stepwise", "swap_keys"
+        ],
         "debugging": False,
     }
     config = {**defaults}
@@ -910,7 +934,6 @@ def main():
     #    Make/Get Intervention Data
     ####################################################
     intrv_datasets = {k: dict() for k in tokenized_datasets }
-    n_subspaces = 0
     print("Info:")
     print("1:", config["infos"][0])
     print()
@@ -918,15 +941,27 @@ def main():
         print("2:", config["infos"][1])
         print()
     except: pass
+
+    subspace_maps = { # maps between indices and string keys for each model
+        "subspace2varbs": [],
+        "varb2subspaces": [],
+    }
+    config["subspace_maps"] = subspace_maps
     for k in tokenized_datasets:
         for tidx in range(len(tokenized_datasets[k])):
+            subspace_maps["subspace2varbs"].append(
+                {i: key for i,key in enumerate(config["swap_keys"][tidx])}
+            )
+            subspace_maps["varb2subspaces"].append(
+                {key: i for i,key in enumerate(config["swap_keys"][tidx])}
+            )
             for sidx in range(len(tokenized_datasets[k])):
-                incl_empty = config.get("incl_empty_varbs", False)
-                skeys = config["swap_keys"][sidx] + incl_empty*[]
-                tkeys = config["swap_keys"][tidx] + incl_empty*[]
-                n_varbs = len(skeys)
-                z = enumerate(zip(skeys,tkeys))
-                for vidx,(src_swap_keys, trg_swap_keys) in z:
+                n_varbs = len(config["swap_keys"][sidx])
+                z = enumerate(zip(
+                    config["swap_keys"][sidx],
+                    config["swap_keys"][tidx],
+                ))
+                for vidx,(src_swap_key, trg_swap_key) in z:
                     print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print(sidx, "Info:", infos[sidx])
                     print(tidx, "Info:", infos[tidx])
@@ -943,8 +978,8 @@ def main():
                     intrv_data = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
-                        src_swap_keys=src_swap_keys,
-                        trg_swap_keys=trg_swap_keys,
+                        src_swap_keys=src_swap_key,
+                        trg_swap_keys=trg_swap_key,
                         src_cmodel=config["cmodels"][sidx],
                         src_info=config["infos"][sidx],
                         src_filter=config["filters"][sidx],
@@ -985,8 +1020,7 @@ def main():
                     print()
                     print()
                     intrv_data = convert_to_tensors(intrv_data)
-                    intrv_datasets[k][(sidx,tidx,vidx)] =\
-                        Dataset.from_dict(intrv_data)
+                    intrv_datasets[k][(sidx,tidx,vidx)] = Dataset.from_dict(intrv_data)
     tokenized_datasets = intrv_datasets
 
     # Create a DataLoader that iterates over indices of the filtered dataset.
@@ -1014,8 +1048,6 @@ def main():
         for k in all_src_activations:
             for dirvar_tup in tokenized_datasets[k].keys():
                 src_idx,trg_idx,varb_idx = dirvar_tup
-                if varb_idx>0: raise NotImplemented
-                #dirvar_tup = (src_idx, trg_idx, 0) # include 0 for 0 varb idx
                 src_model = models[src_idx].eval()
                 trg_model = models[trg_idx].eval()
                 startt = time.time()
@@ -1031,17 +1063,19 @@ def main():
                     device="cpu")
 
 
-                ### TODO:
-                ##print("Varbl", varb_idx)
-                ##for i in range(3):
-                ##    indices = torch.arange(len(batch["input_ids"][i])).long()
-                ##    print(tensor2str(indices))
-                ##    for kk in batch:
-                ##        try:
-                ##            print((kk+" "*(10-len(kk)))[:10], tensor2str(batch[kk][i].long()))
-                ##        except:
-                ##            print("Failed to print", kk)
-                ##    print()
+                #### TODO:
+                #if varb_idx>0:
+                #    print("Varbl", varb_idx)
+                #    for i in range(3):
+                #        indices = torch.arange(len(batch["input_ids"][i])).long()
+                #        print(tensor2str(indices))
+                #        for kk in batch:
+                #            try:
+                #                print((kk+" "*(10-len(kk)))[:10], tensor2str(batch[kk][i].long()))
+                #            except:
+                #                print("Failed to print", kk)
+                #        print()
+                #    assert False
 
 
                 actvs = collect_activations(
@@ -1069,6 +1103,7 @@ def main():
                         device=devices[trg_idx],
                         swap_mask=batch["trg_swap_masks"]>=0,
                         input_ids=batch["cl_input_ids"],
+                        tmask=batch.get("cl_task_masks", None),
                         idxs=batch["cl_idxs"],
                         layer=config["layers"][trg_idx],
                     )
@@ -1079,11 +1114,9 @@ def main():
                 print("InptTmask:", batch["src_input_tmask"].shape)
                 if "src_outp_tmask" in batch:
                     tmask = batch["src_outp_tmask"].to(device)
-                    flat_tmask = tmask.reshape(-1)
                     print("OutpTmask:", batch["src_outp_tmask"].shape)
                 else:
                     tmask = batch["src_outp_attn_mask"].to(device)
-                    flat_tmask = tmask.reshape(-1)
                     print("OutpAttn:", batch["src_outp_attn_mask"].shape)
                 corrects = torch.ones_like(tmask)
                 pids = pred_ids.to(device)[tmask]
@@ -1094,31 +1127,26 @@ def main():
                 tokacc = (idx).float().mean().item()
                 fullacc = corrects.float().mean().item()
 
-                #print("pred_ids:", pred_ids.shape)
-                #print("corrects:", corrects.shape)
-                #print("pids:", pids.shape)
-                #print("tids:", tids.shape)
-                #print("idx:", idx.shape)
                 tmask = batch["src_outp_tmask"]
                 sidx = src_idx
                 tidx = trg_idx
-                print(sidx,tidx,"Preds:")
-                for i in range(3):
-                    if i < len(pred_ids):
-                        print("\tRawPredIds:", pred_ids[i])
-                        print("\tRawLabeIds:", batch["src_labels"][i])
-                        print("\tTskPredIds:", pred_ids[i][tmask[i].bool()])
-                        print("\tTskLabeIds:", batch["src_labels"][i][tmask[i].bool()])
-                        print("\tRawPreds:",  tokenizers[sidx].decode(pred_ids[i]))
-                        print()
-                        print("\tRawLabels:", tokenizers[sidx].decode(batch["src_labels"][i]))
-                        print()
-                        print("\tTskPreds:",  tokenizers[sidx].decode(pred_ids[i][tmask[i].bool()]))
-                        print()
-                        print("\tTskLabels:", tokenizers[sidx].decode(batch["src_labels"][i][tmask[i].bool()]))
-                        print()
-                        print("\tCorrects:", corrects[i])
-                        print("----")
+                #print(sidx,tidx,"Preds:")
+                #for i in range(3):
+                #    if i < len(pred_ids):
+                #        print("\tRawPredIds:", pred_ids[i])
+                #        print("\tRawLabeIds:", batch["src_labels"][i])
+                #        print("\tTskPredIds:", pred_ids[i][tmask[i].bool()])
+                #        print("\tTskLabeIds:", batch["src_labels"][i][tmask[i].bool()])
+                #        print("\tRawPreds:",  tokenizers[sidx].decode(pred_ids[i]))
+                #        print()
+                #        print("\tRawLabels:", tokenizers[sidx].decode(batch["src_labels"][i]))
+                #        print()
+                #        print("\tTskPreds:",  tokenizers[sidx].decode(pred_ids[i][tmask[i].bool()]))
+                #        print()
+                #        print("\tTskLabels:", tokenizers[sidx].decode(batch["src_labels"][i][tmask[i].bool()]))
+                #        print()
+                #        print("\tCorrects:", corrects[i])
+                #        print("----")
 
                 # Generated Text
                 idx = 0
@@ -1200,7 +1228,6 @@ def main():
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker
     ##########################
-    config["n_subspaces"] = n_subspaces
     if config.get("mtx_kwargs", None) is None:
         mtx_kwarg_keys = {
             "rank", "identity_init", "bias", "mu",
@@ -1266,6 +1293,7 @@ def main():
         "src_idx": [],
         "trg_idx": [],
         "varb_idx": [],
+        "varb_name": [],
     }
     end_training = False
     try:
@@ -1289,10 +1317,11 @@ def main():
                     # latents max value measured in standard deviations 
                     # from the natural mean
                 startt = time.time()
+                accum = config.get("grad_accumulation_steps", 1)
+                n_varbs = len(config["swap_keys"][0])
                 for dirvar_tup in tokenized_datasets["train"]:
                     runtime = time.time()
                     (sidx,tidx,vidx) = dirvar_tup
-                    accum = config.get("grad_accumulation_steps", 1)
                     track_train = (sidx,tidx) in config["train_directions"]
                     track_cl = (sidx,tidx) in config["cl_directions"]
                     track_grad = track_train or track_cl
@@ -1311,8 +1340,8 @@ def main():
                         tforce=True,
                         track_grad=track_grad,
                     )
-                    cl_loss = cl_loss/accum/(len(models)**2)
-                    loss = loss/accum/(len(models)**2)
+                    cl_loss = cl_loss/accum/(len(models)**2)/n_varbs
+                    loss = loss/accum/(len(models)**2)/n_varbs
                     combo_loss = torch.zeros_like(loss)
                     if track_train: combo_loss = loss
                     if track_cl:
@@ -1384,7 +1413,7 @@ def main():
                 end_training = False
                 if global_step % config["print_every"] == 0:
                     for vidx in range(n_varbs):
-                        print("Varbl", vidx)
+                        print("Varbl", vidx, config["swap_keys"][sidx][vidx])
                         print("Layers:", config["layers"])
                         print("Swap Keys:", config["swap_keys"])
                         print("Mtx  Type:", config["mtx_types"][0])
@@ -1474,6 +1503,7 @@ def main():
                         df_dict["src_idx"].append(s)
                         df_dict["trg_idx"].append(t)
                         df_dict["varb_idx"].append(v)
+                        df_dict["varb_name"].append(config["swap_keys"][t][v])
                     val_loss = np.mean(
                         [float(l) for l in val_losses.values()])
                     vals = [float(l) for l in val_trial_accs.values()]

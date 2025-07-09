@@ -420,14 +420,45 @@ class ScaledRotationMatrix(RankRotationMatrix):
         return self.rot_forward(h+self.bias)
 
 class Mask(torch.nn.Module):
-    @property
-    def mask(self):
-        return self._mask
+    def __init__(self, size, n_units=None, *args, **kwargs):
+        """
+        A base class for masks that will be used to swap neurons in the
+        intervention module.
+        """
+        super().__init__()
+        self.temperature = None
+        self.size = size
+        if n_units is None:
+            n_units = [1]
+        elif type(n_units)==int:
+            n_units = [n_units]
+        elif type(n_units)==list:
+            n_units = [int(units) for units in n_units]
+        self.n_units = n_units
+        masks = []
+        start = 0
+        for i,units in enumerate(self.n_units):
+            mask = torch.zeros(self.size).float()
+            mask[start:start+units] = 1
+            start += units
+            masks.append(mask)
+            if start>=self.size:
+                break
+        if len(masks)<len(self.n_units):
+            self.n_units = self.n_units[:len(masks)]
+        self.n_units.append(max(self.size-start,0))
+        assert sum(self.n_units)==self.size
+        mask = torch.zeros(self.size).float()
+        if start<self.size: mask[start:] = 1
+        masks.append(mask)
+        self.register_buffer("masks", torch.vstack(masks))
 
-    def get_boundary_mask(self):
-        return self.mask
+    def get_boundary_mask(self, subspace=0):
+        if subspace>=len(self.masks):
+            return self.masks[-1]
+        return self.masks[subspace]
 
-    def forward(self, target, source):
+    def forward(self, target, source, subspace=0):
         """
         target: torch tensor (B,H)
             the main vector that will receive new neurons for
@@ -435,13 +466,15 @@ class Mask(torch.nn.Module):
         source: torch tensor (B,H)
             the vector that will give neurons to create a
             causal interchange in the other sequence
+        subspace: int
+            the subspace to use for the intervention.
             
         Returns:
             target: torch tensor (B,H)
                 the vector that received new neurons for
                 a causal interchange
         """
-        mask = self.mask
+        mask = self.get_boundary_mask(subspace)
         masked_trg = (1-mask)[:target.shape[-1]]*target
         masked_src = mask[:source.shape[-1]]*source
         if masked_trg.shape[-1]<=masked_src.shape[-1]:
@@ -462,20 +495,19 @@ class FixedMask(Mask):
 
         size: int
             the number of the hidden state vector
-        n_units: int
-            the number of units to swap
+        n_units: int or list of ints
+            the number of units to swap. if a list is argued, uses it to
+            determine the number of subspaces and their sizes. Otherwise
+            defaults to 2 subspaces, one of size n_units and the other
+            of size size-n_units.
         """
-        super().__init__()
+        super().__init__(size=size, n_units=n_units, *args, **kwargs)
         if custom_mask is not None and len(custom_mask)>0:
-            mask = custom_mask.float()
-            self.size = mask.shape[-1]
-        else:
-            self.size = size if size is not None else 1
-            self.n_units = n_units
-            self.temperature = None
-            mask = torch.zeros(self.size).float()
-            mask[:self.n_units] = 1
-        self.register_buffer("_mask", mask)
+            self.size = custom_mask.shape[-1]
+            masks = [custom_mask.float()]
+            masks.append(1-custom_mask.float())
+            self.n_units = [mask.sum().item() for mask in masks]
+            self.masks[:] = torch.vstack(masks)
 
 class ZeroMask(Mask):
     def __init__(self,
@@ -495,19 +527,13 @@ class ZeroMask(Mask):
         learnable_addition: bool
             if true, will learn a vector to add into the zeroed dims
         """
-        super().__init__()
-        self.size = size
-        self.n_units = n_units
-        self.temperature = None
-        mask = torch.zeros(self.size).float()
-        mask[:self.n_units] = 1
-        self.register_buffer("_mask", mask)
+        super().__init__(size=size, n_units=n_units, *args, **kwargs)
         self.learnable_add = learnable_addition
-        add_size = self.size-self.n_units
+        add_size = self.size-self.n_units[0]
         if self.learnable_add and add_size>0:
             self.add_vec = torch.nn.Parameter(0.01*torch.randn(add_size))
 
-    def forward(self, target, source):
+    def forward(self, target, source, subspace=0):
         """
         target: torch tensor (B,H)
             the main vector that will receive new neurons for
@@ -521,7 +547,7 @@ class ZeroMask(Mask):
                 the vector that received new neurons for
                 a causal interchange
         """
-        mask = self.mask
+        mask = self.get_boundary_mask(subspace=subspace)
         masked_trg = torch.zeros_like(target)
         masked_src = mask[:source.shape[-1]]*source
         if masked_trg.shape[-1]<=masked_src.shape[-1]:
@@ -552,6 +578,9 @@ class BoundlessMask(FixedMask):
             if true, will start the boundaries so that half of the swap
             mask is all zeros and half is ones. Otherwise starts all ones
         """
+        raise NotImplementedError(
+            "BoundlessMask is not implemented yet. Use FixedMask or ZeroMask instead."
+        )
         super().__init__()
         self.size = size
         self.temperature = temperature
@@ -586,17 +615,18 @@ class BoundlessMask(FixedMask):
 class InterventionModule(torch.nn.Module):
     def __init__(self,
             sizes,
-            mtx_types=["FCARotationMatrix", "FCARotationMatrix"],
+            mtx_types=["RotationMatrix", "RotationMatrix"],
             mtx_kwargs=None,
             mask_type="FixedMask", 
             mask_kwargs=None,
             fsr=False,
             n_units=None,
+            n_subspaces=None,
             *args, **kwargs):
         """
         Args:
             sizes: list of ints
-                the sizes of the distributed vectors
+                the sizes of the distributed vectors for each matrix.
             mtx_types: list of str
             mtx_kwargs: list of dicts
                 the key word arguments to pass to each matrix instantiation
@@ -608,6 +638,18 @@ class InterventionModule(torch.nn.Module):
                 (functionally sufficient representations)
                 if true, will zero out the orthogonal complement of the
                 rotation matrix.
+            n_units: int or list of ints
+                Determines the number of units to swap in the intervention.
+                If a list of ints, will use to determine the size of each
+                subspace for n_subspaces-1. The last subspace always takes
+                the size of the remaining neurons (0 is a possible size).
+            n_subspaces: int or None
+                the number of subspaces to include in the intervention
+                mask. Defaults to 2. Assumes the same size for each
+                subspace other than the last one. If n_units is a list of
+                ints, will use the corresponding sizes for each subspace
+                until the last subspace which will default to the remaining
+                number of dimensions.
         """
         super().__init__()
         self.sizes = sizes
@@ -617,7 +659,11 @@ class InterventionModule(torch.nn.Module):
         if n_units is not None:
             if mask_kwargs is None:
                 mask_kwargs = {}
+            if n_units is not None and type(n_units)==int:
+                n_units = [n_units for _ in range(n_subspaces)]
             mask_kwargs["n_units"] = n_units
+        # TODO
+        print("Using {} subspaces with sizes: {}".format(n_subspaces,n_units))
 
         # Rotation Matrices
         if type(mtx_types)==str:
@@ -636,9 +682,10 @@ class InterventionModule(torch.nn.Module):
             d = copy.deepcopy(d)
             d["size"] = self.sizes[i]
             if mtx_types[i] in {"RankRotationMatrix", "FCARotationMatrix"}:
+                assert n_subspaces is not None and n_subspaces==1
                 d["rank"] = d.get("rank",
                     d.get("n_units",
-                        mask_kwargs.get("n_units", default_rank)
+                        mask_kwargs.get("n_units", [default_rank])[0]
                     )
                 )
                 if d["rank"] is None: d["rank"] = default_rank
@@ -662,9 +709,10 @@ class InterventionModule(torch.nn.Module):
         if mask_kwargs is None:
             mask_kwargs = dict()
         n_units = mask_kwargs.get("n_units", None)
-        if rank is not None: n_units = rank
-        elif n_units is None: n_units = default_rank
-        elif n_units>max_rank: n_units = max_rank
+        if rank is not None: n_units = [rank for _ in range(n_subspaces)]
+        elif n_units is None: n_units = [default_rank for _ in range(n_subspaces)]
+        elif type(n_units)==int: n_units = [n_units for _ in range(n_subspaces)]
+        n_units = [min(units,max_rank) for units in n_units]
         mask_kwargs["n_units"] = n_units
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
@@ -698,8 +746,7 @@ class InterventionModule(torch.nn.Module):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        if varb_idx is not None and varb_idx>0:
-            raise NotImplemented
+        if varb_idx is None: varb_idx = 0
 
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]
@@ -711,11 +758,36 @@ class InterventionModule(torch.nn.Module):
 
             rot_swapped = self.swap_mask(
                 target=rot_trg_h,
-                source=rot_src_h
+                source=rot_src_h,
+                subspace=varb_idx,
             )
 
             new_h = trg_mtx(rot_swapped, inverse=True)
         return new_h
+    
+    
+def load_intrv_module(path, ret_config=False):
+    """
+    This is a helper function to load saved InterventionModule checkpoint.
+    
+    Args:
+        path: str
+        ret_config: bool
+            if true, will return the configuration dict alongside the
+            das module.
+    Returns:
+        intrv_modu: InterventionModule
+            can access the rotation modules using `intrv_modu.rot_mtxs`
+    """
+    checkpt = torch.load(
+        path,
+        map_location=torch.device("cpu"),
+        weights_only=False)
+    intrv_modu = InterventionModule(**checkpt["config"])
+    intrv_modu.load_state_dict(checkpt["state_dict"])
+    if ret_config:
+        return das_modu, checkpt["config"]
+    return das_modu
 
 if __name__=="__main__":
     seq_len = 10
