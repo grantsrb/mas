@@ -223,6 +223,9 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
         d["cl_idxs"] = torch.LongTensor(batch["cl_idxs"])
         d["cl_input_ids"] = torch.LongTensor(batch["cl_input_ids"])
     except: pass
+    try:
+        d["cl_task_masks"] = torch.LongTensor(batch["cl_task_masks"])
+    except: pass
     # In a standard LM objective the labels are the input_ids (shifted internally
     # by the model), but we don't do that
     return {k:v.to(device) for k,v in d.items()}
@@ -328,9 +331,9 @@ def add_prompt(
         text=src_prompt, replacement_dict=src_replacements)
     trg_prompt = replace_text(
         text=trg_prompt, replacement_dict=trg_replacements)
-    prompts = [src_prompt, trg_prompt]
-    tokenizers = [src_tokenizer, trg_tokenizer]
-    keys = ["src", "trg"]
+    prompts = [src_prompt, trg_prompt, trg_prompt]
+    tokenizers = [src_tokenizer, trg_tokenizer, trg_tokenizer]
+    keys = ["src", "trg", "cl"]
     for prompt,tokenizer,key in zip(prompts,tokenizers,keys):
         if len(prompt)==0:
             ids = [tokenizer.bos_token_id]
@@ -346,6 +349,8 @@ def add_prompt(
             if key in k:
                 if "input_ids" in k:
                     data_dict[k] = list(map(lambda x: [*ids] + x, data_dict[k]))
+                elif "cl_idxs"==k:
+                    data_dict[k] = list(map(lambda x: [x[0],x[1]+el], data_dict[k]))
                 elif "idxs" in k:
                     data_dict[k] = list(map(lambda x: x+el, data_dict[k]))
                 elif "attention" in k or "attn" in k:
@@ -449,7 +454,11 @@ def pad_data_dict(
 
         for i in range(len(data_dict["trg_input_ids"])):
             offset = offsets[i]
-            if "idx" in k:
+            if "cl_idxs"==k:
+                if left:
+                    data_dict[k][i][-1] += offset
+                continue
+            elif "idx" in k:
                 if left:
                     data_dict[k][i] += offset
                 continue

@@ -337,6 +337,9 @@ def make_counterfactual_seqs(
     elif type(trg_swap_keys)==str:
         trg_swap_keys = [trg_swap_keys]
         src_swap_keys = [src_swap_keys]
+    if trg_swap_keys[0] is None or trg_swap_keys[0]=="":
+        return trg_seqs, trg_swap_varbs, trg_task_masks
+
     zlist = [
         trg_seqs, trg_swap_idxs, trg_task_masks,
         src_swap_varbs, trg_swap_varbs,
@@ -502,6 +505,8 @@ def make_intrv_data_from_seqs(
         source_df: dict
             optionally return the source dataframe
     """
+    if type(src_swap_keys)==str: src_swap_keys = [src_swap_keys]
+    if type(trg_swap_keys)==str: trg_swap_keys = [trg_swap_keys]
     if sample_w_replacement:
         indices = np.random.randint(0,len(src_data),len(src_data))
     else:
@@ -524,13 +529,9 @@ def make_intrv_data_from_seqs(
         info=src_info,
         stepwise=stepwise,
     )
-    ret_src_labels = ret_src_labels and src_swap_keys[0]!="full"
+    ret_src_labels = ret_src_labels and src_swap_keys[0] not in {"full",""}
     if ret_src_labels:
-        key = src_swap_keys
-        if type(key)==list: key = key[0]
-        if key!="full":
-            src_labels = get_labels(varb_df=src_df, key=key)
-        else: ret_src_labels = False
+        src_labels = get_labels(varb_df=src_df, key=src_swap_keys[0])
     assert len(src_swap_masks[0])==len(src_seqs[0])
 
     # 2. get the target variables and swap indices
@@ -573,14 +574,16 @@ def make_intrv_data_from_seqs(
         if use_src_data_for_cl:
             cl_idxs = get_nonzero_entries(src_swap_masks)
             cl_seqs = src_seqs
+            cl_tmasks = src_task_masks
         else:
             cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
             cl_seqs = trg_seqs
+            cl_tmasks = trg_task_masks
         assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
 
     # 3. Using the variables, seqs, and swap indices, create
     # intervention data.
-    intrv_seqs, intrv_varbs, intrv_task_masks = make_counterfactual_seqs(
+    intrv_seqs, _, intrv_task_masks = make_counterfactual_seqs(
         trg_swap_keys=trg_swap_keys,
         src_swap_keys=src_swap_keys,
         trg_seqs=trg_seqs,
@@ -619,5 +622,6 @@ def make_intrv_data_from_seqs(
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
         d["cl_input_ids"] = cl_seqs
+        d["cl_task_masks"] = cl_tmasks
     return d
 
