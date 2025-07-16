@@ -82,6 +82,8 @@ def config_prep(config):
 
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
+    elif type(config["swap_keys"])==list and type(config["swap_keys"][0])==str:
+            config["swap_keys"] = [config["swap_keys"] for _ in range(n_models)]
     elif type(config["swap_keys"] )==str:
         skey = config["swap_keys"]
         config["swap_keys"] = [skey for _ in range(n_models)]
@@ -94,6 +96,7 @@ def config_prep(config):
             config["swap_keys"][si].append("")
     if len(config["swap_keys"])<n_models:
         config["swap_keys"] = config["swap_keys"]*n_models
+    print("Swap Keys:", config["swap_keys"])
 
     config["n_subspaces"] = len(config["swap_keys"][0])-int(config.get(
         "incl_empty_varbs", False))
@@ -1248,8 +1251,8 @@ def main():
             if key in config:
                 mtx_kwargs[key] = config[key]
         config["mtx_kwargs"] = [mtx_kwargs for _ in models]
+    config["sizes"] = m_sizes
     intrv_module = InterventionModule(
-        sizes=m_sizes,
         **config,
     )
     intrv_module.eval()
@@ -1438,7 +1441,8 @@ def main():
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
                         print("Layers:", config["layers"])
-                        print("Swap Keys:", config["swap_keys"])
+                        print("CauslModl:", config["cmodel_names"])
+                        print("\tSwap Keys:", config["swap_keys"])
                         print("Mtx  Type:", config["mtx_types"][0])
                         print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
                         print("Mask Type:", type(intrv_module.swap_mask).__name__,

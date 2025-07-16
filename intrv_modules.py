@@ -112,6 +112,7 @@ class RankRotationMatrix(torch.nn.Module):
         Sets the non-linear function to apply to the input before the
         rotation matrix. Actually uses the inverse first!!
         """
+        self.nonlin_fn = nonlin_align_fn
         if nonlin_align_fn is None or nonlin_align_fn=="identity":
             self.nonlin_fwd = IdentityModule()
             self.nonlin_inv = IdentityModule()
@@ -453,6 +454,10 @@ class Mask(torch.nn.Module):
         masks.append(mask)
         self.register_buffer("masks", torch.vstack(masks))
 
+    @property
+    def n_subspaces(self):
+        return len(self.masks)
+
     def get_boundary_mask(self, subspace=0):
         if subspace>=len(self.masks):
             return self.masks[-1]
@@ -660,8 +665,14 @@ class InterventionModule(torch.nn.Module):
             if mask_kwargs is None:
                 mask_kwargs = {}
             if n_units is not None and type(n_units)==int:
-                n_units = [n_units for _ in range(n_subspaces)]
+                if n_subspaces is not None:
+                    n_units = [n_units for _ in range(n_subspaces)]
+                else:
+                    n_units = [n_units]
             mask_kwargs["n_units"] = n_units
+            if n_subspaces is None: n_subspaces = len(n_units)
+        if n_subspaces is None and n_units is None:
+            n_subspaces = 1
         # TODO
         print("Using {} subspaces with sizes: {}".format(n_subspaces,n_units))
 
@@ -716,6 +727,7 @@ class InterventionModule(torch.nn.Module):
         mask_kwargs["n_units"] = n_units
         mask_kwargs["size"] = size
         self.swap_mask = globals()[mask_type](**mask_kwargs)
+        self.n_subspaces = len(self.swap_mask.masks)
 
     def reset(self):
         for mtx in self.rot_mtxs:
@@ -783,6 +795,8 @@ def load_intrv_module(path, ret_config=False):
         path,
         map_location=torch.device("cpu"),
         weights_only=False)
+    if "sizes" not in checkpt["config"]:
+        checkpt["config"]["sizes"] = [s["size"] for s in checkpt["config"]["mtx_kwargs"]]
     intrv_modu = InterventionModule(**checkpt["config"])
     intrv_modu.load_state_dict(checkpt["state_dict"])
     if ret_config:

@@ -1,0 +1,56 @@
+exp_name: "orthodas"
+save_root: "./models/"
+seed: 12345
+
+# Specify your models here
+model_names: 
+  - "./models/multiobject_gru/multiobject_gru_0_seed12345"
+
+# Specify your dataset here
+dataset_names:
+    - "task"
+    - "task"
+n_train_samples: 10000
+n_valid_samples: 1000
+
+padding_sides:
+    - "right"
+    - "right"
+
+layers: # layers at which to attach the hooks
+  - "identities.0"
+  #- "embeddings"
+
+# Ignore these for non-stepwise das trainings
+# If true, will shuffle the target sequence tokens within the swap mask
+shuffle_targ_ids: False
+const_targ_inpt_id: False
+incl_empty_varbs: False
+
+swap_keys:
+  - 
+    - "full"
+    #- "count"
+    #- "phase"
+
+mtx_types: 
+  - "RotationMatrix"
+identity_init: False
+identity_rot: False # use this for debugging (applies the identity matrix
+    # in place of the das rotation matrix) 
+
+mask_type: "FixedMask" #ZeroMask #BoundlessMask
+learnable_addition: False
+n_units: 16 # the size of the intervened/transferred subspace (n_neurons)
+
+num_training_steps: 20000
+print_every: 100
+batch_size: 128
+grad_accumulation_steps: 1
+lr: 0.001
+max_length: null
+eval_batch_size: 1000
+
+stepwise: False # can apply das at all token positions leading up to the
+    # intervention index
+train_directions: null
