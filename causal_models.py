@@ -192,6 +192,87 @@ class CountUpUp(CountUpDown):
             ridx = int(np.random.randint(len(info["resp_token_ids"])))
             return info["resp_token_ids"][ridx], tmask
 
+class CountUpIncr(CountUpDown):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.init_varbs_["max_count"] = kwargs.get("max_count", 20)
+        self.init_varbs_["incr"] = 1/self.init_varbs_["max_count"]
+        self.ignore_keys = { "obj_count" }
+        self.swap_varbs = None
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        if varbs is None: varbs = self.init_varbs
+        if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+            varbs["count"] = -1
+            varbs["phase"] = 1
+            return varbs
+        if varbs["phase"]==-1:
+            if token_id in info["trig_token_ids"]:
+                varbs["phase"] = 1
+                varbs["incr"] = 1/max(varbs["count"],1)
+                varbs["count"] = 0
+            elif token_id in info["demo_token_ids"]:
+                varbs["count"] += 1
+        else:
+            if token_id in info["resp_token_ids"]:
+                varbs["count"] += varbs["incr"]*varbs["max_count"]
+        return varbs
+
+    def get_token(self, varbs, info, *args, **kwargs):
+        if varbs["phase"]==-1:
+            tmask = 0
+            if np.random.random()<varbs.get("unk_p", 0):
+                return info.get("unk_token_id", 8), tmask
+            if varbs["count"]>=varbs["obj_count"]:
+                tidx = int(np.random.randint(len(info["trig_token_ids"])))
+                return info["trig_token_ids"][tidx], tmask
+            didx = int(np.random.randint(len(info["demo_token_ids"])))
+            return info["demo_token_ids"][didx], tmask
+        else:
+            if varbs["count"] < 0:
+                return info.get("pad_token_id", "<PAD>"), 0
+            tmask = 1
+            # if the count is greater than or equal to the max_count,
+            # then we return the eos token. We include a small offset
+            # to avoid numerical issues with floating point precision.
+            if varbs["count"]>=varbs["max_count"]-1/(2*varbs["max_count"]):
+                return info["eos_token_id"], tmask
+            ridx = int(np.random.randint(len(info["resp_token_ids"])))
+            return info["resp_token_ids"][ridx], tmask
+
+
+class IncrementUpUp(CountUpIncr):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def update_varbs(self,
+            token_id,
+            varbs,
+            info,
+            *args, **kwargs):
+        if varbs is None: varbs = self.init_varbs
+        if token_id in {info["eos_token_id"], info["pad_token_id"]}:
+            varbs["count"] = -1
+            varbs["phase"] = 1
+            return varbs
+        if varbs["phase"]==-1: # Demo Phase
+            if token_id in info["trig_token_ids"]:
+                varbs["phase"] = 1
+                varbs["incr"] = 1/max(varbs["count"],1)
+                varbs["count"] = 0
+            elif token_id in info["demo_token_ids"]:
+                #varbs["count"] += 1
+                varbs["count"] += varbs["incr"]*varbs["max_count"]
+        else:
+            if token_id in info["resp_token_ids"]:
+                varbs["count"] += varbs["incr"]*varbs["max_count"]
+        return varbs
+
+
 class CountUpDownMod(CountUpDown):
     """
     This model counts some initial demo tokens and then takes the
