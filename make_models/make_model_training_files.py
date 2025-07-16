@@ -13,18 +13,18 @@ import copy
 
 ## Update these values
 root = "make_models" # the name of the directory in which this script resides relative to where you run this script (probably don't want to change this)
-main_save_directory = "./models/" # the directory you wish to save your files to
+main_save_directory = "/data2/grantsrb/dasafs_saves/" #"./models/" # the directory you wish to save your files to
 main_d_model = 128
 n_epochs = 2500
-seeds =    [12345,] #23456, 34567, 45678, 56789,]
-devices =  [0,1,2,3,4,5,6,7,8,9,]
+seeds =    [12345,23456,34567,] #12345,] #23456, 34567, 45678, 56789,]
+devices =  [2,3,4,5,6,7,8,9,0,1,]
 rnn_unk = False # set to true if you want to include void tokens in rnns
 unk_p = 0.2
-tasks = [ "MultiObject", ] #"SameObject", "MultiObjectMod", "MultiObjectRound", "Arithmetic",]
+rnns = ["GRU", "LSTM"]
+tasks = [ "MultiObject", "SameObject", ] #"MultiObjectMod", "MultiObjectRound", "Arithmetic",]
 tformer_tasks = ["MultiObject",] # "MultiObjectMod", "MultiObjectRound"] #"Arithmetic", ] #
 tformer_lr = 0.0005
 tformer_layers = 2
-rnns = ["GRU", "LSTM"]
 
 if len(sys.argv)>=2:
     for arg in sys.argv[1:]:
@@ -165,6 +165,7 @@ for rnn in rnns:
         # Make Ranges
         ranges = {
             "seed": seeds,
+            "d_model": [main_d_model],
         }
         rpath = os.path.join("ranges/", exp_name + "_ranges.json")
         save_json(ranges, rpath)
