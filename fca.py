@@ -74,6 +74,91 @@ def gram_schmidt(vectors, old_vectors=None):
         ortho_vecs.append(v)
     return ortho_vecs
 
+def perform_eigen_pca(
+        X,
+        n_components=None,
+        scale=True,
+        center=True,
+        transform_data=False,
+):
+    """
+    Perform PCA on the data matrix X by using an eigen decomp on
+    the covariance matrix
+
+    Args:
+        X: tensor (M,N)
+        n_components: int
+            optionally specify the number of components
+        scale: bool
+            if true, will scale the data along each column
+        transform_data: bool
+            if true, will compute and return the transformed
+            data
+    Returns:
+        ret_dict: dict
+            A dictionary containing the following keys:
+            - "components": tensor (N, n_components)
+                The principal components (eigenvectors) of the data.
+            - "explained_variance": tensor (n_components,)
+                The explained variance for each principal component.
+            - "proportion_expl_var": tensor (n_components,)
+                The proportion of explained variance for each principal component.
+            - "means": tensor (N,)
+                The mean of each feature (column) in the data.
+            - "stds": tensor (N,)
+                The standard deviation of each feature (column) in the data.
+            - "transformed_X": tensor (M, n_components)
+                The data projected onto the principal components, if
+                transform_data is True.
+    """
+    if n_components is None:
+        n_components = X.shape[-1]
+        
+    if type(X)==torch.Tensor:
+        eigen_fn = torch.linalg.eigh
+    elif type(X)==np.ndarray:
+        eigen_fn = np.linalg.eigh
+    assert not n_components or X.shape[-1]>=n_components
+
+    # Center the data by subtracting the mean along each feature (column)
+    means = torch.zeros_like(X[0])
+    if center:
+        means = X.mean(dim=0, keepdim=True)
+        X = X - means
+    stds = torch.ones_like(X[0])
+    if scale:
+        stds = (X.std(0)+1e-6)
+        X = X/stds
+    
+    # Use eigendecomposition of the covariance matrix for efficiency
+    # Cov = (1 / (M - 1)) * X^T X
+    cov = X.T @ X / (X.shape[0] - 1)  # shape (N, N)
+
+    # Compute eigenvalues and eigenvectors
+    eigvals, eigvecs = eigen_fn(cov)  # eigvals in ascending order
+
+    # Select top n_components in descending order
+    eigvals = eigvals[-n_components:].flip(0)
+    eigvecs = eigvecs[:, -n_components:].flip(1)  # shape (N, n_components)
+
+    explained_variance = eigvals
+    proportion_expl_var = explained_variance / explained_variance.sum()
+    components = eigvecs.T  # shape (n_components, N)
+
+    ret_dict = {
+        "components": components,
+        "explained_variance": explained_variance,
+        "proportion_expl_var": proportion_expl_var,
+        "means": means,
+        "stds": stds,
+    }
+    if transform_data:
+        # Project the data onto the principal components
+        # Note: components.T has shape (features, n_components)
+        ret_dict["transformed_X"] = X @ components.T
+
+    return ret_dict
+
 class FunctionalComponentAnalysis(nn.Module):
     """
     Functional Component Analysis (FCA) is a method for learning a set of
