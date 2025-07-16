@@ -1,5 +1,7 @@
 import math
 import torch
+import torch.nn.functional as F
+
 import copy
 
 from fca import FunctionalComponentAnalysis
@@ -101,6 +103,37 @@ class RankRotationMatrix(torch.nn.Module):
     def shape(self):
         return self.weight.shape
 
+    def set_normalization_params(self, mu=None, sigma=None):
+        """
+        Sets the normalization parameters for the rotation matrix.
+        If mu or sigma are None, will not set them.
+
+        Args:
+            mu: float or FloatTensor (size,)
+                Used to center each feature dim of the activations.
+            sigma: float or FloatTensor (size,)
+                Used to scale each feature dim of the activations.
+        """
+        if mu is not None:
+            if type(mu)==float or type(mu)==int:
+                mu = torch.tensor([mu]*self.size)
+            elif type(mu)==list:
+                mu = torch.tensor(mu)
+            elif not isinstance(mu, torch.Tensor):
+                raise ValueError("mu must be a float, list, or torch tensor")
+            if hasattr(self, "mu"): delattr(self, "mu")
+            self.register_buffer("mu", mu)
+        if sigma is not None:
+            if type(sigma)==float or type(sigma)==int:
+                sigma = torch.tensor([sigma]*self.size)
+            elif type(sigma)==list:
+                sigma = torch.tensor(sigma)
+            elif not isinstance(sigma, torch.Tensor):
+                raise ValueError("sigma must be a float, list, or torch tensor")
+            if hasattr(self, "sigma"):
+                delattr(self, "sigma")
+            self.register_buffer("sigma", sigma)
+
     def reset(self):
         pass
 
@@ -199,6 +232,28 @@ class FCARotationMatrix(torch.nn.Module):
             init_rank=rank,
         )
         self.rot_module.set_fixed(True)
+
+    def set_normalization_params(self, mu=None, sigma=None):
+        """
+        Sets the normalization parameters for the rotation matrix.
+        If mu or sigma are None, will not set them.
+        """
+        if mu is not None:
+            if type(mu)==float or type(mu)==int:
+                mu = torch.tensor([mu]*self.rot_module.size)
+            elif type(mu)==list:
+                mu = torch.tensor(mu)
+            elif not isinstance(mu, torch.Tensor):
+                raise ValueError("mu must be a float, list, or torch tensor")
+            self.rot_module.set_means(means=mu)
+        if sigma is not None:
+            if type(sigma)==float or type(sigma)==int:
+                sigma = torch.tensor([sigma]*self.rot_module.size)
+            elif type(sigma)==list:
+                sigma = torch.tensor(sigma)
+            elif not isinstance(sigma, torch.Tensor):
+                raise ValueError("sigma must be a float, list, or torch tensor")
+            self.rot_module.set_stds(stds=sigma)
 
     @property
     def weight_inv(self):
@@ -729,6 +784,51 @@ class InterventionModule(torch.nn.Module):
         self.swap_mask = globals()[mask_type](**mask_kwargs)
         self.n_subspaces = len(self.swap_mask.masks)
 
+    def set_normalization_params(self, midx, mu=None, sigma=None):
+        """
+        Sets the normalization parameters for the rotation matrices.
+        If mu or sigma are None, will not set them.
+
+        Args:
+            midx: int
+                the index of the rotation matrix to set the parameters for
+            mu: float or FloatTensor (size,)
+                Used to center each feature dim of the activations.
+            sigma: float or FloatTensor (size,)
+                Used to scale each feature dim of the activations.
+        """
+        self.rot_mtxs[midx].set_normalization_params(mu=mu, sigma=sigma)
+
+    def solve_and_set_rotation_matrix(self, midx, target_mtx, verbose=False):
+        """
+        Solves for the orthogonal parameter of the rotation matrix to
+        be equal to the target matrix.
+
+        Args:
+            midx: int
+                the index of the rotation matrix to set
+            target_mtx: torch tensor (size,size)
+                the target orthogonal matrix to set the orthogonalized
+                rotation matrix to.
+        """
+        if isinstance(self.rot_mtxs[midx], FCARotationMatrix):
+            raise NotImplementedError(
+                "FCARotationMatrix does not support solving for orthogonal parameters yet."
+            )
+            self.rot_mtxs[midx].rot_module.set_initialization_vecs(
+                target_mtx=target_mtx,)
+        ortho_obj = self.rot_mtxs[midx].rot_module
+        rot_module = solve_for_orthogonal_param(
+            rot_module=rot_module,
+            target_mtx=target_mtx,
+            lr=1e-2,
+            tol=1e-6,
+            max_iter=1500,
+            max_restarts=20,
+            verbose=verbose,
+        )
+        self.rot_mtxs[midx].rot_module = rot_module
+
     def reset(self):
         for mtx in self.rot_mtxs:
             if hasattr(mtx, "reset"):
@@ -800,8 +900,99 @@ def load_intrv_module(path, ret_config=False):
     intrv_modu = InterventionModule(**checkpt["config"])
     intrv_modu.load_state_dict(checkpt["state_dict"])
     if ret_config:
-        return das_modu, checkpt["config"]
-    return das_modu
+        return intrv_modu, checkpt["config"]
+    return intrv_modu
+
+def solve_for_orthogonal_param(
+        rot_module,
+        target_mtx,
+        lr=1e-2,
+        tol=1e-6,
+        max_iter=1500,
+        max_restarts=20,
+        verbose=False
+):
+    """
+    Optimizes the underlying parameter of an object created from
+    torch.nn.utils.parametrizations.orthogonal or an equivalent rot_module
+    to have a weight matrix that is as close as possible to the target_matrix.
+
+    Args:
+        rot_module: ParametrizedLinear or PositiveSymmetricDefiniteMatrix (M,M)
+            The orthogonalized matrix (e.g., from orthogonal parametrization).
+            Use torch.nn.utils.parametrizations.orthogonal to create it.
+            Can also be a PositiveSymmetricDefiniteMatrix or
+            SymmetricDefiniteMatrix.
+        U: torch.Tensor (M,M)
+            The target orthogonal matrix.
+        lr (float): Learning rate.
+        tol (float): Loss tolerance for early stopping.
+        max_iter (int): Maximum number of gradient steps.
+        max_restarts (int): Maximum number of restarts if convergence is not reached.
+        verbose (bool): If True, prints progress.
+
+    Returns:
+        rot_module: ParametrizedLinear (M,M)
+            The optimized orthogonal matrix (same shape as U).
+    """
+    device = next(rot_module.parameters()).get_device()
+    if device < 0: device = "cpu"
+    target_mtx = target_mtx.to(device)
+    mus_and_stds = dict()
+    with torch.no_grad():
+        for p in rot_module.parameters():
+            mus_and_stds[p] = (p.mean().item(), p.std().item())
+
+    best_params = None
+    best_loss = float("inf")
+    loss = torch.tensor(float("inf"), device=device)
+    n_restarts = 0
+    while n_restarts<=max_restarts and loss.item() > tol:
+        n_restarts += 1
+        loss = torch.tensor(float("inf"), device=device)
+        optimizer = torch.optim.Adam(rot_module.parameters(), lr=lr)
+        for i in range(max_iter):
+            optimizer.zero_grad()
+            Q = rot_module.weight
+            loss = F.mse_loss(Q, target_mtx)
+            if loss.item() < tol:
+                if verbose:
+                    print(f"Converged at iter {i}, loss={loss.item():.2e}")
+                break
+            loss.backward()
+            optimizer.step()
+            if verbose and i % 1000 == 0:
+                print(f"Iter {i}, loss={loss.item():.4e}")
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            best_params = {name: param.data.clone() for name, param in rot_module.named_parameters()}
+
+        if n_restarts <= max_restarts and loss.item() > tol:
+            if verbose:
+                print(f"Failed to converge with loss={loss.item():.2e}, attempting restart...")
+            new_module = torch.nn.utils.parametrizations.orthogonal(
+                torch.nn.Linear(
+                    in_features=rot_module.weight.shape[0],
+                    out_features=rot_module.weight.shape[1],
+                    bias=False,
+                )
+            )
+            new_module.to(device)
+            if str(type(rot_module))==str(type(new_module)):
+                rot_module = new_module
+            else:
+                with torch.no_grad():
+                    for param in rot_module.parameters():
+                        param.data = mus_and_stds[param][0] +\
+                            mus_and_stds[param][1] * torch.randn_like(param.data)
+    if verbose:
+        print(f"Best loss: {best_loss:.4e} after {n_restarts} restarts")
+    if best_params is not None:
+        for name, param in rot_module.named_parameters():
+            param.data = best_params[name]
+
+    return rot_module
+
 
 if __name__=="__main__":
     seq_len = 10

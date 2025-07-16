@@ -24,10 +24,11 @@ from dl_utils.save_io import (
 )
 from dl_utils.utils import (
     get_git_revision_hash, get_mask_past_arglast, arglast, get_timestamp,
-    analytical_linear_regression,
+    analytical_linear_regression, 
 )
 from dl_utils.schedulers import PlateauTracker
 from dl_utils.tokenizer import Tokenizer
+from fca import perform_eigen_pca
 from intrv_modules import InterventionModule
 import filters
 import causal_models
@@ -710,9 +711,14 @@ def main():
             # before the rotation matrix during interventions. options:
             # "identity", "tanh", "sigmoid"
         ## Not Implmented Yet
-        ##"normalize_alignment": False, # If true, will normalize the reps
-        ##    # before alignment. Normalization is applied after the
-        ##    # nonlinearity.
+        "zscore_alignment": False, # If true, will zscore the reps
+            # before alignment. zscoring is applied after the
+            # nonlinearity if using a nonlin_align_fn. Uses the source
+            # activations to calculate the mu and std
+        "pca_init": False, # If true, will use PCA to initialize the
+            # rotation matrix. If false, will use a random orthogonal
+            # matrix. If using a nonlin_align_fn, will apply the
+            # nonlinearity to the activations before PCA.
         "identity_init": False,
         "identity_rot": False,
         "mask_type":   "FixedMask", # BoundlessMask
@@ -1260,6 +1266,44 @@ def main():
         intrv_module.parameters(),
         lr=config["lr"])
     plateau_tracker = PlateauTracker(**config)
+
+    ##########################
+    #    Z-Score the Source Activations and/or start rot matrices from PCA
+    #    (if specified in the config)
+    ##########################
+    if config["zscore_alignment"] or config.get("pca_init",False):
+        for midx in range(len(models)):
+            all_actvs = []
+            for dirvar_tup in all_src_activations["train"].keys():
+                sidx,tidx,vidx = dirvar_tup
+                if sidx!=midx:
+                    continue
+
+                actvs = all_src_activations["train"][dirvar_tup]
+                if intrv_module.nonlin_align_fn!="identity":
+                    actvs = intrv_module.nonlin_align_fn(actvs)
+                all_actvs.append(actvs)
+            actvs = torch.cat(all_actvs,dim=0).reshape(-1, actvs.shape[-1])
+
+            mu = 0
+            std = 1
+            if config["zscore_alignment"]:
+                mu =  actvs.mean(0)
+                std = actvs.std(0)
+                intrv_module.set_normalization_params(
+                    midx=midx, mu=mu, std=std, )
+            if config.get("pca_init", False):
+                actvs = (actvs - mu) / std
+                ret_dict = perform_eigen_pca(
+                    X=actvs,
+                    n_components=actvs.shape[-1],
+                    center=False, scale=False,
+                )
+                pca_matrix = torch.tensor(ret_dict["components"], device=devices[midx])
+                intrv_module.solve_and_set_rotation_matrix(
+                    midx=midx, target_mtx=pca_matrix, verbose=True,
+                )
+            
 
     ##########################
     #    Define and attach forward hooks to a specified layer in each model.
