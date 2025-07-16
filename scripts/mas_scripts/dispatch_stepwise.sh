@@ -3,13 +3,14 @@
 
 exp_name="mas"
 gpus=( 6 7 8 9 0 1 2 3 4 5 )
-root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
+root_folder="/mnt/fs2/grantsrb/"
 
 
-exp_folders1=( "multiobjectmod_gru" "multiobject_gru"  "multiobject_rope_tformer_unk" "multiobjectround_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
-exp_folders2=( "multiobjectmod_gru"   )
+#exp_folders1=( "multiobjectmod_gru" "multiobject_gru"  "multiobject_rope_tformer_unk" "multiobjectround_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
+exp_folders1=( "mas_moreseeds_neurips2025/multiobject_lstm"  "mas_moreseeds_neurips2025/sameobject_gru" "mas_moreseeds_neurips2025/multiobject_rope_tformer_unk" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" )
+exp_folders2=( "mas_neurips2025/multiobject_lstm" "mas_neurips2025/multiobject_rope_tformer_unk" )
 config="configs/general_stepwise.yaml"
-search1=( "n_units=32" )
+search1=( "n_units=32" "n_units=16" )
 search2=( "swap_keys=full" )
 arg1="" #"layers=identities.0,identities.0"
 

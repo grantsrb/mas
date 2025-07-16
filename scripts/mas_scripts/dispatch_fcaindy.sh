@@ -6,11 +6,11 @@ gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
-exp_folders1=( "multiobject_gru" "multiobjectmod_gru" "sameobject_gru" "multiobject_lstm" "multiobjectround_gru" ) # "sameobject_lstm" )
+exp_folders1=( "multiobject_gru" "multiobject_lstm" ) # "sameobject_lstm" )
 exp_folders2=( "multiobject_gru"  )
 config="configs/fca_indywise.yaml"
-search1=( "n_units=32" "n_units=16" )
-search2=( "swap_keys=full" "swap_keys=count") 
+search1=( "n_units=16" )
+search2=( "swap_keys=full" ) # "swap_keys=count") 
 
 echo Dispatching
 cuda_idx=0

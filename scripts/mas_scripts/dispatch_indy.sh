@@ -3,14 +3,14 @@
 
 exp_name="mas"
 gpus=( 0 1 2 3 4 5 6 7 8 9 )
-root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
+root_folder="/mnt/fs2/grantsrb/"
 
 
-exp_folders1=( "multiobject_gru" "multiobjectmod_gru" "multiobjectround_gru" ) # "sameobject_gru" "multiobject_lstm" "multiobject_rope_tformer_unk" "sameobject_lstm" )
-exp_folders2=( "multiobjectmod_gru"  )
+exp_folders1=( "mas_neurips2025/multiobject_rope_tformer_unk" "mas_moreseeds_neurips2025/multiobject_rope_tformer_unk" ) # "multiobject_gru" "multiobjectmod_gru" "multiobjectround_gru" ) # "sameobject_gru" "multiobject_lstm"  "sameobject_lstm" )
+exp_folders2=( "mas_neurips2025/multiobject_gru"   )
 config="configs/general_indywise.yaml"
-search1=( "n_units=32" )
-search2=( "swap_keys=full" "swap_keys=count") 
+search1=( "swap_keys=full" )
+search2=( "n_units=32" )
 
 echo Dispatching
 cuda_idx=0

@@ -2,15 +2,16 @@
 # Use this script to run the DAS experiments
 
 exp_name="stch"
-gpus=( 2 3 4 5 6 7 8 9 0 1 )
+gpus=( 8 9 0 1 2 3 4 5 6 7 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
-exp_folders1=( "multiobject_gru" ) #"multiobject_gru" ) #  "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
-exp_folders2=( "sameobject_gru" )
+exp_folders1=( "multiobject_gru" "multiobject_lstm" "sameobject_gru" "sameobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
+exp_folders2=( "multiobject_gru" )
 config="configs/model_stitching.yaml"
-search1=( "n_units=32" )
-search2=( "swap_keys=count" ) # "swap_keys=full" ) # 
+search1=( "n_units=1" )
+search2=( "swap_keys=full" ) # "swap_keys=full" ) # 
+arg1="mask_type=ZeroMask"
 
 echo Dispatching
 cuda_idx=0
@@ -32,7 +33,7 @@ do
                            echo Search1 ${search1[@]}
                            echo Search2 ${search2[@]}
 
-                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" &
+                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" $arg1 &
 
                            cuda_idx=$((1+$cuda_idx))
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
