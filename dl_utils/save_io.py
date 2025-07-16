@@ -9,6 +9,24 @@ import numpy as np
 
 BEST_CHECKPT_NAME = "best_checkpt_0.pt.best"
 
+def load_json_or_yaml(file_name):
+    """
+    Loads a json or a yaml file (determined by its extension) as a python
+    dict.
+
+    Args:
+        file_name: str
+            the path of the json/yaml file
+    Returns:
+        d: dict
+            a dict representation of the loaded file
+    """
+    if ".json" in file_name:
+        return load_json(file_name)
+    elif ".yaml" in file_name:
+        return load_yaml(file_name)
+    raise NotImplemented
+
 def save_checkpt(save_dict,
         save_folder,
         epoch,
@@ -467,6 +485,7 @@ def get_hyps(folder):
             if os.path.exists(f):
                 hyps = load_json_or_yaml(f)
                 return hyps
+    print("failed for", folder, f)
     return None
 
 def load_hyps(folder):
@@ -742,24 +761,6 @@ def save_json(data, file_name):
         jdata = make_jsonable(copy.deepcopy(data))
         with open(file_name, 'w', encoding='utf-8') as f:
             json.dump(jdata, f, ensure_ascii=False, indent=4)
-
-def load_json_or_yaml(file_name):
-    """
-    Loads a json or a yaml file (determined by its extension) as a python
-    dict.
-
-    Args:
-        file_name: str
-            the path of the json/yaml file
-    Returns:
-        d: dict
-            a dict representation of the loaded file
-    """
-    if ".json" in file_name:
-        return load_json(file_name)
-    elif ".yaml" in file_name:
-        return load_yaml(file_name)
-    raise NotImplemented
 
 def record_session(config, model, globals_dict=None, verbose=False):
     """
