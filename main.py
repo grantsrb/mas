@@ -1299,7 +1299,8 @@ def main():
                     n_components=actvs.shape[-1],
                     center=False, scale=False,
                 )
-                pca_matrix = torch.tensor(ret_dict["components"], device=devices[midx])
+                # Dims (features, components) after transpose
+                pca_matrix = torch.tensor(ret_dict["components"].T, device=devices[midx])
                 intrv_module.solve_and_set_rotation_matrix(
                     midx=midx, target_mtx=pca_matrix, verbose=True,
                 )
@@ -1498,11 +1499,28 @@ def main():
                         " ".join(sorted(
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
+                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
                     print()
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
 
-                        print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                        print("Valid CL Loss:")
+                        s = "\tM1->M1: " + str(round(val_cl_loss[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += " | M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_cl_loss[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_cl_loss[(1,1,vidx)],5))
+                        print(s)
+
+                        max_diff = max([v for v in val_cl_sdx.values()])
+                        print(f"Valid CL Divergence: (Excess in SDs: {max_diff})")
+                        s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
+                        if len(models)>1:
+                            s += " | M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(val_cl_div[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(val_cl_div[(1,1,vidx)],5))
+                        print(s)
+
                         print("Train Tok Acc:",  tot_tok)
                         s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
@@ -1537,21 +1555,7 @@ def main():
                         print(s)
                         print()
 
-                        print("Valid CL Loss:")
-                        s = "\tM1->M1: " + str(round(val_cl_loss[(0,0,vidx)], 5))
-                        if len(models)>1:
-                            s += " | M1->M2: " + str(round(val_cl_loss[(0,1,vidx)],5))
-                            s += "\n\tM2->M1: " + str(round(val_cl_loss[(1,0,vidx)], 5))
-                            s += " | M2->M2: " + str(round(val_cl_loss[(1,1,vidx)],5))
-                        print(s)
-                        max_diff = max([v for v in val_cl_sdx.values()])
-                        print(f"Valid CL Divergence: (Excess in SDs: {max_diff})")
-                        s = "\tM1->M1: " + str(round(val_cl_div[(0,0,vidx)], 5))
-                        if len(models)>1:
-                            s += " | M1->M2: " + str(round(val_cl_div[(0,1,vidx)],5))
-                            s += "\n\tM2->M1: " + str(round(val_cl_div[(1,0,vidx)], 5))
-                            s += " | M2->M2: " + str(round(val_cl_div[(1,1,vidx)],5))
-                        print(s)
+                        print()
 
                     print()
                     print("Layers:", config["layers"])
@@ -1573,6 +1577,7 @@ def main():
                         " ".join(sorted(
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
+                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
                     print()
                     print("Experiment:", os.path.join(save_folder, save_name))
                     print("M1:", config["model_names"][0])
