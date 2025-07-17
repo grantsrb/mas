@@ -1280,10 +1280,10 @@ def main():
                     continue
 
                 actvs = all_src_activations["train"][dirvar_tup]
-                if intrv_module.nonlin_align_fn!="identity":
-                    actvs = intrv_module.nonlin_align_fn(actvs)
-                all_actvs.append(actvs)
-            actvs = torch.cat(all_actvs,dim=0).reshape(-1, actvs.shape[-1])
+                if config["nonlin_align_fn"]!="identity":
+                    actvs = intrv_module.rot_mtxs[midx].nonlin_fwd(actvs)
+                all_actvs.append(actvs.reshape(-1, actvs.shape[-1]))
+            actvs = torch.cat(all_actvs,dim=0)
 
             mu = 0
             std = 1
@@ -1291,7 +1291,7 @@ def main():
                 mu =  actvs.mean(0)
                 std = actvs.std(0)
                 intrv_module.set_normalization_params(
-                    midx=midx, mu=mu, std=std, )
+                    midx=midx, mu=mu, sigma=std, )
             if config.get("pca_init", False):
                 actvs = (actvs - mu) / std
                 ret_dict = perform_eigen_pca(
@@ -1482,25 +1482,25 @@ def main():
 
                 end_training = False
                 if global_step % config["print_every"] == 0:
+                    print("Layers:", config["layers"])
+                    print("CauslModl:", config["cmodel_names"])
+                    print("\tSwap Keys:", config["swap_keys"])
+                    print("Mtx  Type:", config["mtx_types"][0])
+                    print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
+                    print("Mask Type:", type(intrv_module.swap_mask).__name__,
+                            "- FSR:", config["fsr"],
+                            "- Const Inpt:", config["const_targ_inpt_id"],
+                            "- Units:", intrv_module.swap_mask.n_units)
+                    print("Trn Dirs:",
+                        " ".join(sorted(
+                            [str(d) for d in config["train_directions"]])))
+                    print("CL Dirs:",
+                        " ".join(sorted(
+                            [str(d) for d in config["cl_directions"]])))
+                    print("\tCL Eps:", config.get("cl_eps", 0))
+                    print()
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
-                        print("Layers:", config["layers"])
-                        print("CauslModl:", config["cmodel_names"])
-                        print("\tSwap Keys:", config["swap_keys"])
-                        print("Mtx  Type:", config["mtx_types"][0])
-                        print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
-                        print("Mask Type:", type(intrv_module.swap_mask).__name__,
-                                "- FSR:", config["fsr"],
-                                "- Const Inpt:", config["const_targ_inpt_id"],
-                                "- Units:", intrv_module.swap_mask.n_units)
-                        print("Trn Dirs:",
-                            " ".join(sorted(
-                                [str(d) for d in config["train_directions"]])))
-                        print("CL Dirs:",
-                            " ".join(sorted(
-                                [str(d) for d in config["cl_directions"]])))
-                        print("\tCL Eps:", config.get("cl_eps", 0))
-                        print()
 
                         print("Step:", global_step, "| Train Loss:", tot_loss.item())
                         print("Train Tok Acc:",  tot_tok)
@@ -1553,12 +1553,33 @@ def main():
                             s += " | M2->M2: " + str(round(val_cl_div[(1,1,vidx)],5))
                         print(s)
 
-                        print("Experiment:", os.path.join(save_folder, save_name))
-                        print("M1:", config["model_names"][0])
-                        if len(config["model_names"])>1:
-                            print("M2:", config["model_names"][1])
-                        print("Exec Time:", time.time()-startt)
-                        print()
+                    print()
+                    print("Layers:", config["layers"])
+                    print("CauslModl:", config["cmodel_names"])
+                    print("\tSwap Keys:", config["swap_keys"])
+                    print("Mtx  Type:", config["mtx_types"][0])
+                    print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
+                    print("Mask Type:", type(intrv_module.swap_mask).__name__,
+                            "- FSR:", config["fsr"],
+                            "- Const Inpt:", config["const_targ_inpt_id"],
+                            "- Units:", intrv_module.swap_mask.n_units,
+                            "- ZScore:", config["zscore_alignment"],
+                            "- PCA Init:", config["pca_init"],
+                    )
+                    print("Trn Dirs:",
+                        " ".join(sorted(
+                            [str(d) for d in config["train_directions"]])))
+                    print("CL Dirs:",
+                        " ".join(sorted(
+                            [str(d) for d in config["cl_directions"]])))
+                    print("\tCL Eps:", config.get("cl_eps", 0))
+                    print()
+                    print("Experiment:", os.path.join(save_folder, save_name))
+                    print("M1:", config["model_names"][0])
+                    if len(config["model_names"])>1:
+                        print("M2:", config["model_names"][1])
+                    print("Exec Time:", time.time()-startt)
+                    print()
 
                     for (s,t,v) in tokenized_datasets["train"]:
                         tup = (s,t,v)
