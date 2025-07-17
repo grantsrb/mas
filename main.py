@@ -1273,7 +1273,6 @@ def main():
     ##########################
     if config["zscore_alignment"] or config.get("pca_init",False):
         for midx in range(len(models)):
-            all_actvs = []
             for dirvar_tup in all_src_activations["train"].keys():
                 sidx,tidx,vidx = dirvar_tup
                 if sidx!=midx:
@@ -1282,8 +1281,8 @@ def main():
                 actvs = all_src_activations["train"][dirvar_tup]
                 if config["nonlin_align_fn"]!="identity":
                     actvs = intrv_module.rot_mtxs[midx].nonlin_fwd(actvs)
-                all_actvs.append(actvs.reshape(-1, actvs.shape[-1]))
-            actvs = torch.cat(all_actvs,dim=0)
+                actvs = actvs.reshape(-1, actvs.shape[-1])
+                break
 
             mu = 0
             std = 1
