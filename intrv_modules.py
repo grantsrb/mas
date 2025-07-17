@@ -900,7 +900,21 @@ def load_intrv_module(path, ret_config=False):
     if "sizes" not in checkpt["config"]:
         checkpt["config"]["sizes"] = [s["size"] for s in checkpt["config"]["mtx_kwargs"]]
     intrv_modu = InterventionModule(**checkpt["config"])
-    intrv_modu.load_state_dict(checkpt["state_dict"])
+    try:
+        intrv_modu.load_state_dict(checkpt["state_dict"])
+    except:
+        mus_and_sigmas = [dict() for _ in range(len(intrv_modu.rot_mtxs))]
+        for k,v in checkpt["state_dict"].items():
+            if "mu" in k:
+                idx = int(k.split("rot_mtxs.")[1].split(".")[0])
+                mus_and_sigmas[idx]["mu"] = v.data
+            if "sigma" in k:
+                idx = int(k.split("rot_mtxs.")[1].split(".")[0])
+                mus_and_sigmas[idx]["sigma"] = v.data
+        for idx,ms_dict in enumerate(mus_and_sigmas):
+            intrv_modu.set_normalization_params(
+                midx=idx, mu=ms_dict["mu"], sigma=ms_dict["sigma"])
+        intrv_modu.load_state_dict(checkpt["state_dict"])
     if ret_config:
         return intrv_modu, checkpt["config"]
     return intrv_modu
