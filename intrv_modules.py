@@ -817,6 +817,8 @@ class InterventionModule(torch.nn.Module):
             )
             self.rot_mtxs[midx].rot_module.set_initialization_vecs(
                 target_mtx=target_mtx,)
+        if verbose:
+            print("Solving for rotation matrix initialization...")
         rot_module = self.rot_mtxs[midx].rot_module
         rot_module = solve_for_orthogonal_param(
             rot_module=rot_module,
