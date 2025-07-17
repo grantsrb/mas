@@ -4,7 +4,7 @@ seed: 12345
 
 # Specify your models here
 model_names: 
-  - "./models/multiobject_gru/multiobject_gru_0_seed12345"
+  - "/data2/grantsrb/mas_neurips2025/multiobject_gru/multiobject_gru_0_seed12345"
 
 # Specify your dataset here
 dataset_names:
@@ -24,7 +24,7 @@ layers: # layers at which to attach the hooks
 # Ignore these for non-stepwise das trainings
 # If true, will shuffle the target sequence tokens within the swap mask
 shuffle_targ_ids: False
-const_targ_inpt_id: False
+const_targ_inpt_id: False # uses constant id for target model input embeddings
 
 incl_empty_varbs: True
 swap_keys:
@@ -35,6 +35,8 @@ swap_keys:
 
 mtx_types: 
   - "RotationMatrix"
+zscore_alignment: False # will zscore the reps after the nonlinearity before the rotation
+pca_init: False # Will initialize the rotation matrix to be approximately equal to PCA
 identity_init: False
 identity_rot: False # use this for debugging (applies the identity matrix
     # in place of the das rotation matrix) 
