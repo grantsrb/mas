@@ -97,8 +97,12 @@ def perform_eigen_pca(
     Returns:
         ret_dict: dict
             A dictionary containing the following keys:
-            - "components": tensor (N, n_components)
-                The principal components (eigenvectors) of the data.
+            - "components": tensor (n_components, N)
+                The principal components (eigenvectors) of the data. Can
+                use this to project the data onto the principal components
+                by left multiplying the data by this matrix.
+                Note that the components are in descending order of
+                explained variance. projections = X @ components.T
             - "explained_variance": tensor (n_components,)
                 The explained variance for each principal component.
             - "proportion_expl_var": tensor (n_components,)
