@@ -363,10 +363,15 @@ class PSDRotationMatrix(RotationMatrix):
             size=size,
             identity_init=identity_init)
 
-    def rot_inv(self, h):
-        h = torch.matmul(h, self.rot_module.inv())
-        h = h*self.sigma + self.mu
-        return self.nonlin_inv(h)
+    @property
+    def weight_inv(self):
+        if self.identity_rot:
+            return torch.eye(
+              self.size,
+              dtype=self.rot_module.weight.data.dtype,
+              device=device_fxn(self.rot_module.weight.get_device()),
+            )
+        return self.rot_module.inv()
 
 class SDRotationMatrix(PSDRotationMatrix):
     """
