@@ -7,7 +7,7 @@ root_folder="./models/"
 
 exp_folders1=( "multiobject_gru" ) #"multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
 configs=("configs/orthogonal_das.yaml" "configs/linear_das.yaml")
-search1=( "n_units=1" "n_units=2" "n_units=4" "n_units=16" "n_units=32" )
+search1=( "n_units=1" "n_units=2" "n_units=4" "n_units=16" "n_units=32" "n_units=64" )
 search2=( "swap_keys=count" "swap_keys=phase" )
 arg1="cmodel_names=CountUpDown" # can also try cmodel_name=CountUpUp with swap_keys demo_count and resp_count
 arg2=""
