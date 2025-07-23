@@ -377,6 +377,7 @@ def forward_pass(
             intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
             cl_latents=cl_latents,
             swap_mask=batch["trg_swap_masks"]>=0,
+            loss_type=config.get("cl_loss_type", "both"),
         )
         torch.set_grad_enabled(prev_grad_state)
         if cl_divergence:
@@ -521,10 +522,8 @@ def cos_and_mse_loss(x,y,targs=None,*args,**kwargs):
 
 def get_loss_fxn(fxn_name):
     if "mse" in fxn_name:
-        print("Using mse aux loss")
         return mse_loss
     if "cosine" in fxn_name or "cos" in fxn_name:
-        print("Using cosine aux loss")
         return cosine_loss
     if "both" in fxn_name:
         return cos_and_mse_loss
@@ -721,6 +720,7 @@ def main():
             # nonlinearity to the activations before PCA.
         "identity_init": False,
         "identity_rot": False,
+        "n_layers": 3, # if using rev resnets, number of res layers
         "mask_type":   "FixedMask", # BoundlessMask
         "n_units": None,
         "learnable_addition": False,
@@ -754,6 +754,7 @@ def main():
             # specifies the target for the counterfactual latent loss. None
             # defaults to no directions. Set cl_eps to 0 if you wish to
             # track the cl_loss without training it.
+        "cl_loss_type": "both", # choices: mse, cos, both
         "cl_eps": 0, # raw multiplicative factor for the cl_loss does not
             # affect the normal loss
         "track_intrv_distr": False, # if true, will track the difference
@@ -1250,7 +1251,7 @@ def main():
         mtx_kwarg_keys = {
             "rank", "identity_init", "bias", "mu",
             "sigma", "identity_rot", "orthogonal_map",
-            "nonlin_align_fn",
+            "nonlin_align_fn", "n_layers",
         }
         mtx_kwargs = dict()
         for key in mtx_kwarg_keys:

@@ -1962,3 +1962,111 @@ if __name__=="__main__":
         noise=5, drop_p=0.5,
         )
     print(mlp)
+
+
+class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
+    def __init__(self, size, identity_init=False, *args, **kwargs):
+        super().__init__()
+        self.eps = 1e-1
+        self.size = size
+        self.core_mtx = torch.nn.Parameter(
+            torch.randn(size,size)/math.sqrt(size))
+        if identity_init:
+            self.core_mtx.data = torch.eye(size)
+
+    def get_psd_mtx(self):
+        return torch.mm(self.core_mtx, self.core_mtx.T) +\
+            self.eps*torch.eye(
+                self.core_mtx.shape[-1],
+                device=device_fxn(self.core_mtx.get_device()),
+            )
+
+    @property
+    def weight(self):
+        return self.get_psd_mtx()
+
+    def inv(self):
+        """
+        Computes the inverse of a positive symmetric-definite matrix using Cholesky
+        decomposition.
+        """
+        L = torch.linalg.cholesky(self.weight)
+        return torch.cholesky_inverse(L)
+
+class SymmetricDefiniteMatrix(PositiveSymmetricDefiniteMatrix):
+    """
+    Similar to a PSD matrix, but learns signs to multiply rows of the
+    PSD matrix to allow it to be negative
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.signs = torch.nn.Parameter(0.01*torch.randn(self.size))
+
+    @property
+    def weight(self):
+        psd = self.get_psd_mtx()
+        signs = torch.nn.functional.tanh(self.signs)
+        signs = signs + self.eps*torch.sign(signs) # offset to ensure nonzero
+        return psd*signs
+
+    def inv(self):
+        """
+        Computes the inverse of a positive symmetric-definite matrix using Cholesky
+        decomposition.
+        """
+        return torch.linalg.inv(self.weight)
+
+
+class ReversibleBlock(nn.Module):
+    def __init__(self, fn_F, fn_G):
+        super().__init__()
+        self.F = fn_F
+        self.G = fn_G
+
+    def forward(self, x):
+        x1, x2 = x.chunk(2, dim=1)
+        y1 = x1 + self.F(x2)
+        y2 = x2 + self.G(y1)
+        return torch.cat([y1, y2], dim=1)
+
+    def inv(self, y):
+        y1, y2 = y.chunk(2, dim=1)
+        x2 = y2 - self.G(y1)
+        x1 = y1 - self.F(x2)
+        return torch.cat([x1, x2], dim=1)
+
+class SimpleFn(nn.Module):
+    def __init__(self, size):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(size, size),
+            nn.BatchNorm1d(size),
+            nn.ReLU(inplace=True),
+            nn.Linear(size, size),
+            nn.BatchNorm1d(size)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class ReversibleResnet(nn.Module):
+    def __init__(self, size, n_layers):
+        super().__init__()
+        self.size = size
+        self.rev_blocks = nn.ModuleList()
+        for _ in range(n_layers):
+            F_block = SimpleFn(size//2)
+            G_block = SimpleFn(size//2)
+            self.rev_blocks.append(ReversibleBlock(F_block, G_block))
+
+    def forward(self, x):
+        fx = x
+        for block in self.rev_blocks:
+            fx = block(fx)
+        return fx
+
+    def inv(self, x):
+        fx = x
+        for block in reversed(self.rev_blocks):
+            fx = block.inv(fx)
+        return fx

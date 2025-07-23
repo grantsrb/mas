@@ -6,7 +6,11 @@ import copy
 
 from fca import FunctionalComponentAnalysis
 from utils import device_fxn
-from dl_utils.torch_modules import IdentityModule, InvTanh, InvSigmoid
+from dl_utils.torch_modules import (
+    IdentityModule, InvTanh, InvSigmoid,
+    PositiveSymmetricDefiniteMatrix, SymmetricDefiniteMatrix,
+    ReversibleResnet,
+)
 
 class RankRotationMatrix(torch.nn.Module):
     def __init__(self,
@@ -289,58 +293,6 @@ class FCARotationMatrix(torch.nn.Module):
     def forward(self, h, inverse=False):
         return self.rot_module(h, inverse=inverse)
 
-class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
-    def __init__(self, size, identity_init=False, *args, **kwargs):
-        super().__init__()
-        self.eps = 1e-1
-        self.size = size
-        self.core_mtx = torch.nn.Parameter(torch.randn(size,size)/math.sqrt(size))
-        if identity_init:
-            self.core_mtx.data = torch.eye(size)
-
-    def get_psd_mtx(self):
-        return torch.mm(self.core_mtx, self.core_mtx.T) +\
-            self.eps*torch.eye(
-                self.core_mtx.shape[-1],
-                device=device_fxn(self.core_mtx.get_device()),
-            )
-
-    @property
-    def weight(self):
-        return self.get_psd_mtx()
-
-    def inv(self):
-        """
-        Computes the inverse of a positive symmetric-definite matrix using Cholesky
-        decomposition.
-        """
-        L = torch.linalg.cholesky(self.weight)
-        return torch.cholesky_inverse(L)
-
-class SymmetricDefiniteMatrix(PositiveSymmetricDefiniteMatrix):
-    """
-    Similar to a PSD matrix, but learns signs to multiply rows of the
-    PSD matrix to allow it to be negative
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.signs = torch.nn.Parameter(0.01*torch.randn(self.size))
-
-    @property
-    def weight(self):
-        psd = self.get_psd_mtx()
-        signs = torch.nn.functional.tanh(self.signs)
-        signs = signs + self.eps*torch.sign(signs) # offset to ensure nonzero
-        return psd*signs
-
-    def inv(self):
-        """
-        Computes the inverse of a positive symmetric-definite matrix using Cholesky
-        decomposition.
-        """
-        return torch.linalg.inv(self.weight)
-
-
 class PSDRotationMatrix(RotationMatrix):
     """
     Creates a Positive Symmetric Definite matrix
@@ -394,6 +346,119 @@ class SDRotationMatrix(PSDRotationMatrix):
         self.rot_module = SymmetricDefiniteMatrix(
             size=size,
             identity_init=identity_init)
+
+class RevResnetRotation(torch.nn.Module):
+    """
+    Creates a rotation module that uses reversible resnets to perform
+    the 'rotation'
+    """
+    def __init__(self,
+            size,
+            n_layers=3,
+            mu=0,
+            sigma=1,
+            nonlin_align_fn=None,
+            **kwargs):
+        """
+        size: int
+            the height and width of the rotation matrix
+        n_layers: int
+            the number of residual layers
+        mu: float or FloatTensor (size,)
+            Used to center each feature dim of the activations.
+        sigma: float or FloatTensor (size,)
+            Used to scale each feature dim of the activations.
+        """
+        super().__init__()
+        self.set_nonlin_fn(nonlin_align_fn)
+
+        if type(mu)==float or type(mu)==int:
+            self.mu = mu
+        else:
+            self.register_buffer("mu", mu)
+        if type(sigma)==float or type(sigma)==int:
+            self.sigma = sigma
+        else:
+            self.register_buffer("sigma", sigma)
+
+        self.rot_module = ReversibleResnet(
+            size=size,
+            n_layers=n_layers,
+        )
+
+    @property
+    def size(self):
+        return self.rot_module.size
+
+    def set_normalization_params(self, mu=None, sigma=None):
+        """
+        Sets the normalization parameters for the rotation matrix.
+        If mu or sigma are None, will not set them.
+
+        Args:
+            mu: float or FloatTensor (size,)
+                Used to center each feature dim of the activations.
+            sigma: float or FloatTensor (size,)
+                Used to scale each feature dim of the activations.
+        """
+        if mu is not None:
+            if type(mu)==float or type(mu)==int:
+                mu = torch.tensor([mu]*self.size)
+            elif type(mu)==list:
+                mu = torch.tensor(mu)
+            elif not isinstance(mu, torch.Tensor):
+                raise ValueError("mu must be a float, list, or torch tensor")
+            if hasattr(self, "mu"): delattr(self, "mu")
+            self.register_buffer("mu", mu)
+        if sigma is not None:
+            if type(sigma)==float or type(sigma)==int:
+                sigma = torch.tensor([sigma]*self.size)
+            elif type(sigma)==list:
+                sigma = torch.tensor(sigma)
+            elif not isinstance(sigma, torch.Tensor):
+                raise ValueError("sigma must be a float, list, or torch tensor")
+            if hasattr(self, "sigma"):
+                delattr(self, "sigma")
+            self.register_buffer("sigma", sigma)
+
+    def reset(self):
+        pass
+
+    def get_condition(self, p=None):
+        return 0
+
+    def set_nonlin_fn(self, nonlin_align_fn):
+        """
+        Sets the non-linear function to apply to the input before the
+        rotation matrix. Actually uses the inverse first!!
+        """
+        self.nonlin_fn = nonlin_align_fn
+        if nonlin_align_fn is None or nonlin_align_fn=="identity":
+            self.nonlin_fwd = IdentityModule()
+            self.nonlin_inv = IdentityModule()
+        elif nonlin_align_fn=="tanh":
+            self.nonlin_fwd = InvTanh()
+            self.nonlin_inv = torch.nn.Tanh()
+        elif nonlin_align_fn=="sigmoid":
+            self.nonlin_fwd = InvSigmoid()
+            self.nonlin_inv = torch.nn.Sigmoid()
+        else:
+            raise ValueError("nonlin_align_fn must be identity, tanh, or sigmoid, got: {}".format(nonlin_align_fn))
+
+    def rot_forward(self, h):
+        h = self.nonlin_fwd(h)
+        h = (h-self.mu)/self.sigma
+        return self.rot_module(h)
+
+    def rot_inv(self, h):
+        h = self.rot_module.inv(h)
+        h = h*self.sigma + self.mu
+        h = self.nonlin_inv(h)
+        return h
+
+    def forward(self, h, inverse=False):
+        if inverse: return self.rot_inv(h)
+        return self.rot_forward(h)
 
 
 class RelaxedRotationMatrix(RankRotationMatrix):
