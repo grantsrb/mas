@@ -4,6 +4,7 @@ import os
 import json
 import yaml
 import copy
+from datetime import datetime
 from .utils import get_git_revision_hash, package_versions, get_datetime_str, remove_ending_slash
 import numpy as np
 
@@ -871,6 +872,9 @@ def get_save_name(
     m2 = "".join([x[:3] for x in remove_ending_slash(kwargs["model_names"][-1]).split("/")[-1].split("_")])
     save_name = save_name + abbrevs["model_names"] + "-" + m2 + "_"
 
+    # Get datetime
+    dtime = datetime.now().strftime("%Y-%m-%d_t%H%M%S")
+
     # add key value pairs to folder name
     if "save_keys" in kwargs:
         s = set(kwargs["save_keys"])
@@ -882,7 +886,7 @@ def get_save_name(
         if len(s)==0 or len(d)==0: s = config.get("save_keys", set())
     if len(s)==0:
         n_dupls = get_num_duplicates(folder=save_folder, fname=save_name, ext=".csv")
-        return save_name + f"_v{n_dupls}"
+        return save_name + f"_d{dtime}_v{n_dupls}"
     for k in sorted(list(s)):
         if k in ignores: continue
         has_len = hasattr(kwargs[k],"__len__")
@@ -932,4 +936,4 @@ def get_save_name(
         .replace("swap_keys","swpks")\
         .replace("encoder","enc")
     n_dupls = get_num_duplicates(save_folder, save_name, ext=".csv")
-    return save_name + f"_v{n_dupls}"
+    return save_name + f"_d{dtime}_v{n_dupls}"
