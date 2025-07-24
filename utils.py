@@ -428,6 +428,7 @@ def run_cmodel_to_completion(
         post_varbs=False,
         info=None,
         end_tokens={},
+        incl_all_varbs=False,
         *args, **kwargs,
     ):
     """
@@ -451,6 +452,10 @@ def run_cmodel_to_completion(
         end_tokens: set
             optionally specify tokens that indicate the model is finished.
             None is assumed to be an end condition for all cmodels
+        incl_all_varbs: bool
+            if true, will include the output variables even if post_varbs
+            is false and will include the initial input variables even
+            if post_varbs is True
     Returns:
         outp_tokens: list of tokens
             the output produced by the causal model after each
@@ -469,6 +474,7 @@ def run_cmodel_to_completion(
         info=info,
         end_tokens=end_tokens,
         n_steps=None,
+        incl_all_varbs=incl_all_varbs,
         *args, **kwargs,
     )
 
@@ -480,6 +486,7 @@ def run_for_n_steps(
         post_varbs=False,
         info=None,
         end_tokens=set(),
+        incl_all_varbs=False,
         *args, **kwargs,
     ):
     """
@@ -507,6 +514,10 @@ def run_for_n_steps(
             if true, will return the variables after each
             input token. Otherwise returns the variables
             before each token.
+        incl_all_varbs: bool
+            if true, will include the output variables even if post_varbs
+            is false and will include the initial input variables even
+            if post_varbs is True
     Returns:
         outp_tokens: list of tokens
             the output produced by the causal model after each
@@ -522,6 +533,8 @@ def run_for_n_steps(
     if not varbs:
         varbs = cmodel.init_varbs
     varb_list = []
+    if incl_all_varbs and post_varbs:
+        varb_list.append(varbs)
     task_mask = []
     token = inpt_token
     step = 0
@@ -545,6 +558,8 @@ def run_for_n_steps(
             print("varbs step1:", varb_list[0])
             print("varbs:", varbs)
             assert False
+    if incl_all_varbs and not post_varbs:
+        varb_list.append(varbs)
     return outp_token_ids, task_mask, varb_list
 
 def run_til_idx(

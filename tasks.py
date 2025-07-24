@@ -58,7 +58,7 @@ class Task:
             k:copy.deepcopy(v) for k,v in self.info.items() if "_id" not in k
         }
 
-    def generate_sample(self, *args, **kwargs):
+    def generate_sample(self, incl_inpt_token=False, *args, **kwargs):
         init_varbs = self.cmodel.init_varbs
         kwargs = {k: v for k,v in kwargs.items() if k in init_varbs}
         varbs = {**init_varbs, **kwargs}
@@ -67,8 +67,12 @@ class Task:
             inpt_token=self.bos_token,
             info=self.info,
             varbs=varbs,
+            incl_all_varbs=incl_inpt_token,
             end_tokens={self.info.get("eos_token", "E"), None},
         )
+        if incl_inpt_token:
+            seq = [self.bos_token] + seq
+            tmask = [0] + tmask
         return seq, tmask, varbs
 
     def generate_samples(self, n_samples, *args, **kwargs):
