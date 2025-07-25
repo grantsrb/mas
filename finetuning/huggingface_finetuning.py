@@ -26,9 +26,9 @@ import pandas as pd
 # ====== Configuration ======
 ROOT_DIR = "/data2/grantsrb/mas_finetunings/"
 MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" # "gpt2"  # or any other Hugging Face causal LM
-DATASET = "Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat" #"allenai/toxichat" # 
+DATASET = "anitamaxvim/jigsaw-toxic-comments" #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
 FILTER_MODE = "toxic"  # "toxic", "nontoxic", or "both"
-MAX_LENGTH = 256
+MAX_LENGTH = 512
 BATCH_SIZE = 4
 EPOCHS = 3
 LR = 5e-4
