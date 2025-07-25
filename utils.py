@@ -5,6 +5,7 @@ import yaml
 import os
 from tqdm import tqdm
 import copy
+import sys
 
 def device_fxn(device):
     if device<0: return "cpu"
@@ -364,8 +365,24 @@ def load_json_or_yaml(file_name):
         return load_yaml(file_name)
     raise NotImplemented
 
-def get_command_line_args(args):
-    command_keys = []
+def str_to_typed_value(val):
+    if val.lower() in {"none", "null", "na"}:
+        val = None
+    elif "," in val:
+        val = val.split(",")
+        val = [str_to_typed_value(v) for v in val if v!=""]
+    elif val.lower()=="true":
+        val = True
+    elif val.lower()=="false":
+        val = False
+    elif val.isnumeric():
+        val = int(val)
+    elif val.replace(".", "").isnumeric() and val.count(".")<=1:
+        val = float(val)
+    return val
+
+def get_command_line_args(args=None):
+    if args is None: args = sys.argv[1:]
     config = {}
     for arg in args:
         if ".yaml" in arg or ".json" in arg:
@@ -373,23 +390,9 @@ def get_command_line_args(args):
             config = {**config, **load_json_or_yaml(arg)}
         elif "=" in arg:
             key,val = arg.split("=")
-            command_keys.append(key)
-            if val=="None":
-                val = None
-            elif "," in val:
-                val = val.split(",")
-                val = [v for v in val if v!=""]
-            elif val.lower()=="true":
-                val = True
-            elif val.lower()=="false":
-                val = False
-            elif val.isnumeric():
-                val = int(val)
-            elif val.replace(".", "").isnumeric():
-                print("Decimal!!!!!!", key)
-                val = float(val)
-            config[key] = val
-    return config, command_keys
+            config[key] = str_to_typed_value(val)
+    return config
+
 
 def extract_ids(string, tokenizer):
     """
