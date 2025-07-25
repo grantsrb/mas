@@ -58,12 +58,16 @@ def get_activations_hook(comms_dict, key="source", to_cpu=False):
                     comms_dict[key].append(out["hidden_states"].cpu())
                 else:
                     comms_dict[key].append(out["attentions"].cpu())
+            elif type(out)==tuple:
+                comms_dict[key].append(out[0].cpu())
             else:
                 comms_dict[key].append(out.cpu())
     else:
         def hook(module, inp, out):
             if type(out)==dict:
                 comms_dict[key].append(out["hidden_states"])
+            elif type(out)==tuple:
+                comms_dict[key].append(out[0])
             else:
                 comms_dict[key].append(out)
     return hook
