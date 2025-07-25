@@ -96,8 +96,9 @@ for k in sorted(list(config.keys())):
     print(k,"--", config[k])
 
 # ====== Load model and tokenizer ======
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained( MODEL_NAME)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME, device_map="auto")
 
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
