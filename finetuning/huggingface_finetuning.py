@@ -28,8 +28,8 @@ ROOT_DIR = "/data2/grantsrb/mas_finetunings/"
 MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" # "gpt2"  # or any other Hugging Face causal LM
 DATASET = "Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat" #"allenai/toxichat" # 
 FILTER_MODE = "toxic"  # "toxic", "nontoxic", or "both"
-MAX_LENGTH = 256
-BATCH_SIZE = 4
+MAX_LENGTH = 512
+BATCH_SIZE = 8
 EPOCHS = 3
 LR = 5e-4
 SAVE_EVERY_N_STEPS = 30
@@ -96,8 +96,9 @@ for k in sorted(list(config.keys())):
     print(k,"--", config[k])
 
 # ====== Load model and tokenizer ======
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained( MODEL_NAME)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME, device_map="auto")
 
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
