@@ -484,13 +484,21 @@ def add_pad_masks(data_dict, src_info, trg_info):
         pad_id = info["pad_token_id"]
         bos_id = info["bos_token_id"]
         eos_id = info["eos_token_id"]
+
         inpt_ids = torch.LongTensor(data_dict[k+"_input_ids"])
-        attn_mask = (inpt_ids!=pad_id)
+
+        attn_mask = torch.ones_like(inpt_ids).bool()
+        if pad_id is not None:
+            attn_mask = (inpt_ids!=pad_id)
         eos_mask = torch.zeros_like(inpt_ids)
-        rows = torch.arange(len(eos_mask)).long()
-        eos_mask[rows, arglast(inpt_ids==eos_id, axis=-1)] = 1
+        bos_mask = torch.zeros_like(inpt_ids)
+        if eos_id is not None and bos_id is not None:
+            rows = torch.arange(len(eos_mask)).long()
+            eos_mask[rows, arglast(inpt_ids==eos_id, axis=-1)] = 1
+            rows = torch.arange(len(bos_mask)).long()
+            bos_mask[rows, arglast(inpt_ids==bos_id, axis=-1)] = 1
         data_dict[k+"_inpt_attn_masks"] = attn_mask&~eos_mask.bool()
-        data_dict[k+"_outp_attn_masks"] = attn_mask&(inpt_ids!=bos_id)
+        data_dict[k+"_outp_attn_masks"] = attn_mask&~bos_mask.bool()
     return data_dict
 
 def convert_to_tensors(data_dict):
