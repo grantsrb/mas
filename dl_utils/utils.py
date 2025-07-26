@@ -610,6 +610,9 @@ def get_mask_past_idx(shape, idx, inclusive=False):
             the shape of the resulting mask
         idx: long tensor (B,)
             the indices that mark the start of the mask
+        inclusive: bool
+            if true, will include the argued indices in the mask, otherwise
+            returns the mask past the indices without inclusion
     Returns:
         mask: bool tensor (shape)
             ones are at indices after the argued idx along the last dim
@@ -631,10 +634,11 @@ def get_mask_past_idx(shape, idx, inclusive=False):
     if inclusive: return arr>=idx[:,None]
     return arr>idx[:,None]
 
-def get_mask_between(shape, startx, endx):
+def get_mask_between(shape, startx, endx, inclusive=False):
     """
     Returns a binary mask that ranges from the start indices to the
-    end indices along the last axis. Excludes the indices argued in endx.
+    end indices along the last axis. Always inclusive for startx, but
+    can choose if endx is inclusive.
 
     Args:
         shape: tuple of ints
@@ -644,6 +648,8 @@ def get_mask_between(shape, startx, endx):
             non-final dimensions of shape
         endx: tensor (B,)
             the ending indices. same shape as startx
+        inclusive: bool
+            if true, will include the endx index in the mask
     Returns:
         mask: bool tensor (shape)
     """
@@ -653,6 +659,8 @@ def get_mask_between(shape, startx, endx):
         arr = arr[None]
     reps = tuple(list(shape[:-1])+[1])
     arr = arr.repeat(reps)
+    if inclusive:
+        return (arr>=startx[:,None])&(arr<=endx[:,None])
     return (arr>=startx[:,None])&(arr<endx[:,None])
 
 def get_mask_past_arglast(arr, inclusive=False):
