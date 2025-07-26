@@ -28,7 +28,7 @@ RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 
 print("Running Hugging Face Toxicity Example...")
 config = {
-    "root_dir": "/data2/grantsrb/mas_finetunings/",
+    "root_dir": "/data/grantsrb/mas_finetunings/",
     "seed": 42,  # Random seed for reproducibility, also the meaning of life, the universe, and everything
     "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # "gpt2"  # or any other Hugging Face causal LM
     "tokenizer_name": None,
@@ -42,6 +42,7 @@ config = {
     "logging_steps": 10,
     "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
     "balance_dataset": True, # optionally ensure that the toxic and nontoxic counts are about equal
+    "do_eval": False, # includes validation if true
     "debugging": False,
     "small_data": False, # Used for debugging purposes
 }
@@ -88,7 +89,7 @@ for k in sorted(list(config.keys())):
     print(k,"--", config[k])
 
 # ====== Load model and tokenizer ======
-tokenizer = AutoTokenizer.from_pretrained( MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME,)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME, device_map="auto")
 
@@ -240,7 +241,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
 training_args = TrainingArguments(
     output_dir=LOG_DIR,
     overwrite_output_dir=True,
-    eval_strategy="epoch",
+    eval_strategy="epoch" if config["do_eval"] else "no",
     gradient_accumulation_steps=config["grad_accumulation_steps"],
     learning_rate=config["lr"],
     num_train_epochs=config["n_epochs"],
@@ -256,7 +257,7 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=valid_dataset,
+    eval_dataset=valid_dataset if config["do_eval"] else None,
     tokenizer=tokenizer,
     data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
     callbacks=[LoggingAndCheckpointCallback()]
