@@ -36,7 +36,8 @@ config = {
     "max_length": 512,
     "batch_size": 8,
     "lr": 4e-4,
-    "n_epochs": 2,
+    "n_epochs": float("inf"), # Overwritten by max_training_steps
+    "max_training_steps": 300, # set to -1 if you want to use n_epochs instead
     "grad_accumulation_steps": 8,
     "save_every_n_steps": 30,
     "logging_steps": 10,
@@ -208,7 +209,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
                 tokenizer.save_pretrained(checkpoint_dir)
             print(f"✔ Saved checkpoint at step {state.global_step} to {checkpoint_dir}")
 
-            if logs["loss"]<best_loss:
+            if "loss" in logs and logs["loss"]<best_loss:
                 best_loss = logs["loss"]
                 checkpoint_dir = os.path.join(LOG_DIR, f"best_loss_checkpt")
                 if not config["debugging"]:
@@ -245,6 +246,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=config["grad_accumulation_steps"],
     learning_rate=config["lr"],
     num_train_epochs=config["n_epochs"],
+    max_steps=config["max_training_steps"],
     per_device_train_batch_size=config["batch_size"],
     save_strategy="no",  # We manually save with callback
     logging_steps=config["logging_steps"],
