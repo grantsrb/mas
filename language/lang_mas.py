@@ -1,8 +1,10 @@
 import sys
+sys.path.insert(1, "../")
 import os
 import torch
 import numpy as np
 import time
+from datetime import datetime
 from torch.utils.data import DataLoader
 from datasets import Dataset
 
@@ -29,19 +31,21 @@ from intrv_modules import InterventionModule
 import filters
 import causal_models
 import constants as consts
-from intrv_datas import make_intrv_data_from_seqs
+from intrv_datas import make_intrv_data_from_src_data
 from hooks import get_stepwise_hook, get_indywise_hook, get_hook_module
 from intrv_training import (
     get_model_and_tokenizer, forward_pass, get_embedding_name,
     get_cl_latents,
 )
 
+from transformers import ( AutoTokenizer, AutoModelForCausalLM, )
+
 import pandas as pd # import after transformers to avoid versioning bug
 
 def config_prep(config):
     # Catch plural errors:
     for k in [
-        "cmodel_names", "swap_keys", "mtx_types", "model_names",
+        "swap_keys", "mtx_types", "model_names",
         "dataset_names", "padding_sides", "layers", 
     ]:
         singular = k[:-1]
@@ -59,25 +63,7 @@ def config_prep(config):
         getattr(filters, fname) for fname in config["filter_names"]
     ]
 
-    # can assume different cmodels will default to appropriate parameters. This
-    # reduces risk of error. Just make a new causal model for new interventions
-    if type(config.get("cmodel_names",None))==str:
-        cname = config["cmodel_names"]
-        config["cmodel_names"] = [cname for _ in config["model_names"]]
-    if config.get("cmodel_names", None) is None:
-        mconfigs = [get_config(mname) for mname in config["model_names"]]
-        mconfigs = [ mc if mc is not None else {} for mc in mconfigs ]
-        t2c = consts.TASK2CMODEL
-        cnames = [
-            t2c.get(mc.get("task_type",None), "CountUpDown") for mc in mconfigs]
-        config["cmodel_names"] = cnames
-        print("Cmodel Names:", cnames)
-
     kwargs = { "hold_outs": [], }
-    config["cmodels"] = [
-        getattr(causal_models, cname)(**kwargs) for cname in config["cmodel_names"]
-    ]
-    print("Cmodels:", config["cmodels"])
 
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
@@ -136,39 +122,12 @@ def config_prep(config):
     return config
 
 def fill_in_prompts_and_replacements(config):
-    config["prompts"] = []
-    config["replacements"] = []
     config["padding_sides"] = []
     for model_name in config["model_names"]:
         print("Model Name:", model_name)
         # Get padding side
         padding_side = consts.PADDING_SIDES.get(model_name, "right")
         config["padding_sides"].append(padding_side)
-
-        # Get prompts
-        prompt = consts.PROMPTS.get(model_name, "")
-        if not prompt:
-            for k in consts.PROMPTS:
-                if k in model_name:
-                    prompt = consts.PROMPTS[k]
-        config["prompts"].append(prompt)
-        print("Prompt:", prompt)
-
-        # Get string replacement dict
-        replacements = consts.REPLACEMENTS.get(
-                model_name,
-                None
-            )
-        if not replacements:
-            replacements = {**consts.DEFAULT_REPLACEMENTS}
-            for k in consts.REPLACEMENTS:
-                if k in model_name:
-                    replacements = {**replacements, **consts.REPLACEMENTS[k]}
-        config["replacements"].append(replacements)
-        print("Replacements:")
-        for k,v in replacements.items():
-            print(f"\t{k}: {v}")
-        print()
     return config
 
 def main():
@@ -177,41 +136,19 @@ def main():
     #    Default configuration
     ##########################
     defaults = {
-        "save_root": "/data2/grantsrb/icml_mas/",
+        "save_root": "/data2/grantsrb/mas_finetuning/",
         "exp_name": "myexp",
         "conserve_memory": True,
 
-        # Use two identical models by default (replace with real LLaMA repo names as needed)
-        "model_names": [
-            #"meta-llama/Llama-3.2-1B",
-            "gpt2",
-            "gpt2",
-        ], #[, "gpt2"], #
+        "source_files": [
+            "/data2/grantsrb/mas_finetuning/srcactvs_gpt2_Anthropic/hh-rlhf_toxic_d2025-07-24_t22-19-23.pt",
+            "/data2/grantsrb/mas_finetuning/srcactvs_gpt2_Anthropic/hh-rlhf_toxic_d2025-07-24_t22-19-23.pt",
+        ],
 
-        "dataset_names": [
-            "task", "task"
-        ],
-        "n_train_samples": 10000, # sample counts only apply if using task generated
-            # dataset
-        "n_valid_samples": 1000,
-        "dataset_kwargs": [
-            {"name": "main", "split":"train", } for _ in range(2)
-        ],
-        "task_kwargs": [{} for _ in range(2)],
-        "filter_by_correct": False,
-        "filtered_dataset_paths": [
-            "./data/filtered_gsm8k",  # where to save/load the filtered dataset
-            "./data/filtered_gsm8k",  # where to save/load the filtered dataset
-        ],
         "layers": [ # layers at which to attach the hooks
             "embeddings",
             "embeddings"
         ],  
-        "cmodel_names": None,
-        "filter_names": [
-            "default_filter",
-            "default_filter",
-        ],
         "swap_keys": [ ["full"], ["full"] ], # argue a list of
             # keys for each model.
         "incl_empty_varbs": False, # if true, includes an explicit
@@ -290,15 +227,9 @@ def main():
         print(k, config[k])
 
     config = config_prep(config) # general error catching
-    config = fill_in_prompts_and_replacements(config)
-    padding_sides = config["padding_sides"]
+    padding_sides = ["left" for _ in config["source_files"]]
 
-    save_folder = get_folder_from_path(config["model_names"][0])
-    if not os.path.exists(save_folder):
-        save_folder = os.path.join(
-            config.get("save_root", "./"),
-            config["model_names"][0],
-        )
+    save_folder = get_folder_from_path(config["source_files"][0])
     if not os.path.exists(save_folder):
         os.makedirs(save_folder, exist_ok=True)
     save_name = get_save_name(
@@ -315,10 +246,15 @@ def main():
     ##########################
     #    Load models and tokenizers
     ##########################
-    poss_devices = ["cpu","cpu"]
+    n_models = len(config["source_files"])
+    n_varbs = len(config["swap_keys"])
+    config["swap_keys"] = config.get("swap_keys", [["full"],["full"]])
+    if config["incl_empty_varbs"]:
+        config["swap_keys"] = [sk + [""] for sk in config["swap_keys"]]
+    poss_devices = ["cpu" for _ in range(n_models)]
     if torch.cuda.is_available():
         if torch.cuda.device_count()>1:
-            poss_devices = [0,1]
+            poss_devices = [i for i in range(n_models)]
         else:
             poss_devices = [0,0]
     models = []
@@ -326,27 +262,38 @@ def main():
     model_configs = []
     m_sizes = []
     devices = []
-    for mi,model_name in enumerate(config["model_names"]):
-        model, tokenizer, model_config = get_model_and_tokenizer(
-            model_name,
-            padding_side=padding_sides[mi],
-        )
+    print("Loading datasets and models...")
+    prompts = [] if config.get("prompts", None) is None else config["prompts"]
+    prompt_lens = []
+    src_datasets = { "train": [], "valid": [], } # lists will correspond
+        # to the index of each model
+    for mi,source_file in enumerate(config["source_files"]):
+        source_data = torch.load(source_file)
+        model_config = source_data["config"]
+        model = AutoModelForCausalLM.from_pretrained(model_config["model_name"])
+        tokenizer = AutoTokenizer.from_pretrained( model_config["tokenizer_name"])
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+
         model.eval()
         model_configs.append(model_config)
 
         # Freeze model parameters so that only our rotation matrix is trained.
         for param in model.parameters():
             param.requires_grad = False
-        print("Model", mi, "-", model_name)
+        print("Model", mi, "-", model_config["model_name"])
         print(model)
         models.append(model)
         tokenizers.append(tokenizer)
 
+        # Get appropriate model layers
         if config["layers"][mi] in {"embeddings", "inpt_identity"}:
             config["layers"][mi] = get_embedding_name(
                 model, config["layers"][mi])
             print("Decided Layer Name:", config["layers"][mi])
 
+        # Record appropriate devices for layers
         if hasattr(model, "hf_device_map") or hasattr(model, "hf_encoder"):
             try:
                 dmap = model.hf_encoder.hf_device_map
@@ -375,384 +322,194 @@ def main():
                 to_cpu=True,)
         m_sizes.append(actvs[config["layers"][mi]].shape[-1])
 
-    ####################################################
-    #    Load the datasets
-    ####################################################
-    print("Loading datasets...")
-    datasets = { "train": [], "valid": [], }
-    for mi in range(len(config["model_names"])):
-        for k in datasets:
-            n_samples = config[f"n_{k}_samples"]
-            dkwargs = {**config["dataset_kwargs"][mi]}
-            dkwargs["split"] = k
-            dkwargs["data_path"] = config.get(
-                f"{k}_data_paths",
-                ["./data/multiobj.json", "./data/multiobj.json"]
-            )[mi]
-            tconfig = model_configs[mi].get("task_config", {})
-            if tconfig is None: tconfig = {}
-            if "max_count" in config:
-                tconfig["max_count"] = config["max_count"]
-            if tconfig: tconfig["unk_p"] = 0
-            # The dataset consists of text (and task masks if applicable)
-            # Will eventually allow vector representations as well
-            dataset = get_dataset(
-                config["dataset_names"][mi],
-                n_samples=n_samples,
-                task_type=model_configs[mi].get("task_type", None),
-                task_config=tconfig,
-                **dkwargs)
-            datasets[k].append(dataset)
-        print("Model", mi)
-        print(datasets["train"][mi]["text"][0])
-        print(datasets["train"][mi]["task_mask"][0])
-    print("Pre Dataset:", datasets["train"][0])
+        ####################################################
+        #    Read in RAW DATA
+        ####################################################
+        layer = config["layers"][mi]
+        src_text = source_data["text"]
+        z = zip(source_data["input_text"], source_data["generated_text"])
+        raw_text = [in_txt + gen_txt for in_txt,gen_txt in z]
+        logits = source_data["logits"]
+        src_actvs = source_data["layer_states"][layer]
+        prompt_len = source_data["propt_len"]
+        prompt_lens.append(prompt_len)
+        if config.get("prompts", None) is None:
+            prompts.append(source_data["prompt"])
+
+        trn_size = int(0.8*len(raw_text))
+        val_size = len(raw_text)-trn_size
+
+        # Split data into train/valid
+        perm = torch.randperm(len(raw_text)).long()
+        lperm = perm.tolist()
+
+        trn_data = {
+            "src_text": [src_text[p] for p in lperm[:trn_size]],
+            "text": [raw_text[p] for p in lperm[:trn_size]],
+            "logits": logits[perm[:trn_size]],
+            "actvs": src_actvs[perm[:trn_size]],
+            "prompt_len": prompt_len,
+        }
+        src_datasets["train"].append( trn_data )
+
+        val_data = {
+            "src_text": [src_text[p] for p in lperm[trn_size:]],
+            "text": [raw_text[p] for p in lperm[trn_size:]],
+            "logits": logits[perm[trn_size:]],
+            "actvs": src_actvs[perm[trn_size:]],
+            "prompt_len": prompt_len,
+        }
+        src_datasets["valid"].append( val_data )
 
     ####################################################
-    #    Tokenize the filtered dataset for autoregressive training.
-    #    Here we form an input by concatenating the question and
-    #    answer (with a newline and “Answer:” marker).
+    #  MAKE INTERVENTION DATA
     ####################################################
-    tokenized_datasets = {k: [] for k in datasets}
-    infos = []
-    for mi,tokenizer in enumerate(tokenizers):
-        for k in tokenized_datasets:
-            kwrgs = {**config}
-            kwrgs["dataset_name"] = kwrgs["dataset_names"][mi]
-            kwrgs["replacements"] = kwrgs["replacements"][mi]
-            kwrgs["prompt"] = kwrgs["prompts"][mi]
-
-            # The tokenized dataset has replaced text specified in the
-            # replacements dict, has not prepended a prompt or a bos token,
-            # and has converted the text into tokens and then token ids.
-            # None of the tokenized data is padded, and non are tensors.
-            # fields include: "token_ids", "inpt_attn_mask", "task_mask"
-            tokenized_datasets[k].append(
-                tokenize_dataset(
-                    dataset=datasets[k][mi],
-                    tokenizer=tokenizer,
-                    config=kwrgs,
-                )
-            )
-            if "info" in model_configs[mi]:
-                info = model_configs[mi]["info"]
-                if type(info["pad_token_id"])==str:
-                    info = add_token_ids_to_info(info=info, tokenizer=tokenizer)
-            else:
-                info = make_tokenized_info(
-                    replacements=kwrgs["replacements"],
-                    tokenizer=tokenizer,
-                    config=config
-                )
-        infos.append(info)
-    config["infos"] = infos
-    print("Tok Dataset:", tokenized_datasets["train"][0])
-    print("Cmodels:", config["cmodels"])
-    for i in range(len(tokenized_datasets["train"])):
-        print(i,"Example:")
-        print("Seq   :", tokenized_datasets["train"][i]["input_ids"][0])
-        print("TMask :", tokenized_datasets["train"][i]["task_mask"][0])
-        print("Decode:", tokenizers[i].decode(tokenized_datasets["train"][i]["input_ids"][0]))
-        print()
-
-    ####################################################
-    #    Make/Get Intervention Data
-    ####################################################
-    intrv_datasets = {k: dict() for k in tokenized_datasets }
-    print("Info:")
-    print("1:", config["infos"][0])
-    print()
-    try:
-        print("2:", config["infos"][1])
-        print()
-    except: pass
-
     subspace_maps = { # maps between indices and string keys for each model
         "subspace2varbs": [],
         "varb2subspaces": [],
     }
     config["subspace_maps"] = subspace_maps
-    for k in tokenized_datasets:
-        for tidx in range(len(tokenized_datasets[k])):
-            subspace_maps["subspace2varbs"].append(
-                {i: key for i,key in enumerate(config["swap_keys"][tidx])}
-            )
-            subspace_maps["varb2subspaces"].append(
-                {key: i for i,key in enumerate(config["swap_keys"][tidx])}
-            )
-            for sidx in range(len(tokenized_datasets[k])):
-                n_varbs = len(config["swap_keys"][sidx])
-                z = enumerate(zip(
-                    config["swap_keys"][sidx],
-                    config["swap_keys"][tidx],
-                ))
-                for vidx,(src_swap_key, trg_swap_key) in z:
-                    if src_swap_key=="" and trg_swap_key=="" and tidx!=sidx:
-                        # Only want to include empty training on within model
-                        # interventions
-                        continue
-                    print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
-                    print(sidx, "Info:", infos[sidx])
-                    print(tidx, "Info:", infos[tidx])
-                    print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
-                    print("SSampl Src:", tokenized_datasets[k][sidx]["input_ids"][0][1:])
-                    print("Decode Src:", tokenizers[sidx].decode(tokenized_datasets[k][sidx]["input_ids"][0]))
-                    print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
-                    print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
-                    ttype1 = model_configs[sidx].get("task_type", "MultiObject")
-                    ttype2 = model_configs[tidx].get("task_type", "MultiObject")
-                    sk1 = config["swap_keys"][sidx]=="full"
-                    sk2 = config["swap_keys"][tidx]=="full"
-                    usdfc = ttype1==ttype2 and sk1 and sk2
-                    intrv_data = make_intrv_data_from_seqs(
-                        trg_data=tokenized_datasets[k][tidx],
-                        src_data=tokenized_datasets[k][sidx],
-                        src_swap_keys=src_swap_key,
-                        trg_swap_keys=trg_swap_key,
-                        src_cmodel=config["cmodels"][sidx],
-                        src_info=config["infos"][sidx],
-                        src_filter=config["filters"][sidx],
-                        trg_cmodel=config["cmodels"][tidx],
-                        trg_info=config["infos"][tidx],
-                        trg_filter=config["filters"][tidx],
-                        stepwise=config.get("stepwise", False),
-                        use_cl=(sidx,tidx) in config["cl_directions"],
-                        use_src_data_for_cl=usdfc,
-                        tokenizer=tokenizers[tidx],
-                        ret_src_labels=True,
-                    )
-                    intrv_data = add_prompt(
-                        intrv_data,
-                        src_tokenizer=tokenizers[sidx],
-                        trg_tokenizer=tokenizers[tidx],
-                        src_prompt=config["prompts"][sidx],
-                        trg_prompt=config["prompts"][tidx],
-                        src_replacements=config["replacements"][sidx],
-                        trg_replacements=config["replacements"][tidx],
+    all_src_activations = {k: dict() for k in src_datasets}
+    intrv_datasets = {k: dict() for k in src_datasets}
+    for si in range(n_models):
+        subspace_maps["subspace2varbs"].append(
+            {i: key for i,key in enumerate(config["swap_keys"][si])}
+        )
+        subspace_maps["varb2subspaces"].append(
+            {key: i for i,key in enumerate(config["swap_keys"][si])}
+        )
+        for ti in range(n_models):
+            for vi,varb in enumerate(config["swap_keys"][si]):
+                dir_var_tup = (si,ti,vi)
+                prompt = prompts[ti]
+                for k in src_datasets:
+                    intrv_data = make_intrv_data_from_src_data(
+                        text=src_datasets[k][si]["text"],
+                        shuffle=varb=="full",
+                        trg_prompt=prompt,
+                        src_logits=src_datasets[k][si]["logits"],
+                        src_actvs=src_datasets[k][si]["actvs"],
+                        src_prompt_len=src_datasets[k][si]["prompt_len"],
+                        tokenizer=tokenizers[ti],
+                        stepwise=config.get("stepwise", True),
+                        ret_cl_data=(si,ti) in config["cl_directions"],
                     )
                     intrv_data = pad_data_dict(
                         intrv_data,
-                        src_pad_id=infos[sidx]["pad_token_id"],
-                        trg_pad_id=infos[tidx]["pad_token_id"],
-                        src_pad_side=padding_sides[sidx],
-                        trg_pad_side=padding_sides[tidx],
+                        src_pad_id=tokenizers[si].pad_token_id,
+                        trg_pad_id=tokenizers[ti].pad_token_id,
+                        src_pad_side=padding_sides[si],
+                        trg_pad_side=padding_sides[ti],
                     )
                     intrv_data = add_pad_masks(
                         intrv_data,
-                        src_info=infos[sidx],
-                        trg_info=infos[tidx],
+                        src_info={
+                            "pad_token_id": getattr(tokenizers[si], "pad_token_id"),
+                            "bos_token_id": getattr(tokenizers[si], "bos_token_id"),
+                            "eos_token_id": getattr(tokenizers[si], "eos_token_id"),
+                        },
+                        trg_info={
+                            "pad_token_id": getattr(tokenizers[ti], "pad_token_id"),
+                            "bos_token_id": getattr(tokenizers[ti], "bos_token_id"),
+                            "eos_token_id": getattr(tokenizers[ti], "eos_token_id"),
+                        },
                     )
-                    print("Post Src:", intrv_data["src_input_ids"][0])
-                    print("Post Decode Src:", tokenizers[sidx].decode(intrv_data["src_input_ids"][0]))
-                    print("Post Trg:", intrv_data["trg_input_ids"][0])
-                    print("Post Decode Trg:", tokenizers[tidx].decode(intrv_data["trg_input_ids"][0]))
+                    print("Intrv Src:", intrv_data["src_input_ids"][0])
+                    print("Intrv Decode Src:", tokenizers[si].decode(intrv_data["src_input_ids"][0]))
+                    print("Intrv Trg:", intrv_data["trg_input_ids"][0])
+                    print("Intrv Decode Trg:", tokenizers[ti].decode(intrv_data["trg_input_ids"][0]))
                     print()
                     print()
                     intrv_data = convert_to_tensors(intrv_data)
-                    intrv_datasets[k][(sidx,tidx,vidx)] = Dataset.from_dict(intrv_data)
-    tokenized_datasets = intrv_datasets
+                    all_src_activations[k][dir_var_tup] = intrv_data["src_actvs"]
+                    intrv_datasets[k][dir_var_tup] = Dataset.from_dict(intrv_data)
 
     # Create a DataLoader that iterates over indices of the filtered dataset.
-    indices = list(range(len(datasets["train"][0])))
+    indices = list(range(trn_size))
     train_loader = DataLoader(
         indices,
         batch_size=config["batch_size"],
         shuffle=True
     )
 
-    indices = list(range(len(datasets["valid"][0])))
+    indices = list(range(val_size))
     valid_loader = DataLoader(
         indices,
         batch_size=config["eval_batch_size"],
         shuffle=True
     )
 
-    ##########################
-    #    Collect Source Activations
-    ##########################
+    ####################################################
+    #    Collect BASELINE LOSS AND ACC
+    ####################################################
+
+    criterion = torch.nn.CrossEntropyLoss()
+    baseline_metrics = {k: {
+        "loss": dict(),
+        "acc": dict(),
+    } for k in intrv_datasets}
+    print("Baselines:")
     with torch.no_grad():
-        all_src_activations = {k:dict() for k in datasets}
-        cl_latents = {k:dict() for k in datasets}
-        print("Collecting Activations")
-        for k in all_src_activations:
-            for dirvar_tup in tokenized_datasets[k].keys():
+        for k in intrv_datasets:
+            for sidx in range(n_models):
+                for tidx in range(n_models):
+                    for vidx in range(n_varbs):
+                        dir_var_tup = (sidx,tidx,vidx)
+                        input_ids = intrv_datasets[k][dir_var_tup]["src_input_ids"]
+                        tmask = intrv_datasets[k][dir_var_tup]["src_task_masks"]
+                        logits = src_datasets[k][sidx]["logits"]
+                        preds = logits.argmax(-1)
+
+                        loss = torch.zeros_like(input_ids[:,1:])
+                        temp = criterion(logits[:,:-1], input_ids[:,1:], reduction="none")
+                        loss[tmask] = temp[tmask]
+                        loss = loss.sum(-1)/tmask.sum(-1)
+
+                        acc = torch.zeros_like(input_ids[:,1:])
+                        temp = (preds[:,:-1]==input_ids[:,1:]).float()
+                        acc[tmask] = temp[tmask]
+                        acc = acc.sum(-1)/tmask.sum(-1)
+
+                        baseline_metrics[k]["loss"][dir_var_tup] = loss
+                        baseline_metrics[k]["acc"][dir_var_tup] = acc
+                        print(f"Tup: {sidx},{tidx},{vidx}; Loss: {loss.mean():.4f}; Acc: {acc.mean():.4f}")
+
+    ####################################################
+    #    Collect CL VECTORS
+    ####################################################
+
+    with torch.no_grad():
+        cl_vectors = {k:dict() for k in intrv_datasets}
+        print("Collecting CL Activations")
+        for k in intrv_datasets:
+            for dirvar_tup in intrv_datasets[k].keys():
                 src_idx,trg_idx,varb_idx = dirvar_tup
-                src_model = models[src_idx].eval()
-                trg_model = models[trg_idx].eval()
+                cl_vectors[k][dirvar_tup] = None
+                if (src_idx,trg_idx) not in config["cl_directions"]:
+                    continue
+
                 startt = time.time()
-                device = devices[src_idx]
-                print("Trg Model", trg_idx, config["model_names"][trg_idx])
-                print("Src Model", src_idx, config["model_names"][src_idx])
-                print("Device:", device)
-                vbsize = config.get("eval_batch_size", 128)
+                trg_model = models[trg_idx].eval()
+                device = devices[trg_idx]
+                print("Model", trg_idx, config["model_names"][trg_idx])
                 batch = collate_fn(
-                    torch.arange(len(tokenized_datasets[k][dirvar_tup])).long(),
-                    tokenized_datasets[k][dirvar_tup],
+                    torch.arange(trn_size).long(),
+                    intrv_datasets[k][dirvar_tup],
                     incl_src=True,
                     device="cpu")
 
-
-                #### TODO:
-                #if varb_idx>0:
-                #    print("Varbl", varb_idx)
-                #    for i in range(3):
-                #        indices = torch.arange(len(batch["input_ids"][i])).long()
-                #        print(tensor2str(indices))
-                #        for kk in batch:
-                #            try:
-                #                print((kk+" "*(10-len(kk)))[:10], tensor2str(batch[kk][i].long()))
-                #            except:
-                #                print("Failed to print", kk)
-                #        print()
-                #    assert False
-
-
-                actvs = collect_activations(
-                    src_model,
-                    input_ids=batch["src_input_ids"],
-                    attention_mask=batch["src_attention_mask"],
-                    task_mask=batch["src_input_tmask"],
-                    layers=[config["layers"][src_idx]],
-                    tforce=False,
-                    ret_pred_ids=True,
-                    batch_size=vbsize,
-                    to_cpu=True,
-                    verbose=True,
-                )
-
-                src_actvs = actvs[config["layers"][src_idx]].squeeze()
-                all_src_activations[k][dirvar_tup] = src_actvs
-
                 ## Collect cl latents by generating them from cl sequences
                 ## paired with cl indices to pick out the correct latents.
-                cl_latents[k][dirvar_tup] = None
-                if (src_idx,trg_idx) in config["cl_directions"]:
-                    cl_latents[k][dirvar_tup] = get_cl_latents(
-                        model=trg_model,
-                        device=devices[trg_idx],
-                        swap_mask=batch["trg_swap_masks"]>=0,
-                        input_ids=batch["cl_input_ids"],
-                        tmask=batch.get("cl_task_masks", None),
-                        idxs=batch["cl_idxs"],
-                        layer=config["layers"][trg_idx],
-                    )
-
-                pred_ids = actvs["pred_ids"].squeeze()
-
-                print("Inpt:", batch["src_input_ids"].shape)
-                print("InptTmask:", batch["src_input_tmask"].shape)
-                if "src_outp_tmask" in batch:
-                    tmask = batch["src_outp_tmask"].to(device)
-                    print("OutpTmask:", batch["src_outp_tmask"].shape)
-                else:
-                    tmask = batch["src_outp_attn_mask"].to(device)
-                    print("OutpAttn:", batch["src_outp_attn_mask"].shape)
-                corrects = torch.ones_like(tmask)
-                pids = pred_ids.to(device)[tmask]
-                tids = batch["src_labels"] .to(device)[tmask]
-                idx = pids==tids
-                corrects[tmask] = idx
-                corrects = corrects.long().sum(-1)==corrects.shape[1]
-                tokacc = (idx).float().mean().item()
-                fullacc = corrects.float().mean().item()
-
-                tmask = batch["src_outp_tmask"]
-                sidx = src_idx
-                tidx = trg_idx
-                #print(sidx,tidx,"Preds:")
-                #for i in range(3):
-                #    if i < len(pred_ids):
-                #        print("\tRawPredIds:", pred_ids[i])
-                #        print("\tRawLabeIds:", batch["src_labels"][i])
-                #        print("\tTskPredIds:", pred_ids[i][tmask[i].bool()])
-                #        print("\tTskLabeIds:", batch["src_labels"][i][tmask[i].bool()])
-                #        print("\tRawPreds:",  tokenizers[sidx].decode(pred_ids[i]))
-                #        print()
-                #        print("\tRawLabels:", tokenizers[sidx].decode(batch["src_labels"][i]))
-                #        print()
-                #        print("\tTskPreds:",  tokenizers[sidx].decode(pred_ids[i][tmask[i].bool()]))
-                #        print()
-                #        print("\tTskLabels:", tokenizers[sidx].decode(batch["src_labels"][i][tmask[i].bool()]))
-                #        print()
-                #        print("\tCorrects:", corrects[i])
-                #        print("----")
-
-                # Generated Text
-                idx = 0
-                input_text = tokenizers[src_idx].decode(batch["src_input_ids"][idx])
-                if type(input_text)!=str: input_text = input_text[0]
-                input_text = input_text.replace(tokenizers[src_idx].pad_token, "")
-                print("InpIds:", batch["src_input_ids"][idx][:10])
-                print("PrdIds:", pred_ids[idx][:10])
-                print(
-                    "Inpt:", input_text.replace("\n", "\\n")\
-                                         .replace("<BOS>", "B")\
-                                         .replace("<EOS>", "E")
+                cl_vectors[k][dirvar_tup] = get_cl_latents(
+                    model=trg_model,
+                    device=device,
+                    swap_mask=batch["trg_swap_masks"]>=0,
+                    input_ids=batch["cl_input_ids"],
+                    idxs=batch["cl_idxs"],
+                    layer=config["layers"][trg_idx],
                 )
-                pred_text = tokenizers[src_idx].decode(pred_ids[idx])
-                if type(pred_text)!=str: pred_text = pred_text[0]
-                print(
-                    "Pred:", pred_text.replace("\n", "\\n")\
-                                         .replace("<BOS>", "B")\
-                                         .replace("<EOS>", "E")
-                )
-
-                print(k.capitalize(), "TokAcc:", tokacc)
-                print(k.capitalize(), "FullAcc:", fullacc)
                 print("Exec Time:", time.time()-startt)
                 print()
-
-    ##########################
-    #    Test Linear Decodability of Features
-    ##########################
-    if "src_labels" in intrv_data:
-        print("Linear Decoding Results:")
-        for dirvar_tup in all_src_activations["train"].keys():
-            sidx,tidx,vidx = dirvar_tup
-            swap_key = config["swap_keys"][sidx][vidx]
-            if swap_key=="full": continue
-
-            # Training
-            actvs = all_src_activations["train"][dirvar_tup]
-            actvs = actvs.reshape(-1, actvs.shape[-1])
-            labels = torch.tensor(
-                tokenized_datasets["train"][dirvar_tup]["src_labels"]
-            )[...,:-1]#.reshape(-1).float()
-            tids = torch.tensor(
-                tokenized_datasets["train"][dirvar_tup]["src_input_ids"]
-            )[...,:-1]#.reshape(-1)
-            mask = (labels>-1)&(tids!=infos[sidx]["eos_token_id"])
-            mask = mask&(tids!=infos[sidx]["trig_token_ids"][0])
-            labels = labels.reshape(-1).float()
-            mask = mask.reshape(-1)
-
-            # Validation
-            vactvs = all_src_activations["valid"][dirvar_tup]
-            vactvs = vactvs.reshape(-1, vactvs.shape[-1])
-            vlabels = torch.tensor(
-                tokenized_datasets["valid"][dirvar_tup]["src_labels"]
-            )[...,:-1]
-            tids = torch.tensor(
-                tokenized_datasets["valid"][dirvar_tup]["src_input_ids"]
-            )[...,:-1]
-            vmask = (vlabels>-1)&(tids!=infos[sidx]["eos_token_id"])
-            vmask = vmask&(tids!=infos[sidx]["trig_token_ids"][0])
-            vlabels = vlabels.reshape(-1).float()
-            vmask = vmask.reshape(-1)
-
-            # Linear Regression
-            _, verr, vpreds, vlabs = analytical_linear_regression(
-                X=actvs[mask],
-                y=labels[mask],
-                X_val=vactvs[vmask],
-                y_val=vlabels[vmask],
-                ret_preds_and_labels=True)
-            corrects = torch.round(vpreds)==vlabs
-            acc = corrects.float().mean()
-            print("Model:", sidx, "- Var:", config["swap_keys"][sidx][vidx])
-            print("\tErr:", verr, "- Acc:", acc.item())
-            print("\tValues:", sorted(list(set(labels[mask].cpu().tolist()))))
-        print()
 
     ##########################
     #    Define the intervention object, optimizer, and plateau tracker
@@ -769,9 +526,7 @@ def main():
                 mtx_kwargs[key] = config[key]
         config["mtx_kwargs"] = [mtx_kwargs for _ in models]
     config["sizes"] = m_sizes
-    intrv_module = InterventionModule(
-        **config,
-    )
+    intrv_module = InterventionModule( **config, )
     intrv_module.eval()
     optimizer = torch.optim.Adam(
         intrv_module.parameters(),
@@ -845,16 +600,19 @@ def main():
     ##########################
     global_step = 0
     print("Starting training of the rotation matrix ...")
-    models = [model.eval() for model in models]
     optimizer.zero_grad()
     df_dict = {
         "global_step": [],
         "train_loss": [],
         "train_tok_acc": [],
         "train_trial_acc": [],
+        "train_ploss": [],
+        "train_ptok_acc": [],
         "valid_loss": [],
         "valid_tok_acc": [],
         "valid_trial_acc": [],
+        "valid_tok_acc": [],
+        "valid_ptok_acc": [],
         "cl_loss": [],
         "cl_divergence": [],
         "src_idx": [],
@@ -870,17 +628,23 @@ def main():
                 losses = dict()
                 trial_accs = dict()
                 tok_accs = dict()
+                plosses = dict()   # proportional losses
+                ptok_accs = dict() # proportional accs
                 tot_loss = 0
                 tot_tok = 0
                 tot_trial = 0
+                tot_ploss = 0
+                tot_ptok = 0
 
                 val_losses = dict()
                 val_trial_accs = dict()
                 val_tok_accs = dict()
+                val_plosses = dict()   # proportional losses
+                val_ptok_accs = dict() # proportional accs
                 val_cl_loss = dict()
                 val_cl_div = dict()
                 val_cl_sdx = dict() # Amount that the max value of the
-                    # cl_latents exceeds the max value and the natural 
+                    # cl_vectors exceeds the max value and the natural 
                     # latents max value measured in standard deviations 
                     # from the natural mean
                 
@@ -889,6 +653,7 @@ def main():
                     losses, trial_accs, tok_accs,
                     val_losses, val_trial_accs, val_tok_accs,
                     val_cl_loss, val_cl_div, val_cl_sdx,
+                    plosses, ptok_accs, val_plosses, val_ptok_accs,
                 ]
                 for tidx in range(len(models)):
                     for sidx in range(len(models)):
@@ -899,27 +664,29 @@ def main():
 
                 startt = time.time()
                 accum = config.get("grad_accumulation_steps", 1)
-                n_varbs = len(config["swap_keys"][0])
-                for dirvar_tup in tokenized_datasets["train"]:
+                for dirvar_tup in intrv_datasets["train"]:
+                    models = [model.train() for model in models]
                     runtime = time.time()
                     (sidx,tidx,vidx) = dirvar_tup
                     track_train = (sidx,tidx) in config["train_directions"]
                     track_cl = (sidx,tidx) in config["cl_directions"]
                     track_grad = track_train or track_cl
-                    loss, cl_loss, tok_acc, trial_acc = forward_pass(
+                    loss, cl_loss, tok_acc, trial_acc, ploss, ptok = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
                         vidx=vidx,
                         model=models[tidx],
                         comms_dict=comms_dict,
                         batch_indices=batch_indices,
-                        dataset=tokenized_datasets["train"][dirvar_tup],
+                        dataset=intrv_datasets["train"][dirvar_tup],
                         src_activations=all_src_activations["train"][dirvar_tup],
-                        cl_latents=cl_latents["train"][dirvar_tup],
+                        cl_vectors=cl_vectors["train"][dirvar_tup],
                         device=devices[tidx],
                         config=config,
                         tforce=True,
                         track_grad=track_grad,
+                        baseline_accs=baseline_metrics["train"]["acc"][dirvar_tup],
+                        baseline_losses=baseline_metrics["train"]["loss"][dirvar_tup]
                     )
                     cl_loss = cl_loss/accum/(len(models)**2)/n_varbs
                     loss = loss/accum/(len(models)**2)/n_varbs
@@ -930,7 +697,7 @@ def main():
                         combo_loss = combo_loss + eps*cl_loss
 
                     if config["conserve_memory"] and track_grad:
-                        n_tups = len(list(tokenized_datasets["train"].keys()))
+                        n_tups = len(list(intrv_datasets["train"].keys()))
                         (combo_loss/float(n_tups)).backward()
 
                     losses[dirvar_tup] = loss.item()
@@ -938,8 +705,12 @@ def main():
 
                     tot_trial += trial_acc.item()/(len(models)**2)
                     tot_tok += tok_acc.item()/(len(models)**2)
+                    tot_ploss += ploss.item()/(len(models)**2)
+                    tot_ptok += ptok.item()/(len(models)**2)
                     trial_accs[dirvar_tup] = trial_acc.item()
                     tok_accs[dirvar_tup] = tok_acc.item()
+                    plosses[dirvar_tup] = tot_ploss.item()
+                    ptok_accs[dirvar_tup] = tot_ptok.item()
                     print("Loss:", round(loss.item(), 5),
                         "- Time:", round(time.time()-runtime,5),
                         "- Step:", round(global_step),
@@ -948,6 +719,7 @@ def main():
 
                     # Print a sample generation every print_every steps.
                     if global_step % config["print_every"] == 0:
+                        models = [model.eval() for model in models]
                         ####################################################
                         #### VALIDATION
                         ####################################################
@@ -956,17 +728,19 @@ def main():
                         val_loss = 0
                         val_tok = 0
                         val_trial = 0
+                        val_ploss = 0
+                        val_ptok = 0
                         for val_indices in valid_loader:
-                            vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx = forward_pass(
+                            vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx, vploss, vptok = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
                                 vidx=vidx,
                                 model=models[tidx],
                                 comms_dict=comms_dict,
                                 batch_indices=val_indices,
-                                dataset=tokenized_datasets["valid"][dirvar_tup],
+                                dataset=intrv_datasets["valid"][dirvar_tup],
                                 src_activations=all_src_activations["valid"][dirvar_tup],
-                                cl_latents=cl_latents["valid"][dirvar_tup],
+                                cl_vectors=cl_vectors["valid"][dirvar_tup],
                                 device=devices[tidx],
                                 tokenizer=tokenizers[tidx],
                                 config=config,
@@ -974,13 +748,19 @@ def main():
                                 tforce=False,
                                 track_grad=False,
                                 cl_divergence=True,
+                                baseline_accs=baseline_metrics["valid"]["acc"][dirvar_tup],
+                                baseline_losses=baseline_metrics["valid"]["loss"][dirvar_tup],
                             )
                             val_loss  += vloss.item() /len(valid_loader)
                             val_tok   += vtok.item()  /len(valid_loader)
                             val_trial += vtrial.item()/len(valid_loader)
+                            val_ploss  += vploss.item() /len(valid_loader)
+                            val_ptok   += vptok.item()  /len(valid_loader)
                         val_losses[dirvar_tup] = val_loss
                         val_tok_accs[dirvar_tup] = val_tok
                         val_trial_accs[dirvar_tup] = val_trial
+                        val_plosses[dirvar_tup] = val_ploss
+                        val_ptok_accs[dirvar_tup] = val_ptok
                         val_cl_loss[dirvar_tup] = vcl_loss.item() if vcl_loss is not None else 0
                         val_cl_div[dirvar_tup] =  vcl_div if vcl_div is not None else 0
                         val_cl_sdx[dirvar_tup] = vcl_sdx if vcl_sdx is not None else 0
@@ -994,7 +774,6 @@ def main():
                 end_training = False
                 if global_step % config["print_every"] == 0:
                     print("Layers:", config["layers"])
-                    print("CauslModl:", config["cmodel_names"])
                     print("\tSwap Keys:", config["swap_keys"])
                     print("Mtx  Type:", config["mtx_types"][0])
                     print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
@@ -1009,7 +788,7 @@ def main():
                         " ".join(sorted(
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
-                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                    print("Step:", global_step, "| Train pLoss:", tot_ploss.item())
                     print()
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
@@ -1031,21 +810,21 @@ def main():
                             s += " | M2->M2: " + str(round(val_cl_div[(1,1,vidx)],5))
                         print(s)
 
-                        print("Train Tok Acc:",  tot_tok)
-                        s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
+                        print("Train PTok Acc:",  tot_ptok)
+                        s = "\tM1->M1: " + str(round(ptok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
-                            s += " | M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1: " + str(round(tok_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2: " + str(round(tok_accs[(1,1,vidx)],5))
+                            s += " | M1->M2: " + str(round(ptok_accs[(0,1,vidx)],5))
+                            s += "\n\tM2->M1: " + str(round(ptok_accs[(1,0,vidx)], 5))
+                            s += " | M2->M2: " + str(round(ptok_accs[(1,1,vidx)],5))
                         print(s)
 
-                        print("Train Trial Acc:",tot_trial)
-                        s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
-                        if len(models)>1:
-                            s += " | M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
-                            s += "\n\tM2->M1: " + str(round(trial_accs[(1,0,vidx)], 5))
-                            s += " | M2->M2: " + str(round(trial_accs[(1,1,vidx)],5))
-                        print(s)
+                        # print("Train Trial Acc:",tot_trial)
+                        # s = "\tM1->M1: " + str(round(trial_accs[(0,0,vidx)], 5))
+                        # if len(models)>1:
+                        #     s += " | M1->M2: " + str(round(trial_accs[(0,1,vidx)],5))
+                        #     s += "\n\tM2->M1: " + str(round(trial_accs[(1,0,vidx)], 5))
+                        #     s += " | M2->M2: " + str(round(trial_accs[(1,1,vidx)],5))
+                        # print(s)
                         print()
 
                         print("Valid Tok Acc:")
@@ -1069,7 +848,6 @@ def main():
 
                     print()
                     print("Layers:", config["layers"])
-                    print("CauslModl:", config["cmodel_names"])
                     print("\tSwap Keys:", config["swap_keys"])
                     print("Mtx  Type:", config["mtx_types"][0])
                     print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
@@ -1087,7 +865,7 @@ def main():
                         " ".join(sorted(
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
-                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
+                    print("Step:", global_step, "| Train pLoss:", tot_ploss.item())
                     print()
                     print("Experiment:", os.path.join(save_folder, save_name))
                     print("M1:", config["model_names"][0])
@@ -1096,14 +874,18 @@ def main():
                     print("Exec Time:", time.time()-startt)
                     print()
 
-                    for (s,t,v) in tokenized_datasets["train"]:
+                    for (s,t,v) in intrv_datasets["train"]:
                         tup = (s,t,v)
                         df_dict["global_step"].append(global_step)
                         df_dict["train_loss"].append(float(losses[tup]))
+                        df_dict["train_ploss"].append(float(plosses[tup]))
                         df_dict["train_tok_acc"].append(float(tok_accs[tup]))
+                        df_dict["train_ptok_acc"].append(float(ptok_accs[tup]))
                         df_dict["train_trial_acc"].append(float(trial_accs[tup]))
                         df_dict["valid_loss"].append(float(val_losses[tup]))
+                        df_dict["valid_ploss"].append(float(val_plosses[tup]))
                         df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
+                        df_dict["valid_ptok_acc"].append(float(val_ptok_accs[tup]))
                         df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
                         df_dict["cl_loss"].append(float(val_cl_loss[tup]))
                         df_dict["cl_divergence"].append(float(val_cl_div[tup]))
