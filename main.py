@@ -171,7 +171,6 @@ def fill_in_prompts_and_replacements(config):
         print()
     return config
 
-
 def main():
     arg_config, command_keys = get_command_line_args(sys.argv)
     ##########################
@@ -314,7 +313,7 @@ def main():
         save_json(config, jpath)
 
     ##########################
-    #    Load two models and tokenizers
+    #    Load models and tokenizers
     ##########################
     poss_devices = ["cpu","cpu"]
     if torch.cuda.is_available():
@@ -342,6 +341,7 @@ def main():
         print(model)
         models.append(model)
         tokenizers.append(tokenizer)
+
         if config["layers"][mi] in {"embeddings", "inpt_identity"}:
             config["layers"][mi] = get_embedding_name(
                 model, config["layers"][mi])
