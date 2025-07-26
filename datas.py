@@ -430,9 +430,12 @@ def pad_data_dict(
         cl_offsets = [cl_max_len-len(s) for s in data_dict["cl_input_ids"]]
 
     ### START TESTING
+    print("Max Len:", max_len)
     for i in range(len(src_offsets)):
-        assert src_offsets[i]==(max_len-len(data_dict["src_swap_masks"][i]))
-        assert trg_offsets[i]==(max_len-len(data_dict["trg_swap_masks"][i]))
+        diff = (max_len-len(data_dict["src_swap_masks"][i]))
+        assert src_offsets[i]==diff, f"{src_offsets[i]} != {diff}"
+        diff = (max_len-len(data_dict["trg_swap_masks"][i]))
+        assert trg_offsets[i]==diff, f"{trg_offsets[i]} != {diff}"
     ### END TESTING
 
     for k in data_dict:
