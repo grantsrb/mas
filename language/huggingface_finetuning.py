@@ -199,6 +199,7 @@ train_info = {
     "train_loss": [],
 }
 
+best_loss = float("inf")
 class LoggingAndCheckpointCallback(TrainerCallback):
     def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
         logs = kwargs.get("logs", {})
@@ -213,6 +214,24 @@ class LoggingAndCheckpointCallback(TrainerCallback):
                 model.save_pretrained(checkpoint_dir)
                 tokenizer.save_pretrained(checkpoint_dir)
             print(f"✔ Saved checkpoint at step {state.global_step} to {checkpoint_dir}")
+
+            if logs["loss"]<best_loss:
+                best_loss = logs["loss"]
+                checkpoint_dir = os.path.join(LOG_DIR, f"best_loss_checkpt")
+                if not config["debugging"]:
+                    model.save_pretrained(checkpoint_dir)
+                    tokenizer.save_pretrained(checkpoint_dir)
+                print(f"✔ BEST checkpoint at step {state.global_step} to {checkpoint_dir}")
+
+            save_steps = state.global_step-config["save_every_n_steps"]
+            prev_dir = os.path.join(LOG_DIR, f"step-{save_steps}")
+            if os.path.exists(prev_dir):
+                for f in os.listdir(prev_dir):
+                    if "safetensors" in f:
+                        rm_command = f"rm -rf {prev_dir}"
+                        print("Removing directory with", rm_command)
+                        #os.system(rm_command)
+                        break
 
             # === Print generated response ===
             print(f"\n🧪 [Step {state.global_step}] Sample generation:")
@@ -258,6 +277,7 @@ example_generation()
 
 # ====== Save final model ======
 if not config["debugging"]:
+    checkpt_name = os.path.join(LOG_DIR, "final_checkpt")
     model.save_pretrained(LOG_DIR)
     tokenizer.save_pretrained(LOG_DIR)
 
