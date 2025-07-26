@@ -868,6 +868,7 @@ def get_save_name(
     save_name = f"{exp_name}_"
 
     # always add model names to save name
+    if "model_names" not in kwargs: kwargs["model_names"] = kwargs["source_files"]
     kwargs["model_names"] = kwargs.get("model_names", config["model_names"])
     m2 = "".join([x[:3] for x in remove_ending_slash(kwargs["model_names"][-1]).split("/")[-1].split("_")])
     save_name = save_name + abbrevs["model_names"] + "-" + m2 + "_"
