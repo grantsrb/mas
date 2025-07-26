@@ -24,36 +24,28 @@ from utils import get_command_line_args
 import pandas as pd
 
 # ====== Configuration ======
-ROOT_DIR = "/data2/grantsrb/mas_finetunings/"
-MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" # "gpt2"  # or any other Hugging Face causal LM
-DATASET = "anitamaxvim/jigsaw-toxic-comments" #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
-FILTER_MODE = "toxic"  # "toxic", "nontoxic", or "both"
-MAX_LENGTH = 512
-BATCH_SIZE = 4
-EPOCHS = 3
-LR = 5e-4
-SAVE_EVERY_N_STEPS = 30
 RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 
 print("Running Hugging Face Toxicity Example...")
 config = {
-    "root_dir": ROOT_DIR,
+    "root_dir": "/data2/grantsrb/mas_finetunings/",
     "seed": 42,  # Random seed for reproducibility, also the meaning of life, the universe, and everything
-    "model_name": MODEL_NAME,
+    "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # "gpt2"  # or any other Hugging Face causal LM
     "tokenizer_name": None,
-    "filter_mode": FILTER_MODE,
-    "max_length": MAX_LENGTH,
-    "batch_size": BATCH_SIZE,
-    "lr": LR,
-    "n_epochs": EPOCHS,
-    "grad_accumulation_steps": 16,
-    "save_every_n_steps": SAVE_EVERY_N_STEPS,
+    "filter_mode": "toxic",  # "toxic", "nontoxic", or "both"
+    "max_length": 512,
+    "batch_size": 8,
+    "lr": 4e-4,
+    "n_epochs": 2,
+    "grad_accumulation_steps": 8,
+    "save_every_n_steps": 30,
     "logging_steps": 10,
-    "dataset": DATASET,
-    "balance_dataset": True,
+    "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
+    "balance_dataset": True, # optionally ensure that the toxic and nontoxic counts are about equal
     "debugging": False,
     "small_data": False, # Used for debugging purposes
 }
+
 config.update(get_command_line_args())
 np.random.seed(config["seed"])
 torch.manual_seed(config["seed"])
