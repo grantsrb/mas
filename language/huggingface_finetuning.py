@@ -47,7 +47,8 @@ config = {
     "small_data": False, # Used for debugging purposes
 }
 
-config.update(get_command_line_args())
+command_args, _ = get_command_line_args()
+config.update(command_args)
 np.random.seed(config["seed"])
 torch.manual_seed(config["seed"])
 
