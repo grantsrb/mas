@@ -251,10 +251,10 @@ def main():
     config["swap_keys"] = config.get("swap_keys", [["full"],["full"]])
     if config["incl_empty_varbs"]:
         config["swap_keys"] = [sk + [""] for sk in config["swap_keys"]]
-    poss_devices = ["cpu","cpu"]
+    poss_devices = ["cpu" for _ in range(n_models)]
     if torch.cuda.is_available():
         if torch.cuda.device_count()>1:
-            poss_devices = [0,1]
+            poss_devices = [i for i in range(n_models)]
         else:
             poss_devices = [0,0]
     models = []
