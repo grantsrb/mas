@@ -61,26 +61,25 @@ print("Running Hugging Face Toxicity Example...")
 config = {
     "root_dir": "/data2/grantsrb/mas_finetunings/",
     "seed": 42,  # Random seed for reproducibility, also the meaning of life, the universe, and everything
-    "model_name": "gpt2",
-    "layers": [
-        "transformer.h.4",
-        "transformer.h.8",
-        "transformer.h.12",
-    ],
+    "model_name": "gpt2", #"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # 
+    "layers": [ ],
     "tokenizer_name": None,
     "filter_mode": "toxic", # "toxic", "nontoxic", or "both"
     "max_samps": 5000, # how many samples to generate
-    "max_length": 96,
-    "generated_len": 256, 
+    "input_length": 48,
+    "generated_length": 128,
     "temperature": 0.1,
     "top_p": 0.8,
-    "batch_size": 1,
+    "batch_size": 16,
     "dataset": "Anthropic/hh-rlhf", #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat" #"allenai/toxichat" # 
     "balance_dataset": True,
     "debugging": False,
     "small_data": False, # Used for debugging purposes
 }
-config.update(get_command_line_args())
+command_args, _ = get_command_line_args()
+config.update(command_args)
+np.random.seed(config["seed"])
+torch.manual_seed(config["seed"])
 
 # --------- Logging Setup ---------
 
@@ -127,27 +126,30 @@ PROMPT_TEMPLATE = config.get(
 config["prompt_template"] = PROMPT_TEMPLATE
 
 if config["debugging"]:
-    config["save_every_n_steps"] = 6
-    config["logging_steps"] = 4
+    config["generated_length"] = config.get("input_length", 10) + 5
+    print("Reducing Generated Length for Debugging", config["generated_length"])
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
 
+
 # ====== Load model and tokenizer ======
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(
+    MODEL_NAME)
 model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME, device_map="auto")
+    MODEL_NAME, device_map="auto", torch_dtype="auto")
 model.eval()
 print(model)
 
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
+
 # ====== Load and preprocess dataset ======
+
 tst_split = "test"
 if config["debugging"] or config["small_data"]:
-    tst_split = "test[:1000]"
-
+    tst_split = "test[:100]"
 
 if config["dataset"]=="lmsys/toxic-chat":
     dataset = load_dataset(
@@ -163,7 +165,7 @@ filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
     dataset_name=config["dataset"],
     prompt_template=config["prompt_template"],
     tokenizer=tokenizer,
-    max_length=config["max_length"],
+    max_length=config["input_length"],
     seed=config["seed"],
     prompt=PROMPT,
 )
@@ -171,7 +173,11 @@ filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
 dataset = balance_fn(dataset)
 dataset = filter_dataset(dataset, filter_mode="both")
 dataset = dataset.map(format_fn)
-dataset = filter_for_len(dataset, tokenizer=tokenizer, min_len=config["max_length"])
+dataset = filter_for_len( # allows us to use batch generation for right pad
+    dataset,
+    tokenizer=tokenizer,
+    min_len=config["input_length"]
+)
 if MAX_SAMPS<len(dataset):
     dataset = dataset.shuffle(seed=config["seed"]).select(range(MAX_SAMPS))
 
@@ -180,10 +186,33 @@ print(dataset)
 print("\tEx: ", dataset["text"][0])
 print()
 
-input_text = dataset["input_text"]
+input_text = list(dataset["input_text"])
 dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 input_ids = torch.vstack(list(dataset["input_ids"]))
 
+# ---------------- Clarify Layers ----------------
+
+logit_input_layer = config.get("logit_input_layer", "")
+if not logit_input_layer:
+    if hasattr(model, "transformer"):
+        logit_input_layer = "transformer"
+    elif hasattr(model, "model"):
+        logit_input_layer = "model"
+
+if not logit_input_layer or not hasattr(model, logit_input_layer):
+    print(model)
+    print("You need to specify the logit input layer... Current argument:", logit_input_layer)
+    raise NotImplemented
+config["layers"].append(logit_input_layer)
+
+if len(config["layers"])==1:
+    for name,modu in getattr(model, logit_input_layer).named_modules():
+        if type(modu)==torch.nn.ModuleList:
+            for i in range(0, len(modu), 4):
+                config["layers"].append(name+f".{i}")
+    print("Recording Layers:")
+    for layer in config["layers"]:
+        print("\t", layer)
 
 # ---------------- HOOKS ----------------
 
@@ -223,7 +252,6 @@ with torch.no_grad():
     max_len = 0
     diff_lens = False
     generated_ids = []
-    logits = []
     bsize = config["batch_size"]
     print("Beginning Generation")
     for i in tqdm(range(0, len(input_ids), bsize)):
@@ -233,7 +261,7 @@ with torch.no_grad():
 
         generated = model.generate(
             input_ids=ids.to(device),
-            max_new_tokens=config["generated_len"]-ids.shape[1],
+            max_new_tokens=config["generated_length"]-ids.shape[1]+1,
             return_dict_in_generate=True,
             output_scores=True,
             output_hidden_states=True,
@@ -243,31 +271,58 @@ with torch.no_grad():
             pad_token_id=tokenizer.eos_token_id,
         )
 
-        if config["debugging"] and i==0:
-            for k in comms_dict:
-                print(k)
-                for v in comms_dict[k]:
-                    print(v.shape)
-
         for k in hidden_states:
             hidden_states[k].append(
                 torch.cat(comms_dict[k], dim=1)
             )
             comms_dict[k] = []
 
+        if config["debugging"] and i==0:
+            for k in hidden_states:
+                print(k)
+                for v in hidden_states[k]:
+                    print(v.shape)
+
         generated_ids.append(generated.sequences.cpu())
-        logits.append(generated.scores[0].cpu())  # (B, S_gen, V)
 
         if len(generated_ids)>1 and generated_ids[-1].shape[-1]!=generated_ids[-2].shape[-1]:
             diff_lens = True
         if generated_ids[-1].shape[-1]>max_len:
             max_len = generated_ids[-1].shape[-1]
 
+        if config["debugging"] and i>4*bsize:
+            break
     if diff_lens:
+        print("Different Lengths")
         generated_ids = [pad_to(gen_ids, max_len) for gen_ids in generated_ids]
-        logits = [pad_to(logs, max_len, dim=1) for logs in logits]
     generated_ids = torch.vstack(generated_ids)
-    logits = torch.vstack(logits)
+
+for hook in hooks: hook.remove()
+torch.cuda.empty_cache()
+
+generated_ids = generated_ids[:,:-1] # keep only the input ids
+layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
+
+# Collect logits
+with torch.no_grad():
+    og_shape = layer_states[logit_input_layer].shape
+    bsize = 256
+    device = next(model.lm_head.parameters()).get_device()
+    print("dev:", next(model.lm_head.parameters()).get_device())
+    logits = []
+    inputs = layer_states[logit_input_layer].reshape(-1,og_shape[-1])
+    for batch in range(0,len(inputs),bsize):
+        inpts = inputs[batch:batch+bsize]
+        logit = model.lm_head( inpts.to(device) )
+        logits.append(logit.cpu())
+    logits = torch.vstack(logits).reshape(*og_shape[:-1],-1)
+    del layer_states[logit_input_layer]
+
+# Examine shapes
+for lay in layer_states:
+    print(lay, layer_states[lay].shape)
+print("Gen ids:", generated_ids.shape)
+print("Logits:", logits.shape)
 
 # ---------------- POSTPROCESS ----------------
 generated_text = tokenizer.batch_decode(
@@ -277,15 +332,16 @@ full_text = tokenizer.batch_decode(
 
 data = {
     "config": config,
-    "logits": logits.cpu(),  # (B, S_gen, V)
-    "layer_states": {k: torch.vstack(v) for k, v in hidden_states.items()},
-    "prompt": PROMPT,
-    "input_text": input_text,
-    "generated_text": generated_text,
-    "text": full_text,
-    "prompt_len": prompt_len, # in tokens
-    "prompt_states": prompt_states,
+    "logits": logits.cpu(),  # (B, S, V)
+    "layer_states": layer_states, # dict of tensors (B, S, V)
+    "prompt": PROMPT, # str
+    "input_text": input_text, # str
+    "generated_text": generated_text, # str
+    "text": full_text, # str
+    "prompt_len": prompt_len, # int measured in tokens
+    "prompt_states": prompt_states, # similar to layer_states for the prompt only
 }
+
 
 # ---------------- SAVE ----------------
 torch.save(data, SAVE_NAME)
