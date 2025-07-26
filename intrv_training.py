@@ -94,6 +94,8 @@ def forward_pass(
         tforce=False,
         track_grad=True,
         cl_divergence=False,
+        baseline_loss=None,
+        baseline_acc=None,
     ):
     """
     Args:
@@ -103,6 +105,10 @@ def forward_pass(
         cl_divergence: bool
             track the kl divergence between the intervened vectors
             and the counterfactual latents.
+        loss_divisor: tensor (B,)
+            optionally argue losss to divide the losses by
+        trial_divisor: tensor (B,)
+            optionally argue trial accs to divide the trial acc by
     """
     shuffle_targ_ids = config.get("shuffle_targ_ids", False)
     const_targ_inpt_id = config.get("const_targ_inpt_id", False)
@@ -236,14 +242,24 @@ def forward_pass(
         tmask = batch["outp_tmask"].to(device)
     else:
         tmask = batch["outp_attn_mask"]
-    trial = torch.ones_like(batch["labels"]).bool()
+    trial = torch.zeros_like(batch["labels"]).bool()
     pids = torch.argmax(logits, dim=-1)
     labels = batch["labels"]
     eq = pids[tmask]==labels[tmask]
     trial[tmask] = eq
-    trial_acc = trial.sum(-1)==trial.shape[-1]
+    trial = trial.sum(-1)
+    trial_acc = trial==tmask.float().sum(-1)
     trial_acc = trial_acc.float().mean()
     tok_acc = eq.float().mean()
+
+    prop_acc, prop_loss = torch.zeros(1).float(), torch.zeros(1).float()
+    if baseline_acc is not None and baseline_loss is not None:
+        base = baseline_acc[batch_indices].mean()
+        prop_acc = tok_acc/base
+    
+        base = baseline_loss[batch_indices].mean()
+        with torch.no_grad():
+            prop_loss = loss/base
 
     if verbose:
         labels = batch["labels"]
@@ -323,6 +339,10 @@ def forward_pass(
             #print("GenIds:", outs[i][tmask[i]])
             #print()
 
+    if baseline_acc is not None and baseline_loss is not None:
+        if cl_divergence:
+            return loss, cl_loss, tok_acc, trial_acc, cl_div, cl_sdx, prop_loss,prop_acc
+        return loss, cl_loss, tok_acc, trial_acc, prop_loss,prop_acc
     if cl_divergence:
         return loss, cl_loss, tok_acc, trial_acc, cl_div, cl_sdx
     return loss, cl_loss, tok_acc, trial_acc
