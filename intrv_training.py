@@ -85,7 +85,7 @@ def forward_pass(
         comms_dict,
         src_activations,
         device,
-        cl_latents=None,
+        cl_vectors=None,
         tokenizer=None,
         pad_mask=None,
         config=dict(),
@@ -94,13 +94,13 @@ def forward_pass(
         tforce=False,
         track_grad=True,
         cl_divergence=False,
-        baseline_loss=None,
-        baseline_acc=None,
+        baseline_losses=None,
+        baseline_accs=None,
     ):
     """
     Args:
         src_activations: torch tensor (B,S,D)
-        cl_latents: torch tensor (B,S,D)
+        cl_vectors: torch tensor (B,S,D)
             use the trg_swap_mask to isolate the cl latent targets
         cl_divergence: bool
             track the kl divergence between the intervened vectors
@@ -123,8 +123,7 @@ def forward_pass(
     comms_dict["intrv_module"].to(device)
     comms_dict["intrv_module"].reset()
     comms_dict["intrv_vecs"] = None
-    comms_dict["src_activations"] =\
-        src_activations[batch_indices].to(device)
+    comms_dict["src_activations"] = src_activations[torch.LongTensor(batch_indices)].to(device)
     input_ids = batch["input_ids"].clone()
 
     mask = None
@@ -172,6 +171,12 @@ def forward_pass(
     else:
         logits = outputs.logits
 
+    #print("logits", logits.shape)
+    #for k,v in batch.items():
+    #    try:
+    #        print(k,v.shape)
+    #    except: print("fail:", k)
+
     V = logits.shape[-1]
     flat = logits.reshape(-1,V)
     labels = batch["labels"].reshape(-1)
@@ -185,7 +190,7 @@ def forward_pass(
     #    smask = batch["outp_tmask"]
     #    lmask = lmask&(smask)
 
-    ### TODO
+    #### TODO
     #pids = torch.argmax(logits, dim=-1)
     #print("HEYO")
     #for i in range(3):
@@ -206,7 +211,7 @@ def forward_pass(
     torch.set_grad_enabled(enable)
     loss = F.cross_entropy(
         flat[lmask.reshape(-1)],
-        labels[lmask.reshape(-1)]
+        labels[lmask.reshape(-1)],
     )
     torch.set_grad_enabled(prev_grad_state)
 
@@ -218,25 +223,28 @@ def forward_pass(
     cl_sdx = 0 # Amount that the max value of the intervened latents 
         # exceeds the max value of the cl latents measured in standard 
         # deviations
-    if cl_latents is not None and "intrv_vecs" in comms_dict:
-        cl_latents = cl_latents[batch_indices].to(device)
+    if cl_vectors is not None and "intrv_vecs" in comms_dict:
+        cl_vectors = cl_vectors[batch_indices].to(device)
         prev_grad_state = torch.is_grad_enabled()
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
-        cl_loss = cl_loss_fxn(
-            intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
-            cl_latents=cl_latents,
-            swap_mask=batch["trg_swap_masks"]>=0,
-            loss_type=config.get("cl_loss_type", "both"),
-        )
-        torch.set_grad_enabled(prev_grad_state)
-        if cl_divergence:
-            cl_div, cl_sdx = cl_kl_divergence(
+        try:
+            cl_loss = cl_loss_fxn(
                 intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
-                cl_vecs=cl_latents,
+                cl_vectors=cl_vectors,
                 swap_mask=batch["trg_swap_masks"]>=0,
-                laplace=1,
+                loss_type=config.get("cl_loss_type", "both"),
             )
+            if cl_divergence:
+                cl_div, cl_sdx = cl_kl_divergence(
+                    intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
+                    cl_vecs=cl_vectors,
+                    swap_mask=batch["trg_swap_masks"]>=0,
+                    laplace=1,
+                )
+        except:
+            print("Error in cl loss calculations")
+        torch.set_grad_enabled(prev_grad_state)
 
     if "outp_tmask" in batch:
         tmask = batch["outp_tmask"].to(device)
@@ -253,13 +261,13 @@ def forward_pass(
     tok_acc = eq.float().mean()
 
     prop_acc, prop_loss = torch.zeros(1).float(), torch.zeros(1).float()
-    if baseline_acc is not None and baseline_loss is not None:
-        base = baseline_acc[batch_indices].mean()
-        prop_acc = tok_acc/base
+    if baseline_accs is not None and baseline_losses is not None:
+        base = baseline_accs[batch_indices].mean()
+        prop_acc = (base-tok_acc)/base
     
-        base = baseline_loss[batch_indices].mean()
+        base = baseline_losses[batch_indices].mean()
         with torch.no_grad():
-            prop_loss = loss/base
+            prop_loss = (loss-base)/base
 
     if verbose:
         labels = batch["labels"]
@@ -339,7 +347,7 @@ def forward_pass(
             #print("GenIds:", outs[i][tmask[i]])
             #print()
 
-    if baseline_acc is not None and baseline_loss is not None:
+    if baseline_accs is not None and baseline_losses is not None:
         if cl_divergence:
             return loss, cl_loss, tok_acc, trial_acc, cl_div, cl_sdx, prop_loss,prop_acc
         return loss, cl_loss, tok_acc, trial_acc, prop_loss,prop_acc
@@ -442,12 +450,12 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
         np_kl_divergence(cl_density, intrv_density),
     ]), cl_sdx
 
-def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
+def cl_loss_fxn(intrv_vecs, cl_vectors, swap_mask, loss_type="both"):
     """
     Args:
         intrv_vecs: torch tensor (B,S,D)
             the intervened vectors
-        cl_latents: torch tensor (B,S,D)
+        cl_vectors: torch tensor (B,S,D)
             the target vectors
         swap_mask: torch tensor (B,S)
             a mask where trues denote positions to use for the cl loss.
@@ -458,19 +466,21 @@ def cl_loss_fxn(intrv_vecs, cl_latents, swap_mask, loss_type="both"):
             the counterfactual latent loss
     """
     preds = intrv_vecs[swap_mask]
-    labls = cl_latents[swap_mask]
+    labls = cl_vectors[swap_mask]
     loss_fxn = get_loss_fxn(loss_type)
     return loss_fxn(preds,labls).mean()
 
-def get_cl_latents(
+def get_cl_vectors(
     model,
-    swap_mask,
+    trg_swap_mask,
     input_ids,
-    idxs,
     layer,
     device,
+    idxs=None,
     bsize=500,
     tmask=None,
+    idx_mask=None,
+    preserve_dims=False,
 ):
     """
     A helper function for collecting the counterfactual
@@ -478,27 +488,37 @@ def get_cl_latents(
 
     Args:
         model: torch module
-        swap_mask: bool tensor (B,S)
-        input_ids: long tensor (B,S)
+        trg_swap_mask: bool tensor (B,S)
+            the non-negative elements of the target swap mask
+        input_ids: long tensor (B,S2)
+            the input ids to produce the cl vectors
         idxs: torch Long tensor (N,2)
             a tensor in which the first column denotes
             the row index and the second column denotes
             the column index from which to take the
             latent vectors. N should be equal to the sum
             of all entries in the swap mask.
+        idx_mask: torch bool tensor (B,S)
+            optionally can argue a binary mask with 1s as the indexs
+            for which we wish to harvest the counterfactual latents
+            from the model's activations.
     """
+    assert idxs is not None or idx_mask is not None
+    assert not (idxs is None and idx_mask is None)
     model.eval()
     model.to(device)
-    outputs = collect_activations(
-        model,
-        input_ids=input_ids,
-        layers=[layer],
-        tforce=True,
-        ret_pred_ids=True,
-        batch_size=bsize,
-        to_cpu=True,
-        verbose=True,
-    )
+    with torch.no_grad():
+        outputs = collect_activations(
+            model,
+            input_ids=input_ids,
+            layers=[layer],
+            tforce=True,
+            ret_pred_ids=True,
+            batch_size=bsize,
+            to_cpu=True,
+            verbose=True,
+            preserve_dims=preserve_dims,
+        )
 
     # Quick Accuracy Check
     pred_ids = outputs["pred_ids"]
@@ -506,7 +526,7 @@ def get_cl_latents(
     tmask = tmask.clone().bool() if tmask is not None else torch.ones_like(input_ids).bool()
     pids = pred_ids[:,:-1]
     oids = input_ids[:,1:]
-    tmask = tmask[:,1:] # remove the last token from the mask
+    tmask = tmask[:,1:] # remove the first token from the mask
     acc = pids[tmask].long()==oids[tmask].long()
     corrects[tmask] = acc.float()
     corrects = corrects.sum(-1)==corrects.shape[-1]
@@ -515,9 +535,13 @@ def get_cl_latents(
     print("CL Trial Acc:", corrects.float().mean().item())
     print()
 
-    actvs = outputs[layer]
-    shape = tuple([*swap_mask.shape, actvs.shape[-1]])
-    assert swap_mask.long().sum()==len(idxs)
-    cl_latents = torch.empty(shape)
-    cl_latents[swap_mask] = actvs[idxs[:,0],idxs[:,1]]
-    return cl_latents
+    actvs = outputs[layer][:,:-1]
+    shape = tuple([*trg_swap_mask.shape, actvs.shape[-1]])
+    cl_vectors = torch.empty(shape)
+    if idxs is not None:
+        assert trg_swap_mask.long().sum()==len(idxs)
+        cl_vectors[trg_swap_mask] = actvs[idxs[:,0],idxs[:,1]]
+    else:
+        assert trg_swap_mask.long().sum()==idx_mask.long().sum()
+        cl_vectors[trg_swap_mask.bool()] = actvs[idx_mask.bool()]
+    return cl_vectors
