@@ -130,6 +130,7 @@ def collect_activations(
         tforce=False,
         n_steps=0,
         ret_gtruth=False,
+        preserve_dims=False,
         verbose=False,):
     """
     Get the response from the argued layers in the model.
@@ -164,6 +165,9 @@ def collect_activations(
         ret_gtruth: bool
             if true, the model will return the ground truth pred_ids
             where tmask is false
+        preserve_dims: bool
+            if true, will concatenate any looped layer outputs as
+            apposed to stacking along a new dimension.
     returns: 
         comms_dict: dict
             The keys will consist of the corresponding layer name. The
@@ -232,11 +236,14 @@ def collect_activations(
                     print(k, "isn't producing")
                     assert False
                 if len(output[0].shape)<=4:
-                    try:
-                        output = torch.stack(output, dim=1)
-                    except:
-                        print("Failed for", k)
-                        output = torch.stack(output, dim=1)
+                    if preserve_dims:
+                        output = torch.cat(output, dim=1)
+                    else:
+                        try:
+                            output = torch.stack(output, dim=1)
+                        except:
+                            print("Failed for", k)
+                            output = torch.stack(output, dim=1)
                 elif len(output)==1:
                     raise NotImplemented
                     #output = output[0]
