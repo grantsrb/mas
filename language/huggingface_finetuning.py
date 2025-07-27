@@ -224,7 +224,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
                     if "safetensors" in f:
                         rm_command = f"rm -rf {prev_dir}"
                         print("Removing directory with", rm_command)
-                        #os.system(rm_command)
+                        os.system(rm_command)
                         break
 
             # === Print generated response ===
