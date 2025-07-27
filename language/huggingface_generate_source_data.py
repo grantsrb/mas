@@ -209,16 +209,14 @@ if len(config["layers"])==1:
     for name,modu in getattr(model, logit_input_layer).named_modules():
         if type(modu)==torch.nn.ModuleList:
             for i in range(0, len(modu), 4):
-                config["layers"].append(name+f".{i}")
-    print("Recording Layers:")
-    for layer in config["layers"]:
-        print("\t", layer)
+                config["layers"].append(f"{logit_input_layer}.{name}.{i}")
 
 # ---------------- HOOKS ----------------
 
 comms_dict = dict()
 hidden_states = dict()
 
+print("Recording Layers:")
 hooks = []
 for name, module in model.named_modules():
     if name in config["layers"]:
@@ -230,6 +228,7 @@ for name, module in model.named_modules():
             to_cpu=True
         )
         hooks.append(module.register_forward_hook(hook))
+        print("\t", name)
 
 
 # ---------------- GENERATION ----------------
