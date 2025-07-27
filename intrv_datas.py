@@ -640,7 +640,6 @@ def make_intrv_data_from_src_data(
     text,
     trg_prompt,
     src_prompt,
-    src_logits,
     src_actvs,
     trg_tokenizer,
     src_tokenizer,
@@ -649,6 +648,7 @@ def make_intrv_data_from_src_data(
     min_cfct_len=10,
     min_intrv_idx=10,
     shuffle=True,
+    null_varb=False,
     n_samples=None,
     as_tensors=False,
 ):
@@ -670,14 +670,15 @@ def make_intrv_data_from_src_data(
         text: list of str (B,)
             the text that we wish to use for interventions
         shuffle: bool
-            if false, will not mix up target and src data. useful for
-            generating null interventions when training with empty varbs.
+            if false, will not mix up target and src data.
+        null_varb: bool
+            if true, will will not transfer from source sequences into
+            targ sequences. useful for generating null interventions
+            when training with empty varbs.
         trg_prompt: str
             the target prompt will be prepended to the text
         src_prompt: str
             the source prompt will be prepended to the text
-        src_logits: tensor (B,S,P)
-            the logits from the source model. S includes the prompt tokens
         src_actvs: tensor (B,S,D)
             the latent activations from the source model. S includes
             the prompt tokens
@@ -775,13 +776,18 @@ def make_intrv_data_from_src_data(
     if ret_cl_data:
         startt = time.time()
         print("Tokenizing CL...")
-        if src_prompt:
-            src_prompt_len = len(trg_tokenizer(src_prompt))
+        if null_varb:
+            cl_text = trg_text
+            cl_max_length = trg_max_length
+        else:
+            cl_text = src_text
+            cl_max_length = src_max_length
+
         cl_toks = trg_tokenizer(
-            src_text,
+            cl_text,
             padding="max_length",
             truncation=True,
-            max_length=src_max_length,
+            max_length=cl_max_length,
             return_tensors="pt"
         )
         print("Exec Time:", time.time() - startt)
@@ -801,10 +807,12 @@ def make_intrv_data_from_src_data(
             src_samp_idxs = torch.randint(0,tot_src_samps, (n_samples,))
             trg_samp_idxs = torch.randint(0,tot_trg_samps, (n_samples,))
     else:
-        src_samp_idxs = torch.arange(len(text)).long()
-        trg_samp_idxs = torch.arange(len(text)).long()
+        if not n_samples:
+            src_samp_idxs = torch.arange(len(text)).long()
+            trg_samp_idxs = torch.arange(len(text)).long()
+        else:
+            raise NotImplemented
 
-    src_logits = src_logits[src_samp_idxs]
     src_actvs = src_actvs[src_samp_idxs]
     src_toks = {k: v[src_samp_idxs] for k,v in src_toks.items()}
     trg_toks = {k: v[trg_samp_idxs] for k,v in trg_toks.items()}
@@ -887,7 +895,8 @@ def make_intrv_data_from_src_data(
         endx=endx+src_prompt_len,
         inclusive=False,
     )
-    trg_toks["input_ids"][trg_replace_mask] = src_toks["input_ids"][src_replace_mask]
+    if not null_varb:
+        trg_toks["input_ids"][trg_replace_mask] = src_toks["input_ids"][src_replace_mask]
     print("Exec Time:", time.time() - startt)
 
     startt = time.time()
@@ -911,7 +920,6 @@ def make_intrv_data_from_src_data(
         "trg_swap_idxs": trg_intrv_idxs,
         "src_swap_idxs": src_intrv_idxs,
         "src_actvs": src_actvs,
-        "src_logits": src_logits,
     }
 
     # Returns original src sequences with ~swap_mask indices as cl data
