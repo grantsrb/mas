@@ -99,8 +99,8 @@ def config_prep(config):
             for t in range(n_models):
                 config["cl_directions"].append((s,t))
 
-    config["layers"] = [
-            "inpt_identity" if l=="embeddings" else l for l in config["layers"]]
+    if type(config["layers"])==str:
+        config["layers"] = [config["layers"]]
     if len(config["layers"])<n_models:
         config["layers"] = config["layers"]*n_models
 
@@ -238,8 +238,6 @@ def main():
     n_models = len(config["source_files"])
     n_varbs = len(config["swap_keys"][0])
     config["swap_keys"] = config.get("swap_keys", [["full"],["full"]])
-    if config["incl_empty_varbs"]:
-        config["swap_keys"] = [sk + [""] for sk in config["swap_keys"]]
     poss_devices = ["cpu" for _ in range(n_models)]
     if torch.cuda.is_available():
         if torch.cuda.device_count()>1:
@@ -327,7 +325,7 @@ def main():
         print()
         print("Source Data", source_data.keys())
         print("Source Data Layer States", source_data["layer_states"].keys())
-        print("Available Layers:", "\n\t".join(list(source_data["layer_states"].keys())))
+        print("Available Layers:\n", "\n\t".join(list(source_data["layer_states"].keys())))
         print("Using", layer)
         print()
         src_actvs = source_data["layer_states"][layer]
@@ -389,11 +387,10 @@ def main():
                     startt = time.time()
                     intrv_data = make_intrv_data_from_src_data(
                         text=src_datasets[k][si]["text"],
-                        shuffle=varb=="full",
+                        null_varb=varb=="",
                         n_samples=config[f"n_{k}_samples"],
                         trg_prompt=prompts[ti],
                         src_prompt=prompts[si],
-                        src_logits=src_datasets[k][si]["logits"],
                         src_actvs=src_datasets[k][si]["actvs"],
                         trg_tokenizer=tokenizers[ti],
                         src_tokenizer=tokenizers[si],
@@ -447,6 +444,7 @@ def main():
                     print("\tIntrv Trg:", intrv_data["trg_input_ids"][0])
                     print("\tIntrv Decode Trg:", tokenizers[ti].decode(intrv_data["trg_input_ids"][0]))
                     print("-----------------------------------------------")
+                    print("Resulting Dataset Length:", len(all_src_activations[k][dir_var_tup]))
                     print()
                     print()
 
@@ -491,33 +489,40 @@ def main():
                         if dir_var_tup not in intrv_datasets[k]:
                             print(f"Missing {dir_var_tup} for {k}")
                             continue
-                        input_ids = torch.tensor(intrv_datasets[k][dir_var_tup]["src_input_ids"])[:,1:]
-                        tmask = torch.tensor(intrv_datasets[k][dir_var_tup]["src_task_masks"])[:,1:]
-                        logits = torch.tensor(intrv_datasets[k][dir_var_tup]["src_logits"])[:,:-1]
-                        preds = logits.argmax(-1)
-
-                        loss = torch.zeros_like(input_ids).float()
-                        logits = logits.reshape(-1, logits.shape[-1])
-                        labels = input_ids.reshape(-1)
-                        temp = []
-                        bsize = 256
-                        for b in range(0,len(logits),bsize):
-                            temp.append(criterion(
-                                logits[b:b+bsize].to(devices[sidx]),
-                                labels[b:b+bsize].to(devices[sidx])
-                            ).cpu())
-                        temp = torch.cat(temp)
-                        loss[tmask] = temp.reshape(loss.shape)[tmask]
-                        loss = loss.sum(-1)/tmask.sum(-1)
-
-                        acc = torch.zeros_like(input_ids).float()
-                        temp = (preds==input_ids).float()
-                        acc[tmask] = temp[tmask]
-                        acc = acc.sum(-1)/tmask.sum(-1)
-
+                        input_ids = torch.tensor(
+                            intrv_datasets[k][dir_var_tup]["src_input_ids"]
+                        )[:,1:]
+                        loss = torch.ones(len(input_ids)).float()
                         baseline_metrics[k]["loss"][dir_var_tup] = loss
-                        baseline_metrics[k]["acc"][dir_var_tup] = acc
-                        print(f"Tup: {sidx},{tidx},{vidx}; Loss: {loss.mean():.4f}; Acc: {acc.mean():.4f}")
+                        baseline_metrics[k]["acc"][dir_var_tup] = loss
+                        continue
+                        #input_ids = torch.tensor(intrv_datasets[k][dir_var_tup]["src_input_ids"])[:,1:]
+                        #tmask = torch.tensor(intrv_datasets[k][dir_var_tup]["src_task_masks"])[:,1:]
+                        #logits = torch.tensor(intrv_datasets[k][dir_var_tup]["src_logits"])[:,:-1]
+                        #preds = logits.argmax(-1)
+
+                        #loss = torch.zeros_like(input_ids).float()
+                        #logits = logits.reshape(-1, logits.shape[-1])
+                        #labels = input_ids.reshape(-1)
+                        #temp = []
+                        #bsize = 256
+                        #for b in range(0,len(logits),bsize):
+                        #    temp.append(criterion(
+                        #        logits[b:b+bsize].to(devices[sidx]),
+                        #        labels[b:b+bsize].to(devices[sidx])
+                        #    ).cpu())
+                        #temp = torch.cat(temp)
+                        #loss[tmask] = temp.reshape(loss.shape)[tmask]
+                        #loss = loss.sum(-1)/tmask.sum(-1)
+
+                        #acc = torch.zeros_like(input_ids).float()
+                        #temp = (preds==input_ids).float()
+                        #acc[tmask] = temp[tmask]
+                        #acc = acc.sum(-1)/tmask.sum(-1)
+
+                        #baseline_metrics[k]["loss"][dir_var_tup] = loss
+                        #baseline_metrics[k]["acc"][dir_var_tup] = acc
+                        #print(f"Tup: {sidx},{tidx},{vidx}; Loss: {loss.mean():.4f}; Acc: {acc.mean():.4f}")
 
     ####################################################
     #    Collect CL VECTORS
@@ -525,7 +530,8 @@ def main():
 
     with torch.no_grad():
         cl_vectors = {k:dict() for k in intrv_datasets.keys()}
-        print("Collecting CL Activations")
+        if len(config["cl_directions"])>0:
+            print("Collecting CL Activations")
         for k in intrv_datasets.keys():
             for dirvar_tup in intrv_datasets[k].keys():
                 src_idx,trg_idx,varb_idx = dirvar_tup
@@ -721,7 +727,13 @@ def main():
                     track_train = (sidx,tidx) in config["train_directions"]
                     track_cl = (sidx,tidx) in config["cl_directions"]
                     track_grad = track_train or track_cl
-                    loss, cl_loss, tok_acc, trial_acc, ploss, ptok = forward_pass(
+                    base_accs = None
+                    if dirvar_tup in baseline_metrics["train"]["acc"]:
+                        base_accs = baseline_metrics["train"]["acc"][dirvar_tup]
+                    base_losses = None
+                    if dirvar_tup in baseline_metrics["train"]["loss"]:
+                        base_losses = baseline_metrics["train"]["loss"][dirvar_tup]
+                    ret_tup = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
                         vidx=vidx,
@@ -735,10 +747,13 @@ def main():
                         config=config,
                         tforce=True,
                         track_grad=track_grad,
-                        baseline_accs=baseline_metrics["train"]["acc"][dirvar_tup],
-                        baseline_losses=baseline_metrics["train"]["loss"][dirvar_tup],
+                        baseline_accs=base_accs,
+                        baseline_losses=base_losses,
                         verbose=False,
                     )
+                    loss, cl_loss, tok_acc, trial_acc = ret_tup[:4]
+                    if len(ret_tup)>4: ploss, ptok = ret_tup[4:]
+                    else: ploss, ptok = torch.ones((1,)), torch.ones((1,))
                     cl_loss = cl_loss/accum/(len(models)**2)/n_varbs
                     loss = loss/accum/(len(models)**2)/n_varbs
                     combo_loss = torch.zeros_like(loss)
@@ -764,6 +779,7 @@ def main():
                     ptok_accs[dirvar_tup] = ptok.item()
                     print("Loss:", round(loss.item(), 5),
                         "- Time:", round(time.time()-runtime,5),
+                        "- Sidx:", sidx, "Tidx:", tidx, "Vidx:", vidx,
                         "- Step:", round(global_step),
                         end="                  \r"
                     )
@@ -774,15 +790,24 @@ def main():
                         ####################################################
                         #### VALIDATION
                         ####################################################
-                        print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
+                        try:
+                            print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx, config["swap_keys"][sidx][vidx], config["swap_keys"][tidx][vidx])
+                        except:
+                            print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
                         print("Validating...")
                         val_loss = 0
                         val_tok = 0
                         val_trial = 0
                         val_ploss = 0
                         val_ptok = 0
+                        base_accs = None
+                        if dirvar_tup in baseline_metrics["valid"]["acc"]:
+                            base_accs = baseline_metrics["valid"]["acc"][dirvar_tup]
+                        base_losses = None
+                        if dirvar_tup in baseline_metrics["valid"]["loss"]:
+                            base_losses = baseline_metrics["valid"]["loss"][dirvar_tup]
                         for loop,val_indices in enumerate(valid_loader):
-                            vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx, vploss, vptok = forward_pass(
+                            ret_tup = forward_pass(
                                 sidx=sidx,
                                 tidx=tidx,
                                 vidx=vidx,
@@ -799,9 +824,12 @@ def main():
                                 tforce=False,
                                 track_grad=False,
                                 cl_divergence=True,
-                                baseline_accs=baseline_metrics["valid"]["acc"][dirvar_tup],
-                                baseline_losses=baseline_metrics["valid"]["loss"][dirvar_tup],
+                                baseline_accs=base_accs,
+                                baseline_losses=base_losses,
                             )
+                            vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx = ret_tup[:6]
+                            if len(ret_tup)>6: vploss, vptok = ret_tup[6:]
+                            else: vploss, vptok = torch.ones((1,)),torch.ones((1,))
                             val_loss  += vloss.item() /len(valid_loader)
                             val_tok   += vtok.item()  /len(valid_loader)
                             val_trial += vtrial.item()/len(valid_loader)
@@ -840,7 +868,7 @@ def main():
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
                     print()
-                    print("Step:", global_step, "| Train pLoss:", tot_ploss)
+                    print("Step:", global_step, "| Train pLoss:", tot_ploss, "| Train Loss:", tot_loss)
                     print()
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
@@ -863,7 +891,7 @@ def main():
                         print(s)
                         print()
 
-                        print("Train Tok Acc:")
+                        print("Train Tok Acc:", tot_tok)
                         s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
@@ -882,7 +910,7 @@ def main():
                         except:
                             print("error calculating baseline loss")
                             bloss = 0
-                        print("Train Loss:",  tot_loss, "Base:", bloss)
+                        print("Train Loss:",  tot_loss.item(), "Base:", bloss)
                         s = "\tM1->M1: " + str(round(losses[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(losses[(0,1,vidx)],5))
@@ -899,7 +927,7 @@ def main():
                         # print(s)
                         print()
 
-                        print("Valid Tok Acc:")
+                        print("Valid Tok Acc:", val_tok)
                         s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
@@ -951,7 +979,7 @@ def main():
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
                     print()
-                    print("Step:", global_step, "| Train pLoss:", tot_ploss)
+                    print("Step:", global_step, "| Train pLoss:", tot_ploss, "| Train Loss:", tot_loss)
                     print("Experiment:", os.path.join(save_folder, save_name))
                     print("M1:", config["model_names"][0])
                     if len(config["model_names"])>1:
