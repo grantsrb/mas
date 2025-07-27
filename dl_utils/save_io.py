@@ -862,6 +862,7 @@ def get_save_name(
             "mtx_kwargs",
             "save_keys",
             "dataset_names",
+            "source_files",
         },):
     # Get intial save folder root
     exp_name = kwargs.get("exp_name", config.get("exp_name", "mas_"))
@@ -871,6 +872,7 @@ def get_save_name(
     if "model_names" not in config:
         if "source_files" in kwargs:
             kwargs["model_names"] = kwargs["source_files"]
+            config["model_names"] = kwargs["source_files"]
         else:
             config["model_names"] = config["source_files"]
             kwargs["model_names"] = config["source_files"]
