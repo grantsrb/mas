@@ -64,14 +64,14 @@ config = {
     "model_name": "gpt2", #"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # 
     "layers": [ ],
     "tokenizer_name": None,
-    "filter_mode": "toxic", # "toxic", "nontoxic", or "both"
-    "max_samps": 5000, # how many samples to generate
+    "filter_mode": "both", # "toxic", "nontoxic", or "both"
+    "max_samples": 1000, # how many samples to generate
     "input_length": 48,
     "generated_length": 128,
     "temperature": 0.1,
-    "top_p": 0.8,
+    "top_p": 0.9, # use 1.0 for default
     "batch_size": 16,
-    "dataset": "Anthropic/hh-rlhf", #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat" #"allenai/toxichat" # 
+    "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf", #"lmsys/toxic-chat" #"allenai/toxichat" # 
     "balance_dataset": True,
     "debugging": False,
     "small_data": False, # Used for debugging purposes
@@ -88,10 +88,10 @@ ROOT_DIR = config["root_dir"]
 if not os.path.exists(ROOT_DIR):
     os.makedirs(ROOT_DIR, exist_ok=True)
 
-MAX_SAMPS = config["max_samps"]
+MAX_SAMPS = config["max_samples"]
 RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 filter_mode = config["filter_mode"]
-dataset_name = config["dataset"]
+dir_dataset_name = config["dataset"].replace("/","-")
 if not os.path.exists(MODEL_NAME):
     dir_model_name = MODEL_NAME
     if ROOT_DIR in dir_model_name:
@@ -100,12 +100,12 @@ if not os.path.exists(MODEL_NAME):
 
     SAVE_NAME = os.path.join(
         ROOT_DIR,
-        f"srcactvs_{dir_model_name}_{dataset_name}_{filter_mode}_{RUN_ID}.pt"
+        f"srcactvs_{dir_model_name}_{dir_dataset_name}_{filter_mode}_{RUN_ID}.pt"
     )
 else:
     SAVE_NAME = os.path.join(
         MODEL_NAME, 
-        f"srcactvs_{dataset_name}_{filter_mode}_n{MAX_SAMPS}_{RUN_ID}.pt",
+        f"srcactvs_{dir_dataset_name}_{filter_mode}_n{MAX_SAMPS}_{RUN_ID}.pt",
     )
 config["save_name"] = SAVE_NAME
 os.makedirs("/".join(SAVE_NAME.split("/")[:-1]), exist_ok=True)
@@ -262,9 +262,9 @@ with torch.no_grad():
             input_ids=ids.to(device),
             max_new_tokens=config["generated_length"]-ids.shape[1]+1,
             return_dict_in_generate=True,
-            output_scores=True,
-            output_hidden_states=True,
-            do_sample=True,
+            output_scores=False,
+            output_hidden_states=False,
+            do_sample=config["top_p"]<1 and config["temperature"]>0,
             top_p=config["top_p"],
             temperature=config["temperature"],
             pad_token_id=tokenizer.eos_token_id,
@@ -303,11 +303,12 @@ generated_ids = generated_ids[:,:-1] # keep only the input ids
 layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
 
 # Collect logits
+print("Collecting logits")
 with torch.no_grad():
     og_shape = layer_states[logit_input_layer].shape
-    bsize = 256
+    bsize = config["batch_size"]
     device = next(model.lm_head.parameters()).get_device()
-    print("dev:", next(model.lm_head.parameters()).get_device())
+    print("Device:", next(model.lm_head.parameters()).get_device())
     logits = []
     inputs = layer_states[logit_input_layer].reshape(-1,og_shape[-1])
     for batch in range(0,len(inputs),bsize):
@@ -344,4 +345,24 @@ data = {
 
 # ---------------- SAVE ----------------
 torch.save(data, SAVE_NAME)
+
+print("Examples:")
+idxs = set()
+for _ in range(3):
+    idx = np.random.randint(0,len(input_text))
+    while idx in idxs:
+        idx = np.random.randint(0,len(input_text))
+    idxs.add(idx)
+    
+    print("Input text:", input_text[idx])
+    print("--------------------------------------------")
+    print("Generated text:", generated_text[idx])
+    print("--------------------------------------------")
+    print("--------------------------------------------")
+    print("--------------------------------------------")
+    print()
+    print()
+
 print(f"✔ Saved to {SAVE_NAME}")
+print()
+print()
