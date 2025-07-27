@@ -190,7 +190,14 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     if type(tokenized_dataset)==dict:
         if type(batch_indices)!=torch.Tensor:
             batch_indices = torch.LongTensor(batch_indices)
-        batch = {k: torch.tensor(v)[batch_indices] for k,v in tokenized_dataset.items()}
+        try:
+            batch = {k: torch.tensor(v)[batch_indices] for k,v in tokenized_dataset.items()}
+        except:
+            batch = dict()
+            for k,v in tokenized_dataset.items():
+                v = torch.tensor(v)
+                print(k, v.shape)
+                batch[k] = v[batch_indices]
     else:
         batch = tokenized_dataset.select(batch_indices)
         batch = {k: torch.tensor(v) for k,v in batch.items()}
