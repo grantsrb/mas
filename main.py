@@ -33,7 +33,7 @@ from intrv_datas import make_intrv_data_from_seqs
 from hooks import get_stepwise_hook, get_indywise_hook, get_hook_module
 from intrv_training import (
     get_model_and_tokenizer, forward_pass, get_embedding_name,
-    get_cl_latents,
+    get_cl_vectors,
 )
 
 import pandas as pd # import after transformers to avoid versioning bug
@@ -572,7 +572,7 @@ def main():
     ##########################
     with torch.no_grad():
         all_src_activations = {k:dict() for k in datasets}
-        cl_latents = {k:dict() for k in datasets}
+        cl_vectors = {k:dict() for k in datasets}
         print("Collecting Activations")
         for k in all_src_activations:
             for dirvar_tup in tokenized_datasets[k].keys():
@@ -625,15 +625,15 @@ def main():
 
                 ## Collect cl latents by generating them from cl sequences
                 ## paired with cl indices to pick out the correct latents.
-                cl_latents[k][dirvar_tup] = None
+                cl_vectors[k][dirvar_tup] = None
                 if (src_idx,trg_idx) in config["cl_directions"]:
-                    cl_latents[k][dirvar_tup] = get_cl_latents(
+                    cl_vectors[k][dirvar_tup] = get_cl_vectors(
                         model=trg_model,
                         device=devices[trg_idx],
                         swap_mask=batch["trg_swap_masks"]>=0,
                         input_ids=batch["cl_input_ids"],
                         tmask=batch.get("cl_task_masks", None),
-                        idxs=batch["cl_idxs"],
+                        idx_mask=batch["cl_idx_masks"],
                         layer=config["layers"][trg_idx],
                     )
 
@@ -880,7 +880,7 @@ def main():
                 val_cl_loss = dict()
                 val_cl_div = dict()
                 val_cl_sdx = dict() # Amount that the max value of the
-                    # cl_latents exceeds the max value and the natural 
+                    # cl_vectors exceeds the max value and the natural 
                     # latents max value measured in standard deviations 
                     # from the natural mean
                 
@@ -915,7 +915,7 @@ def main():
                         batch_indices=batch_indices,
                         dataset=tokenized_datasets["train"][dirvar_tup],
                         src_activations=all_src_activations["train"][dirvar_tup],
-                        cl_latents=cl_latents["train"][dirvar_tup],
+                        cl_vectors=cl_vectors["train"][dirvar_tup],
                         device=devices[tidx],
                         config=config,
                         tforce=True,
@@ -966,7 +966,7 @@ def main():
                                 batch_indices=val_indices,
                                 dataset=tokenized_datasets["valid"][dirvar_tup],
                                 src_activations=all_src_activations["valid"][dirvar_tup],
-                                cl_latents=cl_latents["valid"][dirvar_tup],
+                                cl_vectors=cl_vectors["valid"][dirvar_tup],
                                 device=devices[tidx],
                                 tokenizer=tokenizers[tidx],
                                 config=config,
