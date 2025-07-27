@@ -60,6 +60,12 @@ def get_activations_hook(comms_dict, key="source", to_cpu=False):
                     comms_dict[key].append(out["attentions"].cpu())
             elif type(out)==tuple:
                 comms_dict[key].append(out[0].cpu())
+            elif hasattr(out, "hidden_states"):
+                if type(out.hidden_states)==tuple:
+                    hstates = out.hidden_states[-1].cpu()
+                else:
+                    hstates = out.hidden_states.cpu()
+                comms_dict[key].append(hstates.cpu())
             else:
                 comms_dict[key].append(out.cpu())
     else:
@@ -68,6 +74,12 @@ def get_activations_hook(comms_dict, key="source", to_cpu=False):
                 comms_dict[key].append(out["hidden_states"])
             elif type(out)==tuple:
                 comms_dict[key].append(out[0])
+            elif hasattr(out, "hidden_states"):
+                if type(out.hidden_states)==tuple:
+                    hstates = out.hidden_states[-1]
+                else:
+                    hstates = out.hidden_states
+                comms_dict[key].append(hstates)
             else:
                 comms_dict[key].append(out)
     return hook
@@ -118,6 +130,7 @@ def collect_activations(
         tforce=False,
         n_steps=0,
         ret_gtruth=False,
+        preserve_dims=False,
         verbose=False,):
     """
     Get the response from the argued layers in the model.
@@ -152,6 +165,9 @@ def collect_activations(
         ret_gtruth: bool
             if true, the model will return the ground truth pred_ids
             where tmask is false
+        preserve_dims: bool
+            if true, will concatenate any looped layer outputs as
+            apposed to stacking along a new dimension.
     returns: 
         comms_dict: dict
             The keys will consist of the corresponding layer name. The
@@ -220,11 +236,14 @@ def collect_activations(
                     print(k, "isn't producing")
                     assert False
                 if len(output[0].shape)<=4:
-                    try:
-                        output = torch.stack(output, dim=1)
-                    except:
-                        print("Failed for", k)
-                        output = torch.stack(output, dim=1)
+                    if preserve_dims:
+                        output = torch.cat(output, dim=1)
+                    else:
+                        try:
+                            output = torch.stack(output, dim=1)
+                        except:
+                            print("Failed for", k)
+                            output = torch.stack(output, dim=1)
                 elif len(output)==1:
                     raise NotImplemented
                     #output = output[0]
@@ -388,6 +407,7 @@ def str_to_typed_value(val):
 def get_command_line_args(args=None):
     if args is None: args = sys.argv[1:]
     config = {}
+    command_keys = []
     for arg in args:
         if ".yaml" in arg or ".json" in arg:
             if "=" in arg: arg = arg.split("=")[-1].strip()
@@ -395,7 +415,8 @@ def get_command_line_args(args=None):
         elif "=" in arg:
             key,val = arg.split("=")
             config[key] = str_to_typed_value(val)
-    return config
+            command_keys.append(key)
+    return config, command_keys
 
 
 def extract_ids(string, tokenizer):

@@ -2,6 +2,7 @@
 This module contains the code to create intervention
 samples from an existing dataset, causal model, and index filter.
 """
+import time
 import copy
 import pandas as pd
 import numpy as np
@@ -582,6 +583,13 @@ def make_intrv_data_from_seqs(
             cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
             cl_seqs = trg_seqs
             cl_tmasks = trg_task_masks
+        cl_idxs = torch.tensor(cl_idxs).long()
+        cl_idx_mask = []
+        for row,seq in enumerate(cl_seqs):
+            cols = cl_idxs[cl_idxs[0]==row, -1].tolist()
+            cl_idx_mask.append(
+                [1 if col in cols else 0 for col in range(len(seq))]
+            )
         assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
 
     # 3. Using the variables, seqs, and swap indices, create
@@ -623,7 +631,7 @@ def make_intrv_data_from_seqs(
         d["src_labels"] = src_labels
 
     if cl_idxs is not None:
-        d["cl_idxs"] = cl_idxs
+        d["cl_idx_masks"] = cl_idx_mask
         d["cl_input_ids"] = cl_seqs
         d["cl_task_masks"] = cl_tmasks
     return d
@@ -631,14 +639,18 @@ def make_intrv_data_from_seqs(
 def make_intrv_data_from_src_data(
     text,
     trg_prompt,
+    src_prompt,
     src_logits,
     src_actvs,
-    tokenizer,
+    trg_tokenizer,
+    src_tokenizer,
     stepwise=True,
     ret_cl_data=True,
-    src_prompt_len=None,
     min_cfct_len=10,
+    min_intrv_idx=10,
     shuffle=True,
+    n_samples=None,
+    as_tensors=False,
 ):
     """
     This function creates intervention data saved source data.
@@ -658,93 +670,208 @@ def make_intrv_data_from_src_data(
         text: list of str (B,)
             the text that we wish to use for interventions
         shuffle: bool
-            if false, will not mix up target and src data
-        prompt: str
-            the prompt will be prepended to the text
-        logits: tensor (B,S,P)
+            if false, will not mix up target and src data. useful for
+            generating null interventions when training with empty varbs.
+        trg_prompt: str
+            the target prompt will be prepended to the text
+        src_prompt: str
+            the source prompt will be prepended to the text
+        src_logits: tensor (B,S,P)
             the logits from the source model. S includes the prompt tokens
-        actvs: tensor (B,S,D)
+        src_actvs: tensor (B,S,D)
             the latent activations from the source model. S includes
             the prompt tokens
-        tokenizer: Tokenizer
+        trg_tokenizer: Tokenizer
             the tokenizer for the target model
+        src_tokenizer: Tokenizer
+            the tokenizer for the source model
         stepwise: bool
             if true, will assume stepwise interventions
         ret_cl_data: bool
             if true, will collect cl indices and sequences to be used by
             the target model to collect cl vectors.
-        src_prompt_len: int
-            the prompt length of the source data measured in tokens.
         min_cfct_len: int
             the minimum counterfactual len. this ensures that there are
             some predictions following the interchange.
+        min_intrv_idx: int
+            the minimum index to sample for the intervention. this ensures
+            that there is some buildup before the interchange.
+        n_samples: int
+            only applies if shuffle is True.
+            optionally specify the number of samples to generate. If this
+            is not None and greater than 0, will sample pairs with
+            replacement from both target and source text until specified
+            number of samples is met. Otherwise will simply shuffle the
+            target samples and pair without replacement.
+        as_tensors: bool
+            if true, will return values in data_dict as tensors rather
+            than lists
     Returns:
         data_dict: dict
-            "trg_input_ids": tensor (B,S1)
-            "src_input_ids": tensor (B,S1)
-            "trg_task_masks": tensor (B,S1)
-            "src_task_masks": tensor (B,S1)
-            "trg_swap_masks": tensor (B,S1)
-            "src_swap_masks": tensor (B,S2)
-            "trg_swap_idxs": tensor (B,)
-            "src_swap_idxs": tensor (B,)
-            "cl_input_ids": tensor (B,S1)
-            "cl_idxs": tensor (L,2)
+            "trg_input_ids":  tensor or list - shape (B,S1)
+            "src_input_ids":  tensor or list - shape (B,S1)
+            "trg_task_masks": tensor or list - shape (B,S1)
+            "src_task_masks": tensor or list - shape (B,S1)
+            "trg_swap_masks": tensor or list - shape (B,S1)
+                returns a list of idx masks in which the value of the entry
+                denotes the ordering of the swaps. The first swap is denoted
+                by 0, the second by 1, and so on. -1 is the default value for
+                positions that will not be swapped.
+            "src_swap_masks": tensor or list - shape (B,S2)
+                returns a list of idx masks in which the value of the entry
+                denotes the ordering of the swaps. The first swap is denoted
+                by 0, the second by 1, and so on. -1 is the default value for
+                positions that will not be swapped.
+            "trg_swap_idxs":  tensor or list - shape (B,)
+            "src_swap_idxs":  tensor or list - shape (B,)
+            "cl_input_ids":   tensor or list - shape (B,S1)
+            "cl_idx_masks":        tensor or list - shape (L,2)
                 this is a 2d tensor containing row,col indices that can
                 be used to select the counterfactual latents from the
                 target model when it is run on the cl_input_ids.
     """
     if not stepwise: raise NotImplemented
 
-    # Make tokenized text and shuffle target texts
-    trg_prompt_len = len(tokenizer(trg_prompt))
-    sample_len = src_actvs.shape[1] - src_prompt_len
-    max_length = sample_len + trg_prompt_len
-    text = [trg_prompt + t for t in text]
-    src_toks = tokenizer(
-        text,
+    ##############################################
+    ### Make tokenized text
+    ##############################################
+
+    startt = time.time()
+    print("Tokenizing Src...")
+    # Src tokens
+    src_prompt_len = 0
+    if src_prompt:
+        src_prompt_len = len(src_tokenizer(src_prompt))
+    src_max_length = src_actvs.shape[1]
+    src_text = [src_prompt + t for t in text]
+    src_toks = src_tokenizer(
+        src_text,
         padding="max_length",
         truncation=True,
-        max_length=max_length,
+        max_length=src_max_length,
         return_tensors="pt"
     )
-    if shuffle:
-        perm = torch.randperm(len(text)).long()
-    else:
-        perm = torch.arange(len(text)).long()
-    trg_toks = {
-        k: v[perm] for k,v in src_toks.items()
-    }
+    print("Exec Time:", time.time() - startt)
 
-    # Sample src and trg intervention indices and swap masks (same if
-    #   stepwise is true and prompt lengths are the same)
-    intrv_indices = torch.randint(1,sample_len-min_cfct_len, (len(src_actvs),))
-    trg_intrv_idxs = trg_prompt_len + intrv_indices
-    src_intrv_idxs = src_prompt_len + intrv_indices
-    if stepwise:
+    startt = time.time()
+    print("Tokenizing Trg...")
+    # Trg Tokens
+    trg_prompt_len = 0
+    if trg_prompt:
+        trg_prompt_len = len(trg_tokenizer(trg_prompt))
+    sample_len = src_actvs.shape[1] - src_prompt_len
+    trg_max_length = sample_len + trg_prompt_len
+    trg_text = [trg_prompt + t for t in text]
+    trg_toks = trg_tokenizer(
+        trg_text,
+        padding="max_length",
+        truncation=True,
+        max_length=trg_max_length,
+        return_tensors="pt"
+    )
+    print("Exec Time:", time.time() - startt)
+
+    # CL Tokens
+    if ret_cl_data:
+        startt = time.time()
+        print("Tokenizing CL...")
+        if src_prompt:
+            src_prompt_len = len(trg_tokenizer(src_prompt))
+        cl_toks = trg_tokenizer(
+            src_text,
+            padding="max_length",
+            truncation=True,
+            max_length=src_max_length,
+            return_tensors="pt"
+        )
+        print("Exec Time:", time.time() - startt)
+
+    ##############################################
+    ### Sample Sequence Pairs
+    ##############################################
+    startt = time.time()
+    print("Shuffling Samples...")
+    if shuffle:
+        tot_src_samps = len(src_toks["input_ids"])
+        tot_trg_samps = len(trg_toks["input_ids"])
+        if not n_samples:
+            src_samp_idxs = torch.randperm(tot_src_samps).long()
+            trg_samp_idxs = torch.randperm(tot_trg_samps).long()
+        else:
+            src_samp_idxs = torch.randint(0,tot_src_samps, (n_samples,))
+            trg_samp_idxs = torch.randint(0,tot_trg_samps, (n_samples,))
+    else:
+        src_samp_idxs = torch.arange(len(text)).long()
+        trg_samp_idxs = torch.arange(len(text)).long()
+
+    src_logits = src_logits[src_samp_idxs]
+    src_actvs = src_actvs[src_samp_idxs]
+    src_toks = {k: v[src_samp_idxs] for k,v in src_toks.items()}
+    trg_toks = {k: v[trg_samp_idxs] for k,v in trg_toks.items()}
+    if ret_cl_data:
+        cl_toks = {k: v[src_samp_idxs] for k,v in cl_toks.items()}
+    print("Exec Time:", time.time() - startt)
+
+    ##############################################
+    ### Sample Intervention Indices
+    # Sample src and trg intervention indices and swap masks (src and trg
+    #   swap masks are same if stepwise is true and prompt lengths are
+    #   the same and the tokenizers are the same)
+    ##############################################
+    startt = time.time()
+    print("Making Intervention Masks...")
+    min_intrv_idx = min(min_intrv_idx, sample_len-min_cfct_len-1)
+    intrv_idxs = torch.randint(
+        min_intrv_idx, sample_len-min_cfct_len, (len(src_actvs),))
+    if stepwise: # STEPWISE
+        trg_intrv_idxs = trg_prompt_len + intrv_idxs
+        src_intrv_idxs = src_prompt_len + intrv_idxs
+
         trg_swap_mask = get_mask_between(
             shape=trg_toks["input_ids"].shape,
             startx=torch.zeros(len(trg_intrv_idxs))+trg_prompt_len,
             endx=trg_intrv_idxs,
             inclusive=True,
-        ).bool()
+        ).long()
+        num_idxs = torch.cat([torch.arange(row.sum()) for row in trg_swap_mask])
+        bool_idx = trg_swap_mask.bool()
+        trg_swap_mask[bool_idx] = num_idxs
+        trg_swap_mask[~bool_idx] = -1
+
         src_swap_mask = get_mask_between(
             shape=src_actvs.shape[:2],
             startx=torch.zeros(len(src_intrv_idxs))+src_prompt_len,
             endx=src_intrv_idxs,
             inclusive=True,
-        ).bool()
-    else:
+        ).long()
+        num_idxs = torch.cat([torch.arange(row.sum()) for row in src_swap_mask])
+        bool_idx = src_swap_mask.bool()
+        src_swap_mask[bool_idx] = num_idxs
+        src_swap_mask[~bool_idx] = -1
+
+    else: # INDYWISE
+        src_intrv_idxs = intrv_idxs + src_prompt_len
+        trg_intrv_idxs = torch.randint(
+            trg_prompt_len+1,
+            sample_len-min_cfct_len,
+            (len(src_actvs),))
         row_idx = torch.arange(len(trg_intrv_idxs)).long()
-        trg_swap_mask = torch.zeros_like(trg_toks["input_ids"]).bool()
-        trg_swap_mask[row_idx,trg_intrv_idxs] = True
-        src_swap_mask = torch.zeros(src_actvs.shape[:2]).bool()
-        src_swap_mask[row_idx,src_intrv_idxs] = True
+        trg_swap_mask = torch.zeros_like(trg_toks["input_ids"])-1
+        trg_swap_mask[row_idx,trg_intrv_idxs] = 0
+        src_swap_mask = torch.zeros(src_actvs.shape[:2]).long()-1
+        src_swap_mask[row_idx,src_intrv_idxs] = 0
+    print("Exec Time:", time.time() - startt)
+
+    startt = time.time()
+    print("Making Task Masks...")
     trg_task_mask = get_mask_past_arglast(trg_swap_mask, inclusive=True)
     src_task_mask = get_mask_past_arglast(src_swap_mask, inclusive=True)
+    print("Exec Time:", time.time() - startt)
 
     # Replaces trg sequences with src sequences after the intervention
     #   indices
+    startt = time.time()
+    print("Replacing elements with counterfactuals...")
     trg_len = trg_swap_mask.shape[1]-trg_prompt_len
     src_len = src_swap_mask.shape[1]-src_prompt_len
     endx = torch.zeros(len(trg_intrv_idxs))+min(trg_len,src_len)
@@ -754,16 +881,25 @@ def make_intrv_data_from_src_data(
         endx=endx+trg_prompt_len,
         inclusive=False,
     )
-    trg_toks["input_ids"][trg_replace_mask] = src_toks["input_ids"][trg_replace_mask]
-    trg_toks["attention_mask"][trg_replace_mask] = src_toks["attention_mask"][trg_replace_mask]
+    src_replace_mask = get_mask_between(
+        shape=src_swap_mask.shape,
+        startx=src_intrv_idxs+1,
+        endx=endx+src_prompt_len,
+        inclusive=False,
+    )
+    trg_toks["input_ids"][trg_replace_mask] = src_toks["input_ids"][src_replace_mask]
+    print("Exec Time:", time.time() - startt)
+
+    startt = time.time()
+    print("Padding...")
     if trg_len>src_len:
         pad_mask = get_mask_past_idx(
             shape=trg_swap_mask.shape,
             idx=endx+trg_prompt_len,
             inclusive=True
         )
-        trg_toks["input_ids"][pad_mask] = tokenizer.pad_token_id
-        trg_toks["attention_mask"][pad_mask] = 0
+        trg_toks["input_ids"][pad_mask] = trg_tokenizer.pad_token_id
+    print("Exec Time:", time.time() - startt)
 
     d = {
         "trg_input_ids": trg_toks["input_ids"],
@@ -774,18 +910,32 @@ def make_intrv_data_from_src_data(
         "src_swap_masks": src_swap_mask,
         "trg_swap_idxs": trg_intrv_idxs,
         "src_swap_idxs": src_intrv_idxs,
+        "src_actvs": src_actvs,
+        "src_logits": src_logits,
     }
 
     # Returns original src sequences with ~swap_mask indices as cl data
     #   if returning cl data
     if ret_cl_data:
+        startt = time.time()
+        print("Making CL Data...")
+        if not stepwise: raise NotImplemented
         cl_mask = get_mask_between(
-            shape=trg_swap_mask.shape,
-            startx=trg_intrv_idxs+1,
-            endx=endx+trg_prompt_len,
+            shape=cl_toks["input_ids"].shape,
+            startx=torch.zeros(len(intrv_idxs))+src_prompt_len,
+            endx=intrv_idxs+src_prompt_len,
             inclusive=True,
         )
-        d["cl_input_ids"] = src_toks["input_ids"],
-        d["cl_idxs"] = torch.nonzero(cl_mask.long())
+        cl_task_mask = get_mask_past_arglast(cl_mask, inclusive=True)
+        d["cl_input_ids"] = cl_toks["input_ids"]
+        d["cl_task_masks"] = cl_task_mask
+        d["cl_idx_masks"] = cl_mask
+        assert torch.all(cl_mask.bool()==(trg_swap_mask>=0))
+        print("Exec Time:", time.time() - startt)
+    if not as_tensors:
+        startt = time.time()
+        print("Converting to lists...")
+        d = {k: v.tolist() for k,v in d.items()}
+        print("Exec Time:", time.time() - startt)
     return d
 

@@ -187,44 +187,49 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
 
     Attention masks use 1 to denote not padding tokens
     """
-    batch = tokenized_dataset.select(batch_indices)
+    if type(tokenized_dataset)==dict:
+        if type(batch_indices)!=torch.Tensor:
+            batch_indices = torch.LongTensor(batch_indices)
+        batch = {k: torch.tensor(v)[batch_indices] for k,v in tokenized_dataset.items()}
+    else:
+        batch = tokenized_dataset.select(batch_indices)
+        batch = {k: torch.tensor(v) for k,v in batch.items()}
+
     d = {
-        "input_ids":      torch.tensor(batch["trg_input_ids"])[...,:-1],
-        "inpt_attn_mask": torch.tensor(batch["trg_inpt_attn_masks"])[...,:-1],
-        "outp_attn_mask": torch.tensor(batch["trg_outp_attn_masks"])[...,1:],
-        "labels":         torch.tensor(batch["trg_input_ids"])[...,1:],
-        "src_input_ids":  torch.tensor(batch["src_input_ids"])[...,:-1],
+        "input_ids":      batch["trg_input_ids"][...,:-1],
+        "inpt_attn_mask": batch["trg_inpt_attn_masks"][...,:-1],
+        "outp_attn_mask": batch["trg_outp_attn_masks"][...,1:],
+        "labels":         batch["trg_input_ids"][...,1:],
+        "src_input_ids":  batch["src_input_ids"][...,:-1],
     }
     if incl_src:
         d = {
           **d,
-          "src_attention_mask": torch.tensor(batch["src_inpt_attn_masks"])[...,:-1],
-          "src_outp_attn_mask": torch.tensor(batch["src_outp_attn_masks"])[...,1:],
-          "src_labels":         torch.tensor(batch["src_input_ids"])[...,1:],
+          "src_attention_mask": batch["src_inpt_attn_masks"][...,:-1],
+          "src_outp_attn_mask": batch["src_outp_attn_masks"][...,1:],
+          "src_labels":         batch["src_input_ids"][...,1:],
         }
     try:
-        d["input_tmask"] = torch.tensor(batch["trg_task_masks"])[...,:-1].bool()
-        d["outp_tmask"] = torch.tensor(batch["trg_task_masks"])[...,1:].bool()
+        d["input_tmask"] = batch["trg_task_masks"][...,:-1].bool()
+        d["outp_tmask"] = batch["trg_task_masks"][...,1:].bool()
         if incl_src:
-            d["src_input_tmask"] = torch.tensor(
-                batch["src_task_masks"])[...,:-1].bool()
-            d["src_outp_tmask"] = torch.tensor(
-                batch["src_task_masks"])[...,1:].bool()
+            d["src_input_tmask"] = batch["src_task_masks"][...,:-1].bool()
+            d["src_outp_tmask"] = batch["src_task_masks"][...,1:].bool()
     except: pass
     try:
-        d["trg_swap_masks"] = torch.tensor(batch["trg_swap_masks"])[...,:-1]
-        d["src_swap_masks"] = torch.tensor(batch["src_swap_masks"])[...,:-1]
+        d["trg_swap_masks"] = batch["trg_swap_masks"][...,:-1]
+        d["src_swap_masks"] = batch["src_swap_masks"][...,:-1]
     except: pass
     try:
-        d["trg_swap_idxs"] = torch.LongTensor(batch["trg_swap_idxs"])
-        d["src_swap_idxs"] = torch.LongTensor(batch["src_swap_idxs"])
+        d["trg_swap_idxs"] = batch["trg_swap_idxs"].long()
+        d["src_swap_idxs"] = batch["src_swap_idxs"].long()
     except: pass
     try:
-        d["cl_idxs"] = torch.LongTensor(batch["cl_idxs"])
-        d["cl_input_ids"] = torch.LongTensor(batch["cl_input_ids"])
+        d["cl_idx_masks"] = batch["cl_idx_masks"][...,:-1].bool()
+        d["cl_input_ids"] = batch["cl_input_ids"].long()
     except: pass
     try:
-        d["cl_task_masks"] = torch.LongTensor(batch["cl_task_masks"])
+        d["cl_task_masks"] = batch["cl_task_masks"].long()
     except: pass
     # In a standard LM objective the labels are the input_ids (shifted internally
     # by the model), but we don't do that
@@ -418,6 +423,8 @@ def pad_data_dict(
 ):
     """
     Utility function for padding the data dict. Operates in place.
+    Assumes values in data_dict are lists, but will explicitly convert
+    them to lists if tensors are argued
     """
     max_len = int(max(
         max([len(s) for s in data_dict["src_input_ids"]]),
@@ -430,9 +437,12 @@ def pad_data_dict(
         cl_offsets = [cl_max_len-len(s) for s in data_dict["cl_input_ids"]]
 
     ### START TESTING
+    print("Max Len:", max_len)
     for i in range(len(src_offsets)):
-        assert src_offsets[i]==(max_len-len(data_dict["src_swap_masks"][i]))
-        assert trg_offsets[i]==(max_len-len(data_dict["trg_swap_masks"][i]))
+        diff = (max_len-len(data_dict["src_swap_masks"][i]))
+        assert src_offsets[i]==diff, f"{src_offsets[i]} != {diff}"
+        diff = (max_len-len(data_dict["trg_swap_masks"][i]))
+        assert trg_offsets[i]==diff, f"{trg_offsets[i]} != {diff}"
     ### END TESTING
 
     for k in data_dict:
@@ -456,7 +466,9 @@ def pad_data_dict(
             offset = offsets[i]
             if "cl_idxs"==k:
                 if left:
-                    data_dict[k][i][-1] += offset
+                    tensr = torch.tensor(data_dict[k])
+                    tensr[tensr[0]==i][-1] += offset
+                    data_dict[k] = tensr.tolist()
                 continue
             elif "idx" in k:
                 if left:
@@ -468,8 +480,16 @@ def pad_data_dict(
                 mask = [0 for _ in range(offset)]
             elif "input_id" in k:
                 mask = [pad_id for _ in range(offset)]
-            data_dict[k][i] = left*mask + data_dict[k][i] + mask*(1-left)
-
+            
+            if type(data_dict[k])==torch.Tensor:
+                data_dict[k] = data_dict[k].tolist()
+            try:
+                data_dict[k][i] = left*mask + data_dict[k][i] + mask*(1-left)
+            except:
+                print(k, i)
+                print("left:", left)
+                print("mask:", type(mask))
+                print("ddict:", type(data_dict[k][i]))
     return data_dict
         
 def add_pad_masks(data_dict, src_info, trg_info):
@@ -485,7 +505,9 @@ def add_pad_masks(data_dict, src_info, trg_info):
         bos_id = info["bos_token_id"]
         eos_id = info["eos_token_id"]
 
-        inpt_ids = torch.LongTensor(data_dict[k+"_input_ids"])
+        inpt_ids = data_dict[k+"_input_ids"]
+        if type(inpt_ids)!=torch.Tensor:
+            inpt_ids = torch.LongTensor(inpt_ids)
 
         attn_mask = torch.ones_like(inpt_ids).bool()
         if pad_id is not None:
@@ -508,6 +530,7 @@ def convert_to_tensors(data_dict):
         if "attention" in k or "attn" in k or "task" in k:
             data_dict[k] = torch.BoolTensor(data_dict[k])
         elif "idx" in k or "swap" in k or "ids" in k:
+            if type(data_dict[k])==torch.Tensor: continue
             try:
                 data_dict[k] = torch.LongTensor(data_dict[k])
             except:
