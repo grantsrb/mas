@@ -63,6 +63,8 @@ def get_activations_hook(comms_dict, key="source", to_cpu=False):
             elif hasattr(out, "hidden_states"):
                 if type(out.hidden_states)==tuple:
                     hstates = out.hidden_states[-1].cpu()
+                elif out.hidden_states is None:
+                    hstates = out.last_hidden_state.cpu()
                 else:
                     hstates = out.hidden_states.cpu()
                 comms_dict[key].append(hstates.cpu())
@@ -77,6 +79,8 @@ def get_activations_hook(comms_dict, key="source", to_cpu=False):
             elif hasattr(out, "hidden_states"):
                 if type(out.hidden_states)==tuple:
                     hstates = out.hidden_states[-1]
+                elif out.hidden_states is None:
+                    hstates = out.last_hidden_state
                 else:
                     hstates = out.hidden_states
                 comms_dict[key].append(hstates)
