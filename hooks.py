@@ -10,53 +10,80 @@ def get_stepwise_hook(comms_dict):
         trg_idx = comms_dict.get("trg_idx",1)
         varb_idx = comms_dict.get("varb_idx",None)
 
-        # targ vectors, shape (B,D)
         if hasattr(output,"hidden_states"):
-            trg_actvs = output["hidden_states"]
+            main_trg_actvs = output["hidden_states"]
+        elif type(output)==tuple:
+            main_trg_actvs = output[0]
         else:
-            trg_actvs = output
+            main_trg_actvs = output
 
-        # Prep source vectors, shape (B,S,D)
-        src_actvs = comms_dict["src_activations"]
+        # ensure targ vectors shas shape (B,S1,D)
+        seq_dim = True
+        if len(main_trg_actvs.shape)==2:
+            seq_dim = False
+            main_trg_actvs = main_trg_actvs[:,None]
+        n_loops = main_trg_actvs.shape[1]
 
-        lc = comms_dict["loop_count"]
-        comms_dict["loop_count"] += 1
-        tsmask = comms_dict["trg_swap_masks"][:,lc]
-        batch_bools = tsmask>=0
-        if comms_dict.get("intrv_vecs",None) is None:
-            comms_dict["intrv_vecs"] = []
-        comms_dict["intrv_vecs"].append(torch.empty_like(trg_actvs))
-        if not torch.any(batch_bools):
-            return output
+        # Prep source vectors, shape (B,S2,D)
+        main_src_actvs = comms_dict["src_activations"]
 
-        placeholder = torch.empty_like(trg_actvs)
-        placeholder[~batch_bools] = trg_actvs[~batch_bools]
-        device = device_fxn(batch_bools.get_device())
-        src_rows = torch.arange(len(batch_bools)).long().to(device)[batch_bools]
-        # Find the locations in the src swap mask that have the same swap
-        # order as the trg swap mask for this loop
-        src_cols = (comms_dict["src_swap_masks"]==tsmask[:,None]).long()
-        src_cols = torch.argmax(src_cols, dim=-1)[batch_bools]
-        src_actvs = src_actvs[src_rows,src_cols]
-        trg_actvs = trg_actvs[batch_bools]
+        outs_list = []
+        ret_output = True
+        for loopi in range(n_loops):
+            trg_actvs = main_trg_actvs[:,loopi]
+            lc = comms_dict["loop_count"]
+            comms_dict["loop_count"] += 1
+            tsmask = comms_dict["trg_swap_masks"][:,lc]
+            batch_bools = tsmask>=0
+            if comms_dict.get("intrv_vecs",None) is None:
+                comms_dict["intrv_vecs"] = []
+            comms_dict["intrv_vecs"].append(torch.empty_like(trg_actvs))
+            if not torch.any(batch_bools):
+                outs_list.append(trg_actvs)
+                continue
+            ret_output = False
 
-        intrv_module = comms_dict["intrv_module"]
-        outs = intrv_module(
-            target=trg_actvs,
-            source=src_actvs,
-            target_idx=trg_idx,
-            source_idx=src_idx,
-            varb_idx=varb_idx,
-        )
+            placeholder = torch.empty_like(trg_actvs)
+            placeholder[~batch_bools] = trg_actvs[~batch_bools]
+            device = device_fxn(batch_bools.get_device())
+            src_rows = torch.arange(len(batch_bools)).long().to(device)[batch_bools]
+            # Find the locations in the src swap mask that have the same swap
+            # order as the trg swap mask for this loop
+            src_cols = (comms_dict["src_swap_masks"]==tsmask[:,None]).long()
+            src_cols = torch.argmax(src_cols, dim=-1)[batch_bools]
+            src_actvs = main_src_actvs[src_rows,src_cols]
+            trg_actvs = trg_actvs[batch_bools]
 
-        comms_dict["intrv_vecs"][-1][batch_bools] = outs
+            # print("target", trg_actvs.shape)
+            # print("source", src_actvs.shape)
+            # print("target_idx", trg_idx)
+            # print("source_idx", src_idx)
+            # print("varb_idx", varb_idx)
+            intrv_module = comms_dict["intrv_module"]
+            outs = intrv_module(
+                target=trg_actvs,
+                source=src_actvs,
+                target_idx=trg_idx,
+                source_idx=src_idx,
+                varb_idx=varb_idx,
+            )
 
-        placeholder[batch_bools] = outs
-        outs = placeholder
+            comms_dict["intrv_vecs"][-1][batch_bools] = outs
 
+            placeholder[batch_bools] = outs
+            outs = placeholder
+            outs_list.append(outs)
+
+        if ret_output: return output # only occurs if no interventions
+
+        outs = torch.stack(outs_list, dim=1)
+        if not seq_dim: # handle case where original shape was (B,D)
+            outs = outs[:,0]
         if hasattr(output,"hidden_states"):
             output["hidden_states"] = outs
             return output
+        elif type(output)==tuple:
+            return (outs,) + output[1:]
         else:
             return outs
 
