@@ -75,6 +75,7 @@ config = {
     "balance_dataset": True,
     "debugging": False,
     "small_data": False, # Used for debugging purposes
+    "do_save": True, #
 }
 command_args, _ = get_command_line_args()
 config.update(command_args)
@@ -83,7 +84,15 @@ torch.manual_seed(config["seed"])
 
 # --------- Logging Setup ---------
 
+if config["debugging"]:
+    config["generated_length"] = config.get("input_length", 10) + 5
+    config["max_samples"] = min(50,config["max_samples"])
+    MAX_SAMPS = config["max_samples"]
+    config["do_save"] = False
+    print("Reducing Generated Length for Debugging", config["generated_length"])
+
 MODEL_NAME = config["model_name"]
+print("Model is Dir:", os.path.isdir(MODEL_NAME))
 ROOT_DIR = config["root_dir"]
 if not os.path.exists(ROOT_DIR):
     os.makedirs(ROOT_DIR, exist_ok=True)
@@ -108,7 +117,8 @@ else:
         f"srcactvs_{dir_dataset_name}_{filter_mode}_n{MAX_SAMPS}_{RUN_ID}.pt",
     )
 config["save_name"] = SAVE_NAME
-os.makedirs("/".join(SAVE_NAME.split("/")[:-1]), exist_ok=True)
+if config["do_save"]:
+    os.makedirs("/".join(SAVE_NAME.split("/")[:-1]), exist_ok=True)
 
 TOKENIZER_NAME = config.get("tokenizer_name", None)
 if TOKENIZER_NAME is None:
@@ -124,10 +134,6 @@ PROMPT_TEMPLATE = config.get(
     PROMPT_TEMPLATES[config["dataset"]]
 )
 config["prompt_template"] = PROMPT_TEMPLATE
-
-if config["debugging"]:
-    config["generated_length"] = config.get("input_length", 10) + 5
-    print("Reducing Generated Length for Debugging", config["generated_length"])
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
@@ -198,17 +204,22 @@ if not logit_input_layer:
         logit_input_layer = "transformer"
     elif hasattr(model, "model"):
         logit_input_layer = "model"
+    elif hasattr(model, "gpt_neox"):
+        logit_input_layer = "gpt_neox"
 
 if not logit_input_layer or not hasattr(model, logit_input_layer):
     print(model)
     print("You need to specify the logit input layer... Current argument:", logit_input_layer)
     raise NotImplemented
-config["layers"].append(logit_input_layer)
+#config["layers"].append(logit_input_layer)
 
-if len(config["layers"])==1:
+if len(config["layers"])==0:
     for name,modu in getattr(model, logit_input_layer).named_modules():
+        if type(modu)==torch.nn.Embedding:
+            config["layers"].append(f"{logit_input_layer}.{name}")
         if type(modu)==torch.nn.ModuleList:
             for i in range(0, len(modu), 4):
+                if i==0: continue
                 config["layers"].append(f"{logit_input_layer}.{name}.{i}")
 
 # ---------------- HOOKS ----------------
@@ -299,24 +310,43 @@ with torch.no_grad():
 for hook in hooks: hook.remove()
 torch.cuda.empty_cache()
 
-generated_ids = generated_ids[:,:-1] # keep only the input ids
+criterion = torch.nn.CrossEntropyLoss()
+with torch.no_grad():
+    acc = 0
+    n_loops = max(len(generated_ids)//bsize, 1)
+    logits = []
+    for i in tqdm(range(0, n_loops*bsize, bsize)):
+        ids = generated_ids[i:i+bsize]
+        regens = model(input_ids=ids)
+        logits.append(regens.logits)
+        d = regens.logits.shape[-1]
+        loss = criterion(regens.logits[:,:-1].reshape(-1,d), ids[:,1:].reshape(-1))
+        acc += (regens.logits.argmax(-1)[:,:-1]==ids[:,1:]).float().mean()
+    logits = torch.vstack(logits)
+    print()
+    print("Self Accuracy:", acc/n_loops)
+    print()
+
+
 layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
 
-# Collect logits
-print("Collecting logits")
-with torch.no_grad():
-    og_shape = layer_states[logit_input_layer].shape
-    bsize = config["batch_size"]
-    device = next(model.lm_head.parameters()).get_device()
-    print("Device:", next(model.lm_head.parameters()).get_device())
-    logits = []
-    inputs = layer_states[logit_input_layer].reshape(-1,og_shape[-1])
-    for batch in range(0,len(inputs),bsize):
-        inpts = inputs[batch:batch+bsize]
-        logit = model.lm_head( inpts.to(device) )
-        logits.append(logit.cpu())
-    logits = torch.vstack(logits).reshape(*og_shape[:-1],-1)
-    del layer_states[logit_input_layer]
+
+## Collect logits
+#print("Collecting logits")
+#with torch.no_grad():
+#    og_shape = layer_states[logit_input_layer].shape
+#    bsize = config["batch_size"]
+#    lm_head = getattr(model, "lm_head") if hasattr(model, "lm_head") else getattr(model, "embed_out")
+#    device = next(lm_head.parameters()).get_device()
+#    print("Device:", device)
+#    logits = []
+#    inputs = layer_states[logit_input_layer].reshape(-1,og_shape[-1])
+#    for batch in range(0,len(inputs),bsize):
+#        inpts = inputs[batch:batch+bsize]
+#        logit = lm_head( inpts.to(device) )
+#        logits.append(logit.cpu())
+#    logits = torch.vstack(logits).reshape(*og_shape[:-1],-1)
+#    del layer_states[logit_input_layer]
 
 # Examine shapes
 for lay in layer_states:
@@ -344,7 +374,10 @@ data = {
 
 
 # ---------------- SAVE ----------------
-torch.save(data, SAVE_NAME)
+if config["do_save"]:
+    torch.save(data, SAVE_NAME)
+    print(f"✔ Saved to {SAVE_NAME}")
+    print()
 
 print("Examples:")
 idxs = set()
@@ -363,6 +396,8 @@ for _ in range(3):
     print()
     print()
 
+print()
+print()
 print(f"✔ Saved to {SAVE_NAME}")
 print()
 print()
