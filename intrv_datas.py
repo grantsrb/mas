@@ -341,7 +341,7 @@ def make_counterfactual_seqs(
     elif type(trg_swap_keys)==str:
         trg_swap_keys = [trg_swap_keys]
         src_swap_keys = [src_swap_keys]
-    if trg_swap_keys[0] is None or trg_swap_keys[0]=="":
+    if trg_swap_keys[0] is None or trg_swap_keys[0] in {"","null_varb"}:
         return trg_seqs, trg_swap_varbs, trg_task_masks
 
     zlist = [
@@ -533,7 +533,7 @@ def make_intrv_data_from_seqs(
         info=src_info,
         stepwise=stepwise,
     )
-    ret_src_labels = ret_src_labels and src_swap_keys[0] not in {"full",""}
+    ret_src_labels = ret_src_labels and src_swap_keys[0] not in {"full","","null_varb"}
     if ret_src_labels:
         src_labels = get_labels(varb_df=src_df, key=src_swap_keys[0])
     assert len(src_swap_masks[0])==len(src_seqs[0])

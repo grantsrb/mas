@@ -475,7 +475,7 @@ def get_cl_vectors(
     trg_swap_mask,
     input_ids,
     layer,
-    device,
+    device=None,
     idxs=None,
     bsize=500,
     tmask=None,
@@ -506,7 +506,7 @@ def get_cl_vectors(
     assert idxs is not None or idx_mask is not None
     assert not (idxs is None and idx_mask is None)
     model.eval()
-    model.to(device)
+    if device is not None: model.to(device)
     with torch.no_grad():
         outputs = collect_activations(
             model,

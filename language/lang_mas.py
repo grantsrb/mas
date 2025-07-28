@@ -71,7 +71,10 @@ def config_prep(config):
         elif type(sks)==str:
             config["swap_keys"][si] = [sks]
         if config.get("incl_empty_varbs", False):
-            config["swap_keys"][si].append("")
+            config["swap_keys"][si].append("null_varb")
+        for inner_si in range(len(config["swap_keys"][si])):
+            if config["swap_keys"][si][inner_si] == "":
+                config["swap_keys"][si][inner_si] = "null_varb"
     if len(config["swap_keys"])<n_models:
         config["swap_keys"] = config["swap_keys"]*n_models
     print("Swap Keys:", config["swap_keys"])
@@ -168,7 +171,7 @@ def main():
             # to using a vector of 0s for input embeddings at the intervention
             # positions
 
-        "num_training_steps": 50000,
+        "num_training_steps": 3000,
         "print_every": 100,
         "batch_size": 32,
         "grad_accumulation_steps": 8,
@@ -387,7 +390,7 @@ def main():
                     startt = time.time()
                     intrv_data = make_intrv_data_from_src_data(
                         text=src_datasets[k][si]["text"],
-                        null_varb=varb=="",
+                        null_varb=varb=="" or varb=="null_varb",
                         n_samples=config[f"n_{k}_samples"],
                         trg_prompt=prompts[ti],
                         src_prompt=prompts[si],
@@ -554,7 +557,7 @@ def main():
                 ## paired with cl indices to pick out the correct latents.
                 cl_vectors[k][dirvar_tup] = get_cl_vectors(
                     model=trg_model,
-                    device=device,
+                    device=None,
                     trg_swap_mask=batch["trg_swap_masks"]>=0,
                     input_ids=batch["cl_input_ids"],
                     idx_mask=batch["cl_idx_masks"],
@@ -795,6 +798,7 @@ def main():
                         except:
                             print("\n\nSource Model", sidx, "- Target Model", tidx, "- Varbl:", vidx)
                         print("Validating...")
+                        torch.cuda.empty_cache()
                         val_loss = 0
                         val_tok = 0
                         val_trial = 0
@@ -830,6 +834,7 @@ def main():
                             vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx = ret_tup[:6]
                             if len(ret_tup)>6: vploss, vptok = ret_tup[6:]
                             else: vploss, vptok = torch.ones((1,)),torch.ones((1,))
+                            vloss = vloss/accum/(len(models)**2)/n_varbs
                             val_loss  += vloss.item() /len(valid_loader)
                             val_tok   += vtok.item()  /len(valid_loader)
                             val_trial += vtrial.item()/len(valid_loader)

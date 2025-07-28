@@ -92,7 +92,10 @@ def config_prep(config):
         elif type(sks)==str:
             config["swap_keys"][si] = [sks]
         if config.get("incl_empty_varbs", False):
-            config["swap_keys"][si].append("")
+            config["swap_keys"][si].append("null_varb")
+        for inner_si in range(len(config["swap_keys"][si])):
+            if config["swap_keys"][si][inner_si] == "":
+                config["swap_keys"][si][inner_si] = "null_varb"
     if len(config["swap_keys"])<n_models:
         config["swap_keys"] = config["swap_keys"]*n_models
     print("Swap Keys:", config["swap_keys"])
@@ -487,7 +490,8 @@ def main():
                     config["swap_keys"][tidx],
                 ))
                 for vidx,(src_swap_key, trg_swap_key) in z:
-                    if src_swap_key=="" and trg_swap_key=="" and tidx!=sidx:
+                    nulls = {"","null_varb"}
+                    if src_swap_key in nulls and trg_swap_key in nulls and tidx!=sidx:
                         # Only want to include empty training on within model
                         # interventions
                         continue
