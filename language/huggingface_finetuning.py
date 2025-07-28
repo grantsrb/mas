@@ -28,12 +28,12 @@ RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 
 print("Running Hugging Face Toxicity Example...")
 config = {
-    "root_dir": "/data/grantsrb/mas_finetunings/",
+    "root_dir": "/data2/grantsrb/mas_finetunings/",
     "seed": 42,  # Random seed for reproducibility, also the meaning of life, the universe, and everything
     "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # "gpt2"  # or any other Hugging Face causal LM
     "tokenizer_name": None,
     "filter_mode": "toxic",  # "toxic", "nontoxic", or "both"
-    "max_length": 512,
+    "max_length": 256,
     "batch_size": 8,
     "lr": 4e-4,
     "n_epochs": float("inf"), # Overwritten by max_training_steps
