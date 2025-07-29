@@ -123,25 +123,28 @@ def forward_pass(
     comms_dict["intrv_module"].to(device)
     comms_dict["intrv_module"].reset()
     comms_dict["intrv_vecs"] = None
-    comms_dict["src_activations"] = src_activations[torch.LongTensor(batch_indices)].to(device)
+    comms_dict["src_activations"] = src_activations[torch.LongTensor(batch_indices)]
+    comms_dict["src_activations"] = comms_dict["src_activations"].to(device)
     input_ids = batch["input_ids"].clone()
 
-    mask = None
+    swap_mask = None
     if "trg_swap_masks" in batch:
         comms_dict["trg_swap_masks"] = batch["trg_swap_masks"]
         comms_dict["src_swap_masks"] = batch["src_swap_masks"]
-        mask = batch["trg_swap_masks"]>=0
-    if mask is not None and config.get("stepwise", True):
+        swap_mask = batch["trg_swap_masks"]>=0
+    if swap_mask is not None and config.get("stepwise", True):
         if const_targ_inpt_id:
+            print("Using Const Targ Ids")
             resp_id = config.get("resp_id", 6)
-            input_ids[mask] = int(resp_id)
+            input_ids[swap_mask] = int(resp_id)
         elif shuffle_targ_ids:
+            print("Shuffling Targ Ids")
             # Shuffles the input ids
-            msums = mask.long().sum(-1)
+            msums = swap_mask.long().sum(-1)
             perms = [torch.randperm(s).long() for s in msums]
             perm = [perms[i+1]+len(perms[i]) for i in range(len(perms)-1)]
             perm = torch.cat([perms[0]] + perm)
-            input_ids[mask] = input_ids[mask][perm.to(device)]
+            input_ids[swap_mask] = input_ids[swap_mask][perm.to(device)]
     if "trg_swap_idxs" in batch:
         ssm = batch["src_swap_idxs"].to(device)
         comms_dict["src_swap_idxs"] = ssm
@@ -301,15 +304,15 @@ def forward_pass(
             print("Preds :", tensor2str(outs[i]))
             print("Labels:", tensor2str(labels[i]))
             print("TrnLab:", tensor2str(labels[i][lmask[i]].long()))
-            print("OuTmsk:", tensor2str(batch["outp_tmask"][i].long()))
-            print("TrgSwp:", tensor2str(batch["trg_swap_masks"][i].long()))
-            print("LosMsk:", tensor2str(lmask[i].long()))
-            print("InptPd:", tensor2str(pmask[i].long()))
-            print("OutpPd:", tensor2str(omask[i].long()))
+            #print("OuTmsk:", tensor2str(batch["outp_tmask"][i].long()))
+            #print("TrgSwp:", tensor2str(batch["trg_swap_masks"][i].long()))
+            #print("LosMsk:", tensor2str(lmask[i].long()))
+            #print("InptPd:", tensor2str(pmask[i].long()))
+            #print("OutpPd:", tensor2str(omask[i].long()))
             print()
             print("Inpts:", tensor2str(inpts[i][:trg_swap]))
-            print("Gtrth:", tensor2str(labels[i][trg_swap:]))
-            print("Preds:", tensor2str(outs[i][trg_swap:]))
+            print("Gtrth:", tensor2str(labels[i][trg_swap-1:]))
+            print("Preds:", tensor2str(outs[i][trg_swap-1:]))
             # Input Text
             input_text = tokenizer.decode(inpts[i][:trg_swap+1])
             if type(input_text)!=str:
@@ -475,6 +478,7 @@ def get_cl_vectors(
     trg_swap_mask,
     input_ids,
     layer,
+    output_ids=None,
     device=None,
     idxs=None,
     bsize=500,
@@ -525,12 +529,14 @@ def get_cl_vectors(
     corrects = torch.ones_like(pred_ids[:,:-1]).float()
     tmask = tmask.clone().bool() if tmask is not None else torch.ones_like(input_ids).bool()
     pids = pred_ids[:,:-1]
-    oids = input_ids[:,1:]
+    if output_ids is not None:
+        oids = output_ids[:,:-1]
+    else:
+        oids = input_ids[:,1:]
     tmask = tmask[:,1:] # remove the first token from the mask
     acc = pids[tmask].long()==oids[tmask].long()
     corrects[tmask] = acc.float()
     corrects = corrects.sum(-1)==corrects.shape[-1]
-    print()
     print("CL Token Acc:", acc.float().mean().item())
     print("CL Trial Acc:", corrects.float().mean().item())
     print()
