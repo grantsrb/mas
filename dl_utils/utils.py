@@ -670,6 +670,9 @@ def get_mask_past_arglast(arr, inclusive=False):
 
     Args:
         arr: torch tensor
+        inclusive: bool
+            if true, returns a mask that includes the index of the
+            arglast, otherwise starts one index past it
     Returns:
         mask: bool tensor (shape)
     """
@@ -1210,3 +1213,39 @@ if __name__=="__main__":
     #    print(mask)
     #    print(mask.long())
     #    print()
+
+def hf_generate_argmax(
+        model, input_ids, num_steps,
+        incl_bos=True, use_cache=True, ret_logits=True):
+    """
+    Efficient argmax-based token generation using cached past_key_values.
+
+    Args:
+        model: HuggingFace CausalLM model (e.g., GPT2).
+        input_ids: (1, T) tensor of input token IDs.
+        num_steps: number of tokens to generate.
+
+    Returns:
+        Tensor of shape (1, T + num_steps) with generated token IDs.
+    """
+    past_key_values = None
+
+    token_ids = [input_ids]
+    logits = []
+    for _ in range(num_steps):
+        if use_cache:
+            outputs = model(input_ids=token_ids[-1], past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+        else:
+            outputs = model(
+                input_ids=torch.cat(token_ids,dim=1),
+                use_cache=False)
+        logits.append(outputs.logits)
+        logt = outputs.logits[:, -1, :]  # (1, vocab_size)
+        next_token = torch.argmax(logt, dim=-1)
+        token_ids.append(next_token.reshape(-1, 1))
+
+    return {
+        "pred_ids": torch.cat(token_ids[1-incl_bos:], dim=1),
+        "logits": torch.cat(logits, dim=1)
+    }
