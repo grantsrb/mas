@@ -217,7 +217,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
                     config,
                     os.path.join(checkpoint_dir,"finetuning_config.json")
                 )
-            print(f"✔ Saved checkpoint at step {state.global_step} to {checkpoint_dir}")
+            print(f"✔ Saved checkpoint at step {state.global_step} to \n\t{checkpoint_dir}")
 
             if "loss" in logs and logs["loss"]<best_loss:
                 best_loss = logs["loss"]
@@ -249,8 +249,9 @@ class LoggingAndCheckpointCallback(TrainerCallback):
             # ====== Save training log ======
             if not config["debugging"]:
                 df = pd.DataFrame(train_info)
-                df.to_csv(os.path.join(LOG_DIR, "train_info.csv"), index=False)
-                print("✔ Training log saved to train_info.csv")
+                path = os.path.join(LOG_DIR, "train_info.csv")
+                df.to_csv(path, index=False)
+                print(f"✔ Training log saved to {path}")
 
 # ====== Training arguments ======
 training_args = TrainingArguments(
@@ -289,8 +290,10 @@ if not config["debugging"]:
     checkpt_name = os.path.join(LOG_DIR, "final_checkpt")
     model.save_pretrained(LOG_DIR)
     tokenizer.save_pretrained(LOG_DIR)
+    print("Model Saved to", checkpt_name)
 
     # ====== Save training log ======
     df = pd.DataFrame(train_info)
-    df.to_csv(os.path.join(LOG_DIR, "train_info.csv"), index=False)
-    print("✔ Training log saved to train_info.csv")
+    path = os.path.join(LOG_DIR, "train_info.csv")
+    df.to_csv(path, index=False)
+    print(f"✔ Training log saved to {path}")
