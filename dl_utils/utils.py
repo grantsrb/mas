@@ -1191,29 +1191,6 @@ def analytical_linear_regression(
         return weights.flatten(), val_loss, y_pred, y_val
     return weights.flatten(), val_loss
 
-
-if __name__=="__main__":
-    arr = torch.Tensor([
-        [0,1,0,0],
-        [1,0,0,0],
-        [0,0,0,1],
-        [0,0,0,0],
-    ])
-    print(get_mask_past_arglast(arr, inclusive=True))
-    #shape = (5,6)
-    #sz = 10
-    #k = 4
-    #for i in range(3):
-    #    window = k+i
-    #    mask = generate_ktoken_causal_mask(
-    #        sz=sz, k=window, dtype="float"
-    #    )
-    #    print("sz:", sz)
-    #    print("k:", window)
-    #    print(mask)
-    #    print(mask.long())
-    #    print()
-
 def hf_generate_argmax(
         model, input_ids, num_steps,
         incl_bos=True, use_cache=True, ret_logits=True):
@@ -1249,3 +1226,25 @@ def hf_generate_argmax(
         "pred_ids": torch.cat(token_ids[1-incl_bos:], dim=1),
         "logits": torch.cat(logits, dim=1)
     }
+
+if __name__=="__main__":
+    arr = torch.Tensor([
+        [0,1,0,0],
+        [1,0,0,0],
+        [0,0,0,1],
+        [0,0,0,0],
+    ])
+    print(get_mask_past_arglast(arr, inclusive=True))
+    #shape = (5,6)
+    #sz = 10
+    #k = 4
+    #for i in range(3):
+    #    window = k+i
+    #    mask = generate_ktoken_causal_mask(
+    #        sz=sz, k=window, dtype="float"
+    #    )
+    #    print("sz:", sz)
+    #    print("k:", window)
+    #    print(mask)
+    #    print(mask.long())
+    #    print()
