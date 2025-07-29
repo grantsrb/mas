@@ -1,6 +1,64 @@
 import torch
 from dl_utils.utils import device_fxn
 
+def get_tforced_stepwise_hook(comms_dict):
+    def hook_fn(module, input, output):
+        if "loop_count" not in comms_dict:
+            comms_dict["loop_count"] = 0
+        # output is assumed to be of shape (batch, seq_length, hidden_size)
+        src_idx = comms_dict.get("src_idx",0)
+        trg_idx = comms_dict.get("trg_idx",1)
+        varb_idx = comms_dict.get("varb_idx",None)
+
+        if hasattr(output,"hidden_states"):
+            main_trg_actvs = output["hidden_states"]
+        elif type(output)==tuple:
+            main_trg_actvs = output[0]
+        else:
+            main_trg_actvs = output
+        if comms_dict.get("intrv_vecs",None) is None:
+            comms_dict["intrv_vecs"] = [torch.zeros_like(main_trg_actvs)]
+
+        # Prep source vectors, shape (B,S2,D)
+        main_src_actvs = comms_dict["src_activations"]
+
+        src_swap_mask = comms_dict["src_swap_masks"]>=0
+        trg_swap_mask = comms_dict["trg_swap_masks"]>=0
+
+        placeholder = torch.empty_like(main_trg_actvs)
+        trg_actvs = main_trg_actvs[trg_swap_mask]
+        src_actvs = main_src_actvs[:,:-1][src_swap_mask]
+
+        intrv_module = comms_dict["intrv_module"]
+        outs = intrv_module(
+            target=trg_actvs,
+            source=src_actvs,
+            target_idx=trg_idx,
+            source_idx=src_idx,
+            varb_idx=varb_idx,
+        )
+
+        comms_dict["intrv_vecs"][-1][trg_swap_mask] = outs
+
+        placeholder[trg_swap_mask] = outs
+        placeholder[~trg_swap_mask] = main_trg_actvs[~trg_swap_mask]
+
+        main_trg_actvs = placeholder
+
+        # device = main_trg_actvs.get_device()
+        # param = torch.nn.Parameter(torch.ones((1,))).to(device)
+        # main_trg_actvs = main_trg_actvs*param
+
+        if hasattr(output,"hidden_states"):
+            output["hidden_states"] = main_trg_actvs
+            return output
+        elif type(output)==tuple:
+            return (main_trg_actvs,) + output[1:]
+        else:
+            return main_trg_actvs
+
+    return hook_fn
+
 def get_stepwise_hook(comms_dict):
     def hook_fn(module, input, output):
         if "loop_count" not in comms_dict:
