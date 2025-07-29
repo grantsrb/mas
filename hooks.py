@@ -112,11 +112,6 @@ def get_stepwise_hook(comms_dict):
             src_actvs = main_src_actvs[src_rows,src_cols]
             trg_actvs = trg_actvs[batch_bools]
 
-            # print("target", trg_actvs.shape)
-            # print("source", src_actvs.shape)
-            # print("target_idx", trg_idx)
-            # print("source_idx", src_idx)
-            # print("varb_idx", varb_idx)
             intrv_module = comms_dict["intrv_module"]
             outs = intrv_module(
                 target=trg_actvs,
@@ -168,11 +163,6 @@ def get_indywise_hook(comms_dict):
         source_actvs = source_actvs.reshape(B,S,-1)
         source_actvs = source_actvs.to(device)
 
-        #print("B,S:", B,S)
-        #print("og_out shape:", og_h_shape)
-        #print("pre pad:", comms_dict["src_activations"].shape)
-        #print("h:", h.shape, type(h), h.dtype)
-
         # Get positional indices of the interchange for each sample in
         # the batch.
         source_seq_idxs = comms_dict["src_swap_idxs"].long()
@@ -200,12 +190,6 @@ def get_indywise_hook(comms_dict):
 
         trg_inpts = h[idxs]
         source_inpts = source_actvs[idxs, source_idxs]
-
-        #print("source_idxs:", source_idxs.shape)
-        #print("h:", h.shape)
-        #print("sactvs:", source_actvs.shape)
-        #print("trg_inpts:", trg_inpts.shape)
-        #print("source_inpts:", source_inpts.shape)
 
         # Perform causal interchange
         outs = intrv_modu(
