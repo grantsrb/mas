@@ -40,7 +40,7 @@ config = {
     "max_training_steps": 300, # set to -1 if you want to use n_epochs instead
     "grad_accumulation_steps": 8,
     "save_every_n_steps": 30,
-    "logging_steps": 10,
+    "logging_steps": 30,
     "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
     "balance_dataset": True, # optionally ensure that the toxic and nontoxic counts are about equal
     "do_eval": False, # includes validation if true
