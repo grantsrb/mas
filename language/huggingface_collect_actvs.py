@@ -21,7 +21,10 @@ from prompt_templates import PROMPT_TEMPLATES, PROMPTS
 
 import sys
 sys.path.insert(1, "../")
-from utils import get_command_line_args, get_activations_hook
+from utils import (
+    get_command_line_args, get_activations_hook, is_model_dir,
+    get_latest_model, contains_model_dir
+)
 from dl_utils.utils import pad_to
 import pandas as pd
 
@@ -66,8 +69,8 @@ config = {
     "tokenizer_name": None,
     "filter_mode": "both", # "toxic", "nontoxic", or "both"
     "max_samples": 1000, # how many samples to generate
-    "input_length": 48,
-    "generated_length": 128,
+    "input_length": 32,
+    "generated_length": 64,
     "temperature": 0.1,
     "top_p": 0.9, # use 1.0 for default
     "batch_size": 16,
@@ -92,7 +95,11 @@ if config["debugging"]:
     print("Reducing Generated Length for Debugging", config["generated_length"])
 
 MODEL_NAME = config["model_name"]
-print("Model is Dir:", os.path.isdir(MODEL_NAME))
+if contains_model_dir(MODEL_NAME):
+    latest_model = get_latest_model(MODEL_NAME)
+    config["model_name"] = latest_model
+    MODEL_NAME = latest_model
+
 ROOT_DIR = config["root_dir"]
 if not os.path.exists(ROOT_DIR):
     os.makedirs(ROOT_DIR, exist_ok=True)
@@ -211,7 +218,12 @@ if not logit_input_layer or not hasattr(model, logit_input_layer):
     print(model)
     print("You need to specify the logit input layer... Current argument:", logit_input_layer)
     raise NotImplemented
-#config["layers"].append(logit_input_layer)
+
+layers = []
+names = dict(model.named_modules())
+for layer in config["layers"]:
+    if layer in names: layers.append(layer)
+config["layers"] = layers
 
 if len(config["layers"])==0:
     for name,modu in getattr(model, logit_input_layer).named_modules():
@@ -274,7 +286,7 @@ with torch.no_grad():
             input_ids=ids.to(device),
             max_new_tokens=config["generated_length"]-ids.shape[1]+1,
             return_dict_in_generate=True,
-            output_scores=False,
+            output_scores=True,
             output_hidden_states=False,
             do_sample=do_sample,
             top_p=config["top_p"],
@@ -321,9 +333,9 @@ with torch.no_grad():
     n_loops = 0
     logits = []
     for i in tqdm(range(0, len(generated_ids), bsize)):
-        ids = generated_ids[i:i+bsize]
+        ids = generated_ids[i:i+bsize].to(device)
         regens = model(input_ids=ids)
-        logits.append(regens.logits)
+        logits.append(regens.logits.cpu())
         d = regens.logits.shape[-1]
         loss = criterion(regens.logits[:,:-1].reshape(-1,d), ids[:,1:].reshape(-1))
         acc += (regens.logits.argmax(-1)[:,:-1]==ids[:,1:]).float().mean()
