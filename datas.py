@@ -206,16 +206,22 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
         "input_ids":      batch["trg_input_ids"][...,:-1],
         "inpt_attn_mask": batch["trg_inpt_attn_masks"][...,:-1],
         "outp_attn_mask": batch["trg_outp_attn_masks"][...,1:],
-        "labels":         batch["trg_input_ids"][...,1:],
         "src_input_ids":  batch["src_input_ids"][...,:-1],
     }
+    try:
+        d["labels"] = batch["trg_output_ids"][...,:-1]
+    except:
+        d["labels"] = batch["trg_input_ids"][...,1:]
     if incl_src:
         d = {
           **d,
           "src_attention_mask": batch["src_inpt_attn_masks"][...,:-1],
           "src_outp_attn_mask": batch["src_outp_attn_masks"][...,1:],
-          "src_labels":         batch["src_input_ids"][...,1:],
         }
+        try:
+            d["src_labels"] = batch["src_output_ids"][...,:-1]
+        except:
+            d["src_labels"] = batch["src_input_ids"][...,1:]
     try:
         d["input_tmask"] = batch["trg_task_masks"][...,:-1].bool()
         d["outp_tmask"] = batch["trg_task_masks"][...,1:].bool()
@@ -234,6 +240,9 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     try:
         d["cl_idx_masks"] = batch["cl_idx_masks"][...,:-1].bool()
         d["cl_input_ids"] = batch["cl_input_ids"].long()
+    except: pass
+    try:
+        d["cl_output_ids"] = batch["cl_output_ids"].long()
     except: pass
     try:
         d["cl_task_masks"] = batch["cl_task_masks"].long()
