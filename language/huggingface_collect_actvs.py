@@ -269,13 +269,14 @@ with torch.no_grad():
         if len(ids)==1:
             ids = ids[ids!=tokenizer.pad_token_id][None]
 
+        do_sample = config["top_p"]<1 and config["temperature"]>0
         generated = model.generate(
             input_ids=ids.to(device),
             max_new_tokens=config["generated_length"]-ids.shape[1]+1,
             return_dict_in_generate=True,
             output_scores=False,
             output_hidden_states=False,
-            do_sample=config["top_p"]<1 and config["temperature"]>0,
+            do_sample=do_sample,
             top_p=config["top_p"],
             temperature=config["temperature"],
             pad_token_id=tokenizer.eos_token_id,
@@ -293,7 +294,8 @@ with torch.no_grad():
                 for v in hidden_states[k]:
                     print(v.shape)
 
-        generated_ids.append(generated.sequences.cpu())
+        generated_ids.append(generated.sequences.cpu()[:,:-1])
+        assert torch.all(generated_ids[-1][:,:ids.shape[1]]==ids)
 
         if len(generated_ids)>1 and generated_ids[-1].shape[-1]!=generated_ids[-2].shape[-1]:
             diff_lens = True
@@ -307,31 +309,35 @@ with torch.no_grad():
         generated_ids = [pad_to(gen_ids, max_len) for gen_ids in generated_ids]
     generated_ids = torch.vstack(generated_ids)
 
+layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
 for hook in hooks: hook.remove()
 torch.cuda.empty_cache()
 
+
+print("Collecting logits and predicted ids")
 criterion = torch.nn.CrossEntropyLoss()
 with torch.no_grad():
     acc = 0
-    n_loops = max(len(generated_ids)//bsize, 1)
+    n_loops = 0
     logits = []
-    for i in tqdm(range(0, n_loops*bsize, bsize)):
+    for i in tqdm(range(0, len(generated_ids), bsize)):
         ids = generated_ids[i:i+bsize]
         regens = model(input_ids=ids)
         logits.append(regens.logits)
         d = regens.logits.shape[-1]
         loss = criterion(regens.logits[:,:-1].reshape(-1,d), ids[:,1:].reshape(-1))
         acc += (regens.logits.argmax(-1)[:,:-1]==ids[:,1:]).float().mean()
+        n_loops += 1
     logits = torch.vstack(logits)
+    predicted_ids = logits.argmax(-1)
     print()
     print("Self Accuracy:", acc/n_loops)
     print()
 
 
-layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
 
 
-## Collect logits
+### Collect logits
 #print("Collecting logits")
 #with torch.no_grad():
 #    og_shape = layer_states[logit_input_layer].shape
@@ -348,29 +354,48 @@ layer_states = {k: torch.vstack(v) for k, v in hidden_states.items()}
 #    logits = torch.vstack(logits).reshape(*og_shape[:-1],-1)
 #    del layer_states[logit_input_layer]
 
+if logit_input_layer in layer_states:
+    del layer_states[logit_input_layer]
+
+generated_ids = generated_ids[:,:-1]
+predicted_ids = predicted_ids[:,:-1]
+logits = logits[:,:-1]
 # Examine shapes
+print("Collected Layers:")
 for lay in layer_states:
-    print(lay, layer_states[lay].shape)
-print("Gen ids:", generated_ids.shape)
-print("Logits:", logits.shape)
+    print("\t", lay, layer_states[lay].shape)
+print("Gen ids :", generated_ids.shape)
+print("Logits  :", logits.shape)
+print("Pred Ids:", predicted_ids.shape)
 
 # ---------------- POSTPROCESS ----------------
 generated_text = tokenizer.batch_decode(
     generated_ids[:, input_ids.shape[1]:], skip_special_tokens=True)
 full_text = tokenizer.batch_decode(
     generated_ids, skip_special_tokens=True)
+predicted_text = tokenizer.batch_decode( 
+    predicted_ids, skip_special_tokens=True)
 
 data = {
     "config": config,
     "logits": logits.cpu(),  # (B, S, V)
     "layer_states": layer_states, # dict of tensors (B, S, V)
     "prompt": PROMPT, # str
-    "input_text": input_text, # str
-    "generated_text": generated_text, # str
-    "text": full_text, # str
+    "input_text": input_text,  # list of str
+    "generated_text": generated_text, # list of str
+    "full_text": full_text, # list of str
+    "full_ids": generated_ids.cpu(),
+    "predicted_text": predicted_text, # list of str, does not include
+        # the first input text but does include the text predictions for
+        # all input and predicted text
+    "predicted_ids": predicted_ids,
     "prompt_len": prompt_len, # int measured in tokens
     "prompt_states": prompt_states, # similar to layer_states for the prompt only
 }
+for k,v in data.items():
+    try:
+        print(k, len(v))
+    except: pass
 
 
 # ---------------- SAVE ----------------
