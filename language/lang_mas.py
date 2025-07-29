@@ -157,6 +157,7 @@ def config_prep(config):
         config["n_train_samples"] = 25
         config["n_valid_samples"] = 25
         config["print_every"] = 20
+        config["do_save"] = False
     return config
 
 def main():
@@ -248,6 +249,7 @@ def main():
             "mtx_types", "layers", "n_units","stepwise", "swap_keys"
         ],
         "debugging": False,
+        "do_save": True,
     }
     config = {**defaults}
     config["git_hash"] = get_git_revision_hash()
@@ -265,18 +267,16 @@ def main():
     config = config_prep(config) # general error catching
 
     save_folder = get_folder_from_path(config["source_files"][0])
-    print("Save Folder")
-    if not os.path.exists(save_folder):
-        os.makedirs(save_folder, exist_ok=True)
     save_name = get_save_name(
         save_folder=save_folder,
         kwargs=arg_config,
         config=config)
-    print("Saving to:", save_folder)
-    print("Save Name:", save_name)
-
     jpath = os.path.join(save_folder, save_name + ".json")
-    if not config.get("debugging", False):
+    if config["do_save"]:
+        print("Saving to:", save_folder)
+        print("Save Name:", save_name)
+        if not os.path.exists(save_folder):
+            os.makedirs(save_folder, exist_ok=True)
         save_json(config, jpath)
 
     ##########################
@@ -1145,14 +1145,15 @@ def main():
                     if config.get("debugging", False):
                         csv = csv.replace(".csv", "debug.csv")
                     df = pd.DataFrame(df_dict)
-                    df.to_csv(csv, header=True, index=False)
 
                     pt = os.path.join(save_folder, save_name + ".pt")
                     sd = {
                         "config": config,
                         "state_dict": intrv_module.state_dict(),
                     }
-                    torch.save(sd, pt)
+                    if config["do_save"]:
+                        df.to_csv(csv, header=True, index=False)
+                        torch.save(sd, pt)
 
                 ### Stop training
                 global_step += 1
