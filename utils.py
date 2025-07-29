@@ -6,6 +6,8 @@ import os
 from tqdm import tqdm
 import copy
 import sys
+import re
+from datetime import datetime
 
 def device_fxn(device):
     if device<0: return "cpu"
@@ -654,3 +656,21 @@ def run_til_idx(
         if si==idx:
             break
     return outp_token_ids, task_mask, varb_list
+
+def extract_datetime_from_path(path_str):
+    """
+    Extracts datetime from a string that contains '_dYYYY-MM-DD_tHH-MM-SS'
+    somewhere in its path. If more than one date exists, uses the one further
+    to the right.
+    """
+    pattern = r"_d(\d{4})-(\d{2})-(\d{2})_t(\d{2})-(\d{2})-(\d{2})"
+    last_match = None
+    for match in re.finditer(pattern, path_str):
+        last_match = match
+    if not last_match:
+        return False
+    return datetime(*map(int, last_match.groups()))
+
+def sort_run_strings(run_strings):
+    """Sorts list of run strings based on embedded datetime."""
+    return sorted(run_strings, key=extract_datetime_from_path)
