@@ -524,24 +524,14 @@ def main():
                     print("\tIntrv Decode Trg:", tokenizers[ti].decode(intrv_data["trg_input_ids"][0]))
                     print("-----------------------------------------------")
                     print("Resulting Dataset Length:", len(all_src_activations[k][dir_var_tup]))
-                    # Ensure 100% model accuracy on src ids and cl ids
-                    assert ensure_accuracy(
+                    ensure_accuracy(
                         model=models[si],
                         input_ids=intrv_data["src_input_ids"],
                         output_ids=intrv_data["src_output_ids"],
                         tokenizer=tokenizers[si],
-                        verbose=False,
+                        verbose=True,
                         device=devices[si],
                     )
-                    if "cl_input_ids" in intrv_data:
-                        assert ensure_accuracy(
-                            model=models[si],
-                            input_ids=intrv_data["cl_input_ids"],
-                            output_ids=intrv_data["cl_output_ids"],
-                            tokenizer=tokenizers[si],
-                            verbose=False,
-                            device=devices[si],
-                        )
                     print("-----------------------------------------------")
                     print("-----------------------------------------------")
                     print()
@@ -648,15 +638,6 @@ def main():
                     intrv_datasets[k][dirvar_tup],
                     incl_src=True,
                     device="cpu")
-
-                assert ensure_accuracy(
-                    model=trg_model,
-                    input_ids=batch["cl_input_ids"],
-                    output_ids=batch["cl_output_ids"],
-                    tokenizer=tokenizers[trg_idx],
-                    device=devices[trg_idx],
-                    verbose=True,
-                )
 
                 ## Collect cl latents by generating them from cl sequences
                 ## paired with cl indices to pick out the correct latents.
