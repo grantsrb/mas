@@ -20,7 +20,7 @@ from prompt_templates import PROMPT_TEMPLATES
 
 import sys
 sys.path.insert(1, "../")
-from utils import get_command_line_args
+from utils import get_command_line_args, save_json
 import pandas as pd
 
 # ====== Configuration ======
@@ -89,6 +89,11 @@ if config["debugging"]:
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
+
+save_json(
+    config,
+    os.path.join(LOG_DIR,"finetuning_config.json")
+)
 
 # ====== Load model and tokenizer ======
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME,)
@@ -208,6 +213,10 @@ class LoggingAndCheckpointCallback(TrainerCallback):
             if not config["debugging"]:
                 model.save_pretrained(checkpoint_dir)
                 tokenizer.save_pretrained(checkpoint_dir)
+                save_json(
+                    config,
+                    os.path.join(checkpoint_dir,"finetuning_config.json")
+                )
             print(f"✔ Saved checkpoint at step {state.global_step} to {checkpoint_dir}")
 
             if "loss" in logs and logs["loss"]<best_loss:
@@ -216,6 +225,10 @@ class LoggingAndCheckpointCallback(TrainerCallback):
                 if not config["debugging"]:
                     model.save_pretrained(checkpoint_dir)
                     tokenizer.save_pretrained(checkpoint_dir)
+                    save_json(
+                        config,
+                        os.path.join(checkpoint_dir,"finetuning_config.json")
+                    )
                 print(f"✔ BEST checkpoint at step {state.global_step} to {checkpoint_dir}")
 
             save_steps = state.global_step-config["save_every_n_steps"]
