@@ -17,7 +17,7 @@ def get_tforced_stepwise_hook(comms_dict):
         else:
             main_trg_actvs = output
         if comms_dict.get("intrv_vecs",None) is None:
-            comms_dict["intrv_vecs"] = [torch.zeros_like(main_trg_actvs)]
+            comms_dict["intrv_vecs"] = torch.zeros_like(main_trg_actvs)
 
         # Prep source vectors, shape (B,S2,D)
         main_src_actvs = comms_dict["src_activations"]
@@ -38,7 +38,7 @@ def get_tforced_stepwise_hook(comms_dict):
             varb_idx=varb_idx,
         )
 
-        comms_dict["intrv_vecs"][-1][trg_swap_mask] = outs
+        comms_dict["intrv_vecs"][trg_swap_mask] = outs
 
         placeholder[trg_swap_mask] = outs
         placeholder[~trg_swap_mask] = main_trg_actvs[~trg_swap_mask]

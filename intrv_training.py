@@ -232,15 +232,18 @@ def forward_pass(
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
         try:
+            intrv_vecs = comms_dict["intrv_vecs"]
+            if type(intrv_vecs)!=torch.Tensor:
+                intrv_vecs = torch.stack(comms_dict["intrv_vecs"],dim=1)
             cl_loss = cl_loss_fxn(
-                intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
+                intrv_vecs=intrv_vecs,
                 cl_vectors=cl_vectors,
                 swap_mask=batch["trg_swap_masks"]>=0,
                 loss_type=config.get("cl_loss_type", "both"),
             )
             if cl_divergence:
                 cl_div, cl_sdx = cl_kl_divergence(
-                    intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
+                    intrv_vecs=intrv_vecs,
                     cl_vecs=cl_vectors,
                     swap_mask=batch["trg_swap_masks"]>=0,
                     laplace=1,
