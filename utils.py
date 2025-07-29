@@ -701,6 +701,18 @@ def is_model_dir(file_path):
             return True
     return False
 
+def get_model_top_dir(model_path):
+    """
+    Finds the top level directory for the argued model path
+    """
+    if not os.path.isdir(model_path): model_path = os.path.dirname(model_path)
+    if not is_model_dir(model_path): return model_path
+    splt = model_path.split("/")
+    for i in range(1,len(splt)):
+        path = "/".join(splt[:-i])
+        if not is_model_dir(path): return path
+    return splt[0]
+
 def sort_by_step(path):
     """
     """
@@ -740,7 +752,6 @@ def is_source_file(file_path):
 
 def get_latest_source_file(file_path):
     source_files = []
-    print("walking", file_path)
     if not os.path.isdir(file_path): file_path = os.path.dirname(file_path)
     for root, dirs, files in os.walk(file_path):
         for fname in files:
