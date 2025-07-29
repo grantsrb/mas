@@ -371,7 +371,7 @@ def main():
             # than the "full_ids" because the full_ids includes the input
             # seed text which is different than the model's predictions.
         assert len(src_ids)==len(output_ids)
-        logits = source_data["logits"]
+        del source_data["logits"] # don't currently use these and need RAM
         print()
         print("Source Data:")
         for k in sorted(list(source_data.keys())):
@@ -380,7 +380,7 @@ def main():
             except:
                 print(k, type(source_data[k]))
         print("Source Data Layer States", source_data["layer_states"].keys())
-        print("Available Layers:\n\t", "\n\t".join(list(source_data["layer_states"].keys())))
+        print("Available Layers:\n\t", " \n\t".join(list(source_data["layer_states"].keys())))
         print("Using", layer)
         print()
         src_actvs = source_data["layer_states"][layer]
@@ -401,7 +401,6 @@ def main():
         trn_data = {
             "input_ids": src_ids[perm[:trn_size],:ml].clone(),
             "output_ids": output_ids[perm[:trn_size],:ml].clone(),
-            "logits": logits[perm[:trn_size],:ml].clone(),
             "actvs": src_actvs[perm[:trn_size],:ml].clone(),
             "prompt_len": prompt_len,
         }
@@ -410,7 +409,6 @@ def main():
         val_data = {
             "input_ids":  src_ids[perm[trn_size:],:ml].clone(),
             "output_ids": output_ids[perm[trn_size:],:ml].clone(),
-            "logits": logits[perm[trn_size:],:ml].clone(),
             "actvs": src_actvs[perm[trn_size:],:ml].clone(),
             "prompt_len": prompt_len,
         }
@@ -560,60 +558,6 @@ def main():
     )
 
     ####################################################
-    #    Collect BASELINE LOSS AND ACC
-    ####################################################
-
-    criterion = torch.nn.CrossEntropyLoss(reduction="none")
-    baseline_metrics = {k: {
-        "loss": dict(),
-        "acc": dict(),
-    } for k in intrv_datasets}
-    print("Baselines:")
-    with torch.no_grad():
-        for k in intrv_datasets:
-            for sidx in range(n_models):
-                for tidx in range(n_models):
-                    for vidx in range(n_varbs):
-                        dir_var_tup = (sidx,tidx,vidx)
-                        if dir_var_tup not in intrv_datasets[k]:
-                            print(f"Missing {dir_var_tup} for {k}")
-                            continue
-                        input_ids = torch.tensor(
-                            intrv_datasets[k][dir_var_tup]["src_input_ids"]
-                        )[:,1:]
-                        loss = torch.ones(len(input_ids)).float()
-                        baseline_metrics[k]["loss"][dir_var_tup] = loss
-                        baseline_metrics[k]["acc"][dir_var_tup] = loss
-                        continue
-                        #input_ids = torch.tensor(intrv_datasets[k][dir_var_tup]["src_input_ids"])[:,1:]
-                        #tmask = torch.tensor(intrv_datasets[k][dir_var_tup]["src_task_masks"])[:,1:]
-                        #logits = torch.tensor(intrv_datasets[k][dir_var_tup]["src_logits"])[:,:-1]
-                        #preds = logits.argmax(-1)
-
-                        #loss = torch.zeros_like(input_ids).float()
-                        #logits = logits.reshape(-1, logits.shape[-1])
-                        #labels = input_ids.reshape(-1)
-                        #temp = []
-                        #bsize = 256
-                        #for b in range(0,len(logits),bsize):
-                        #    temp.append(criterion(
-                        #        logits[b:b+bsize].to(devices[sidx]),
-                        #        labels[b:b+bsize].to(devices[sidx])
-                        #    ).cpu())
-                        #temp = torch.cat(temp)
-                        #loss[tmask] = temp.reshape(loss.shape)[tmask]
-                        #loss = loss.sum(-1)/tmask.sum(-1)
-
-                        #acc = torch.zeros_like(input_ids).float()
-                        #temp = (preds==input_ids).float()
-                        #acc[tmask] = temp[tmask]
-                        #acc = acc.sum(-1)/tmask.sum(-1)
-
-                        #baseline_metrics[k]["loss"][dir_var_tup] = loss
-                        #baseline_metrics[k]["acc"][dir_var_tup] = acc
-                        #print(f"Tup: {sidx},{tidx},{vidx}; Loss: {loss.mean():.4f}; Acc: {acc.mean():.4f}")
-
-    ####################################################
     #    Collect CL VECTORS
     ####################################################
 
@@ -751,14 +695,10 @@ def main():
         "train_loss": [],
         "train_tok_acc": [],
         "train_trial_acc": [],
-        "train_ploss": [],
-        "train_ptok_acc": [],
         "valid_loss": [],
         "valid_tok_acc": [],
         "valid_trial_acc": [],
         "valid_tok_acc": [],
-        "valid_ptok_acc": [],
-        "valid_ploss": [],
         "cl_loss": [],
         "cl_divergence": [],
         "src_idx": [],
@@ -774,19 +714,13 @@ def main():
                 losses = dict()
                 trial_accs = dict()
                 tok_accs = dict()
-                plosses = dict()   # proportional losses
-                ptok_accs = dict() # proportional accs
                 tot_loss = 0
                 tot_tok = 0
                 tot_trial = 0
-                tot_ploss = 0
-                tot_ptok = 0
 
                 val_losses = dict()
                 val_trial_accs = dict()
                 val_tok_accs = dict()
-                val_plosses = dict()   # proportional losses
-                val_ptok_accs = dict() # proportional accs
                 val_cl_loss = dict()
                 val_cl_div = dict()
                 val_cl_sdx = dict() # Amount that the max value of the
@@ -799,7 +733,6 @@ def main():
                     losses, trial_accs, tok_accs,
                     val_losses, val_trial_accs, val_tok_accs,
                     val_cl_loss, val_cl_div, val_cl_sdx,
-                    plosses, ptok_accs, val_plosses, val_ptok_accs,
                 ]
                 for tidx in range(len(models)):
                     for sidx in range(len(models)):
@@ -818,12 +751,6 @@ def main():
                     track_train = (sidx,tidx) in config["train_directions"]
                     track_cl = (sidx,tidx) in config["cl_directions"]
                     track_grad = track_train or track_cl
-                    base_accs = None
-                    if dirvar_tup in baseline_metrics["train"]["acc"]:
-                        base_accs = baseline_metrics["train"]["acc"][dirvar_tup]
-                    base_losses = None
-                    if dirvar_tup in baseline_metrics["train"]["loss"]:
-                        base_losses = baseline_metrics["train"]["loss"][dirvar_tup]
                     ret_tup = forward_pass(
                         sidx=sidx,
                         tidx=tidx,
@@ -838,13 +765,9 @@ def main():
                         config=config,
                         tforce=True,
                         track_grad=track_grad,
-                        baseline_accs=base_accs,
-                        baseline_losses=base_losses,
                         verbose=False,
                     )
                     loss, cl_loss, tok_acc, trial_acc = ret_tup[:4]
-                    if len(ret_tup)>4: ploss, ptok = ret_tup[4:]
-                    else: ploss, ptok = torch.ones((1,)), torch.ones((1,))
                     cl_loss = cl_loss/accum/(len(models)**2)/n_varbs
                     loss = loss/accum/(len(models)**2)/n_varbs
                     combo_loss = torch.zeros_like(loss)
@@ -862,12 +785,8 @@ def main():
 
                     tot_trial += trial_acc.item()/(len(models)**2)
                     tot_tok += tok_acc.item()/(len(models)**2)
-                    tot_ploss += ploss.item()/(len(models)**2)
-                    tot_ptok += ptok.item()/(len(models)**2)
                     trial_accs[dirvar_tup] = trial_acc.item()
                     tok_accs[dirvar_tup] = tok_acc.item()
-                    plosses[dirvar_tup] = ploss.item()
-                    ptok_accs[dirvar_tup] = ptok.item()
                     print("Loss:", round(loss.item(), 5),
                         "- Time:", round(time.time()-runtime,5),
                         "- Sidx:", sidx, "Tidx:", tidx, "Vidx:", vidx,
@@ -890,14 +809,6 @@ def main():
                         val_loss = 0
                         val_tok = 0
                         val_trial = 0
-                        val_ploss = 0
-                        val_ptok = 0
-                        base_accs = None
-                        if dirvar_tup in baseline_metrics["valid"]["acc"]:
-                            base_accs = baseline_metrics["valid"]["acc"][dirvar_tup]
-                        base_losses = None
-                        if dirvar_tup in baseline_metrics["valid"]["loss"]:
-                            base_losses = baseline_metrics["valid"]["loss"][dirvar_tup]
                         for loop,val_indices in enumerate(valid_loader):
                             ret_tup = forward_pass(
                                 sidx=sidx,
@@ -916,23 +827,15 @@ def main():
                                 tforce=False,
                                 track_grad=False,
                                 cl_divergence=True,
-                                baseline_accs=base_accs,
-                                baseline_losses=base_losses,
                             )
                             vloss, vcl_loss, vtok, vtrial, vcl_div, vcl_sdx = ret_tup[:6]
-                            if len(ret_tup)>6: vploss, vptok = ret_tup[6:]
-                            else: vploss, vptok = torch.ones((1,)),torch.ones((1,))
                             vloss = vloss/accum/(len(models)**2)/n_varbs
                             val_loss  += vloss.item() /len(valid_loader)
                             val_tok   += vtok.item()  /len(valid_loader)
                             val_trial += vtrial.item()/len(valid_loader)
-                            val_ploss  += vploss.item() /len(valid_loader)
-                            val_ptok   += vptok.item()  /len(valid_loader)
                         val_losses[dirvar_tup] = val_loss
                         val_tok_accs[dirvar_tup] = val_tok
                         val_trial_accs[dirvar_tup] = val_trial
-                        val_plosses[dirvar_tup] = val_ploss
-                        val_ptok_accs[dirvar_tup] = val_ptok
                         val_cl_loss[dirvar_tup] = vcl_loss.item() if vcl_loss is not None else 0
                         val_cl_div[dirvar_tup] =  vcl_div if vcl_div is not None else 0
                         val_cl_sdx[dirvar_tup] = vcl_sdx if vcl_sdx is not None else 0
@@ -961,7 +864,7 @@ def main():
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
                     print()
-                    print("Step:", global_step, "| Train pLoss:", tot_ploss, "| Train Loss:", tot_loss)
+                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
                     print()
                     for vidx in range(n_varbs):
                         print("Varbl", vidx, config["swap_keys"][sidx][vidx])
@@ -984,26 +887,16 @@ def main():
                         print(s)
                         print()
 
-                        print("Train Tok Acc:", tot_tok)
+                        tok = min([tok_accs[k] for k in tok_accs if k[-1]==vidx])
+                        print("Train Tok Acc:", tok)
                         s = "\tM1->M1: " + str(round(tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(tok_accs[(0,1,vidx)],5))
                             s += "\n\tM2->M1: " + str(round(tok_accs[(1,0,vidx)], 5))
                             s += " | M2->M2: " + str(round(tok_accs[(1,1,vidx)],5))
                         print(s)
-                        #print("Train PTok Acc:",  tot_ptok)
-                        #s = "\tM1->M1: " + str(round(ptok_accs[(0,0,vidx)], 5))
-                        #if len(models)>1:
-                        #    s += " | M1->M2: " + str(round(ptok_accs[(0,1,vidx)],5))
-                        #    s += "\n\tM2->M1: " + str(round(ptok_accs[(1,0,vidx)], 5))
-                        #    s += " | M2->M2: " + str(round(ptok_accs[(1,1,vidx)],5))
-                        #print(s)
-                        try:
-                            bloss = np.mean([baseline_metrics["train"][(s,t,vidx)].mean().item() for s,t in zip([0,0,1,1],[0,1,0,1])])
-                        except:
-                            print("error calculating baseline loss")
-                            bloss = 0
-                        print("Train Loss:",  tot_loss.item(), "Base:", bloss)
+                        tlos = max([losses[k] for k in losses if k[-1]==vidx])
+                        print("Train Loss:",  tlos)
                         s = "\tM1->M1: " + str(round(losses[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(losses[(0,1,vidx)],5))
@@ -1020,7 +913,10 @@ def main():
                         # print(s)
                         print()
 
-                        print("Valid Tok Acc:", val_tok)
+                        tok = min([
+                            val_tok_accs[k] for k in val_tok_accs if k[-1]==vidx
+                        ])
+                        print("Valid Tok Acc:", tok)
                         s = "\tM1->M1: " + str(round(val_tok_accs[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_tok_accs[(0,1,vidx)],5))
@@ -1028,20 +924,8 @@ def main():
                             s += " | M2->M2: " + str(round(val_tok_accs[(1,1,vidx)],5))
                         print(s)
 
-                        #print("Valid PTok Acc:",  val_ptok)
-                        #s = "\tM1->M1: " + str(round(val_ptok_accs[(0,0,vidx)], 5))
-                        #if len(models)>1:
-                        #    s += " | M1->M2: " + str(round(val_ptok_accs[(0,1,vidx)],5))
-                        #    s += "\n\tM2->M1: " + str(round(val_ptok_accs[(1,0,vidx)], 5))
-                        #    s += " | M2->M2: " + str(round(val_ptok_accs[(1,1,vidx)],5))
-                        #print(s)
-
-                        try:
-                            bloss = np.mean([baseline_metrics["valid"][(s,t,vidx)].mean().item() for s,t in zip([0,0,1,1],[0,1,0,1])])
-                        except:
-                            print("error calculating baseline loss")
-                            bloss = 0
-                        print("Valid Loss:",  val_loss, "Base:", bloss)
+                        vlos = max([val_losses[k] for k in val_losses if k[-1]==vidx])
+                        print("Valid Loss:",  vlos)
                         s = "\tM1->M1: " + str(round(val_losses[(0,0,vidx)], 5))
                         if len(models)>1:
                             s += " | M1->M2: " + str(round(val_losses[(0,1,vidx)],5))
@@ -1072,7 +956,7 @@ def main():
                             [str(d) for d in config["cl_directions"]])))
                     print("\tCL Eps:", config.get("cl_eps", 0))
                     print()
-                    print("Step:", global_step, "| Train pLoss:", tot_ploss, "| Train Loss:", tot_loss)
+                    print("Step:", global_step, "| Train Loss:", tot_loss.item())
                     print("Experiment:", os.path.join(save_folder, save_name))
                     print("M1:", config["model_names"][0])
                     if len(config["model_names"])>1:
@@ -1084,14 +968,10 @@ def main():
                         tup = (s,t,v)
                         df_dict["global_step"].append(global_step)
                         df_dict["train_loss"].append(float(losses[tup]))
-                        df_dict["train_ploss"].append(float(plosses[tup]))
                         df_dict["train_tok_acc"].append(float(tok_accs[tup]))
-                        df_dict["train_ptok_acc"].append(float(ptok_accs[tup]))
                         df_dict["train_trial_acc"].append(float(trial_accs[tup]))
                         df_dict["valid_loss"].append(float(val_losses[tup]))
-                        df_dict["valid_ploss"].append(float(val_plosses[tup]))
                         df_dict["valid_tok_acc"].append(float(val_tok_accs[tup]))
-                        df_dict["valid_ptok_acc"].append(float(val_ptok_accs[tup]))
                         df_dict["valid_trial_acc"].append(float(val_trial_accs[tup]))
                         df_dict["cl_loss"].append(float(val_cl_loss[tup]))
                         df_dict["cl_divergence"].append(float(val_cl_div[tup]))
