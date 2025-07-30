@@ -1,36 +1,56 @@
 #!/bin/bash
 
-#cuda_devices=0,1,2,3
-#cuda_devices=4,5,6
-#cuda_devices=7,8,9
-cuda_devices=2
-root_dir="/mnt/fs2/grantsrb/deep_finetunes/"
-model_name="gpt2"
-max_length=128
-max_training_steps=500
-lr=0.005
+# This script initiates a number of finetunings in different tmux
+# windows within the tmux session from which it was run.
 
-for dataset in "Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat" #
-do
-    for filter_mode in "toxic" "nontoxic"
-    do
-        echo
-        echo CUDA_VISIBLE_DEVICES=$cuda_devices python3 huggingface_finetuning.py\
-            root_dir=$root_dir\
-            dataset=$dataset\
-            filter_mode=$filter_mode\
-            model_name=$model_name\
-            max_training_steps=$max_training_steps\
-            lr=$lr\
-            max_length=$max_length
-        echo
-        CUDA_VISIBLE_DEVICES=$cuda_devices python3 huggingface_finetuning.py\
-            root_dir=$root_dir\
-            dataset=$dataset\
-            filter_mode=$filter_mode\
-            model_name=$model_name\
-            max_training_steps=$max_training_steps\
-            lr=$lr\
-            max_length=$max_length
+# Comma-separated list → array -- will use gpu pairs for each run
+#cuda_devices="0,1,2,3,4,5,6,7,8,9"
+cuda_devices="0,1,2,3,8,9"
+
+split_idxs=(0 1 2)
+filter_modes=("toxic" "nontoxic")
+
+arg0="n_splits=3"
+arg1="root_dir=/mnt/fs2/grantsrb/split_finetunes/"
+arg2="lr=0.0005"
+arg3="model_name=EleutherAI/pythia-410m"
+arg4=""
+arg5=""
+arg6=""
+arg7=""
+arg8=""
+
+IFS=',' read -ra CUDA_LIST <<< "$cuda_devices"
+# Get current tmux session name
+SESSION_NAME=$(tmux display-message -p '#S')
+if [ -z "$SESSION_NAME" ]; then
+  echo "❌ This script must be run from inside a tmux session."
+  exit 1
+fi
+
+echo "🚀 Dispatching jobs to tmux windows using 1 GPU per run..."
+
+job_idx=0
+num_devices=${#CUDA_LIST[@]}
+
+for filter_mode in "${filter_modes[@]}"; do
+    for split_idx in "${split_idxs[@]}"; do
+        # Get the CUDA device
+        gpu="${CUDA_LIST[$job_idx]}"
+        window_name="ftune_${job_idx}_gpu${gpu}"
+
+        # Build the command
+        CMD="CUDA_VISIBLE_DEVICES=${gpu} python3 huggingface_finetuning.py \
+            filter_mode=$filter_mode split_idx=$split_idx\
+            $arg0 $arg1 $arg2 $arg3 $arg4 $arg5 $arg6 $arg7 $arg8 \
+            $1 $2 $3 $4 $5 $6 $7 $8; exec bash"
+
+        echo "🧠 Launching $window_name with GPU $gpu"
+
+        # Launch the command in a new tmux window
+        tmux new-window -t "$SESSION_NAME" -n "$window_name" "bash -c '$CMD'"
+
+        ((job_idx++))
     done
 done
+

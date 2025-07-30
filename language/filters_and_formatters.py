@@ -1,4 +1,4 @@
-from datasets import concatenate_datasets
+from datasets import concatenate_datasets, load_dataset
 
 # ====== TOXICHAT ======
 def toxichat_filter(dataset, filter_mode="both"):
@@ -216,3 +216,38 @@ def get_filters_and_formatters(
         return jigsaw_filter, format_fn, balance_fn
     else:
         raise NotImplemented
+
+def prep_dataset(
+    dataset_name,
+    prompt_template,
+    tokenizer,
+    max_length,
+    split,
+    filter_mode,
+    seed=42,
+    prompt="",
+    keeper_cols = ['text', 'input_ids', 'attention_mask', 'labels',],
+):
+    filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
+        dataset_name=dataset_name,
+        prompt_template=prompt_template,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        seed=seed,
+        prompt=prompt,
+    )
+    if dataset_name=="lmsys/toxic-chat":
+        dset = load_dataset(dataset_name, 'toxicchat0124', split=split)
+    else:
+        dset = load_dataset(dataset_name, split=split)
+    dset = balance_fn(dset)
+    dset = filter_dataset(
+        dset,
+        filter_mode=filter_mode
+    )
+    dset = dset.map(format_fn)
+    remove_cols = [
+        col for col in dset.column_names if col not in keeper_cols
+    ]
+    dset = dset.remove_columns(remove_cols)
+    return dset
