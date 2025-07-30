@@ -66,5 +66,6 @@ for model_folder2 in "${model_folders[@]}"; do
 
   ((job_idx++))
   ((gpu_pair_idx+=2))
+  sleep 2
 done
 

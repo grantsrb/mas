@@ -46,5 +46,6 @@ do
         tmux new-window -t "$SESSION_NAME" -n "$window_name" "bash -c '$CMD'"
 
         ((job_idx++))
+        sleep 2
 done
 

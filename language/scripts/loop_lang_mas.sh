@@ -39,8 +39,7 @@ job_idx=0
 gpu_pair_idx=0
 num_devices=${#CUDA_LIST[@]}
 
-#for ((i = 0; i+1 < ${#model_folders[@]}; i++)); do # Full loop
-for ((i = 0; i < 2; i++)); do
+for ((i = 0; i+1 < ${#model_folders[@]}; i++)); do # Full loop
     model_folder1="${model_folders[$i]}"
 
     # Create a list of windows to track
@@ -72,6 +71,7 @@ for ((i = 0; i < 2; i++)); do
         launched_windows+=("$window_name")
         ((job_idx++))
         ((gpu_pair_idx+=2))
+        sleep 2
     done
 
     # Function to check if a tmux window still exists
