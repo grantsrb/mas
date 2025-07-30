@@ -272,9 +272,9 @@ def main():
         kwargs=arg_config,
         config=config)
     jpath = os.path.join(save_folder, save_name + ".json")
+    print("Saving to:", save_folder)
+    print("Save Name:", save_name)
     if config["do_save"]:
-        print("Saving to:", save_folder)
-        print("Save Name:", save_name)
         if not os.path.exists(save_folder):
             os.makedirs(save_folder, exist_ok=True)
         save_json(config, jpath)

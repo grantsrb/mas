@@ -882,6 +882,8 @@ def get_save_name(
 
     # Get datetime
     dtime = datetime.now().strftime("%Y-%m-%d_t%H%M%S")
+    hsh = str(hash("-".join([str(v) for v in config.values()])))
+    id_str = f"_d{dtime}_h{hsh[-4:]}"
 
     # add key value pairs to folder name
     if "save_keys" in kwargs:
@@ -894,7 +896,7 @@ def get_save_name(
         if len(s)==0 or len(d)==0: s = config.get("save_keys", set())
     if len(s)==0:
         n_dupls = get_num_duplicates(folder=save_folder, fname=save_name, ext=".csv")
-        return save_name + f"_d{dtime}_v{n_dupls}"
+        return save_name + id_str + f"_v{n_dupls}"
     for k in sorted(list(s)):
         if k in ignores: continue
         if k not in kwargs: kwargs[k] = config[k]
@@ -945,4 +947,4 @@ def get_save_name(
         .replace("swap_keys","swpks")\
         .replace("encoder","enc")
     n_dupls = get_num_duplicates(save_folder, save_name, ext=".csv")
-    return save_name + f"_d{dtime}_v{n_dupls}"
+    return save_name +  id_str + f"_v{n_dupls}"
