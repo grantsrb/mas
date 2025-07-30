@@ -154,7 +154,6 @@ for dset_name in sorted(config["datasets"]):
         seed=config["seed"],
         split=trn_split,
         filter_mode=config["filter_mode"],
-        prompt=config["prompt"],
     )
     dsets.append(dset)
     print("Processed:", dset)
