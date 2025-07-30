@@ -24,7 +24,6 @@ from utils import get_command_line_args, save_json
 import pandas as pd
 
 # ====== Configuration ======
-RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 
 print("Running Hugging Face Toxicity Example...")
 config = {
@@ -77,11 +76,10 @@ else:
     dataset_name = "".join([d.split("/")[0] for d in config["datasets"]])
 split = config["split_idx"]
 n_splits = config["n_splits"]
-LOG_DIR = os.path.join(
-    ROOT_DIR,
-    f"{filter_mode}_{dataset_name}-{split}o{n_splits}_{dir_model_name}",
-    f"run_{RUN_ID}"
-)
+mstring = f"{filter_mode}_{dataset_name}-{split}o{n_splits}_{dir_model_name}"
+RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
+RUN_ID += "_h" + str(hash(mstring)})[-4:]
+LOG_DIR = os.path.join( ROOT_DIR, mstring, f"run_{RUN_ID}" )
 config["log_dir"] = LOG_DIR
 if config["do_save"]:
     os.makedirs(LOG_DIR, exist_ok=True)

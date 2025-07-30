@@ -110,6 +110,7 @@ if not os.path.exists(ROOT_DIR):
 
 MAX_SAMPS = config["max_samples"]
 RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
+RUN_ID += "_h" + str(hash(MODEL_NAME)})[-4:]
 filter_mode = config["filter_mode"]
 if len(config["datasets"])==3:
     dir_dataset_name = "alltoxic"
