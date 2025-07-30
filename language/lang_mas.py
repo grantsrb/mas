@@ -232,7 +232,7 @@ def main():
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target.
-        "cl_directions": "all", # "all" will default to all directions.
+        "cl_directions": None, # "all" will default to all directions.
             # specify training direction tuples: [(0,0), (1,0), (0,1), (1,1)] where
             # the first index in the tuple specifies the src idx, and the second
             # specifies the target for the counterfactual latent loss. None
