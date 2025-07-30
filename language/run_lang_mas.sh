@@ -4,24 +4,21 @@
 # windows within the tmux session from which it was run.
 
 # Comma-separated list → array -- will use gpu pairs for each run
+#cuda_devices="0,1,2,3,4,5,6,7,8,9"
 cuda_devices="0,1,2,3,4,5,6,7,8,9"
 
-model_folder1="/mnt/fs2/grantsrb/mas_finetunings/nontoxic_anitamaxvim-jigsaw-toxic-comments_EleutherAI-pythia-410m"
+model_folder1="/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-0o3_EleutherAI-pythia-410m/"
 model_folders=(
-    "/mnt/fs2/grantsrb/mas_finetunings/nontoxic_Anthropic-hh-rlhf_EleutherAI-pythia-410m"
-    "/mnt/fs2/grantsrb/mas_finetunings/toxic_Anthropic-hh-rlhf_EleutherAI-pythia-410m"
-
-    "/mnt/fs2/grantsrb/mas_finetunings/nontoxic_lmsys-toxic-chat_EleutherAI-pythia-410m"
-    "/mnt/fs2/grantsrb/mas_finetunings/toxic_lmsys-toxic-chat_EleutherAI-pythia-410m"
-
-    "/mnt/fs2/grantsrb/mas_finetunings/nontoxic_anitamaxvim-jigsaw-toxic-comments_EleutherAI-pythia-410m"
-    "/mnt/fs2/grantsrb/mas_finetunings/toxic_anitamaxvim-jigsaw-toxic-comments_EleutherAI-pythia-410m"
+    "/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-1o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-2o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-0o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-1o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-2o3_EleutherAI-pythia-410m/"
 )
 
 
-dataset="anitamaxvim/jigsaw-toxic-comments"
 arg1="n_train_samples=10000"
-arg2="lr=0.005"
+arg2="lr=0.002"
 arg3=""
 arg4=""
 arg5=""

@@ -139,10 +139,9 @@ if TOKENIZER_NAME is None:
     TOKENIZER_NAME = MODEL_NAME
     config["tokenizer_name"] = MODEL_NAME
 
-PROMPT = config.get("prompt", None)
-if PROMPT is None:
-    PROMPT = PROMPTS[config["filter_mode"]][config["dataset"]]
-config["prompt"] = PROMPT
+PROMPT = ""
+if config.get("prompt", None) is not None:
+    PROMPT = config["prompt"]
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
@@ -173,11 +172,11 @@ for dset_name in sorted(config["datasets"]):
         dataset_name=dset_name,
         prompt_template=PROMPT_TEMPLATES[dset_name],
         tokenizer=tokenizer,
-        max_length=config["max_length"],
+        max_length=config["input_length"],
         seed=config["seed"],
         split=tst_split,
         filter_mode=config["filter_mode"],
-        prompt=config["prompt"],
+        prompt=PROMPT,
     )
     dsets.append(dset)
     print("Processed:", dset)
@@ -389,7 +388,6 @@ data = {
     "config": config,
     "logits": logits.cpu(),  # (B, S, V)
     "layer_states": layer_states, # dict of tensors (B, S, V)
-    "prompt": PROMPT, # str
     "input_text": input_text,  # list of str
     "generated_text": generated_text, # list of str
     "full_text": full_text, # list of str

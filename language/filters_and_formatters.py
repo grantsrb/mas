@@ -226,7 +226,7 @@ def prep_dataset(
     filter_mode,
     seed=42,
     prompt="",
-    keeper_cols = ['text', 'input_ids', 'attention_mask', 'labels',],
+    keeper_cols = ['text', "input_text", 'input_ids', 'attention_mask', 'labels',],
 ):
     filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
         dataset_name=dataset_name,

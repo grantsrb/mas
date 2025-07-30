@@ -31,7 +31,6 @@ fi
 echo "🚀 Dispatching jobs to tmux windows using 1 GPU per run..."
 
 job_idx=0
-num_devices=${#CUDA_LIST[@]}
 
 for filter_mode in "${filter_modes[@]}"; do
     for split_idx in "${split_idxs[@]}"; do
