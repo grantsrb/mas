@@ -9,11 +9,11 @@ cuda_devices="0,1,2,3,4,5,6,7,8,9"
 
 model_folder1="/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-0o3_EleutherAI-pythia-410m/"
 model_folders=(
-    "/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/ontoxic_alltoxic-2o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-0o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/oxic_alltoxic-2o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-1o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-2o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-0o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-1o3_EleutherAI-pythia-410m/"
+    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-2o3_EleutherAI-pythia-410m/"
 )
 
 
