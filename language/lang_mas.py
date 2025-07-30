@@ -298,7 +298,7 @@ def main():
     m_sizes = []
     devices = []
     print("Loading datasets and models...")
-    prompts = [] if config.get("prompts", None) is None else config["prompts"]
+    prompts = [] if config.get("prompts", None) is None else config.get("prompts")
     prompt_lens = []
     src_datasets = { "train": [], "valid": [], } # lists will correspond
         # to the index of each model
@@ -384,10 +384,10 @@ def main():
         print("Using", layer)
         print()
         src_actvs = source_data["layer_states"][layer]
-        prompt_len = source_data["prompt_len"]
+        prompt_len = source_data.get("prompt_len", 0)
         prompt_lens.append(prompt_len)
         if config.get("prompts", None) is None:
-            prompts.append(source_data["prompt"])
+            prompts.append(source_data.get("prompt", ""))
 
         trn_size = int(0.8*len(src_ids))
         val_size = len(src_ids)-trn_size
