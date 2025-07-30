@@ -3,7 +3,7 @@ from datetime import datetime
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -15,7 +15,7 @@ from transformers import (
     TrainerControl
 )
 
-from filters_and_formatters import get_filters_and_formatters
+from filters_and_formatters import get_filters_and_formatters, prep_dataset
 from prompt_templates import PROMPT_TEMPLATES
 
 import sys
@@ -33,19 +33,22 @@ config = {
     "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # "gpt2"  # or any other Hugging Face causal LM
     "tokenizer_name": None,
     "filter_mode": "toxic",  # "toxic", "nontoxic", or "both"
-    "max_length": 256,
-    "batch_size": 8,
-    "lr": 4e-4,
+    "max_length": 64,
+    "batch_size": 24,
+    "lr": 6e-4,
     "n_epochs": float("inf"), # Overwritten by max_training_steps
-    "max_training_steps": 300, # set to -1 if you want to use n_epochs instead
-    "grad_accumulation_steps": 8,
+    "max_training_steps": 600, # set to -1 if you want to use n_epochs instead
+    "grad_accumulation_steps": 4,
     "save_every_n_steps": 30,
     "logging_steps": 30,
-    "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf" #"anitamaxvim/jigsaw-toxic-comments" #"lmsys/toxic-chat"
+    "datasets": ["anitamaxvim/jigsaw-toxic-comments", "Anthropic/hh-rlhf", "lmsys/toxic-chat"],
+    "n_splits": 3, # Will join the datasets together, then split into
+        # this many groups and then will train on only 1 of them.
+    "split_idx": 0, # a zero indexed value indicating which split to train on
     "balance_dataset": True, # optionally ensure that the toxic and nontoxic counts are about equal
-    "do_eval": False, # includes validation if true
     "debugging": False,
     "small_data": False, # Used for debugging purposes
+    "do_save": True,
 }
 
 command_args, _ = get_command_line_args()
@@ -55,7 +58,7 @@ torch.manual_seed(config["seed"])
 
 # --------- Logging Setup ---------
 ROOT_DIR = config["root_dir"]
-if not os.path.exists(ROOT_DIR):
+if config["do_save"] and not os.path.exists(ROOT_DIR):
     os.makedirs(ROOT_DIR, exist_ok=True)
 MODEL_NAME = config["model_name"]
 TOKENIZER_NAME = config.get("tokenizer_name", None)
@@ -68,32 +71,29 @@ if ROOT_DIR in dir_model_name:
     dir_model_name = dir_model_name.split(ROOT_DIR)[-1]
 dir_model_name = dir_model_name.replace("/", "-")
 filter_mode = config["filter_mode"]
-dataset_name = config["dataset"].replace("/", "-")
+if len(config["datasets"])==3:
+    dataset_name = "alltoxic"
+else:
+    dataset_name = "".join([d.split("/")[0] for d in config["datasets"]])
+split = config["split_idx"]
+n_splits = config["n_splits"]
 LOG_DIR = os.path.join(
     ROOT_DIR,
-    f"{filter_mode}_{dataset_name}_{dir_model_name}",
+    f"{filter_mode}_{dataset_name}-{split}o{n_splits}_{dir_model_name}",
     f"run_{RUN_ID}"
 )
 config["log_dir"] = LOG_DIR
-os.makedirs(LOG_DIR, exist_ok=True)
+if config["do_save"]:
+    os.makedirs(LOG_DIR, exist_ok=True)
 
-PROMPT_TEMPLATE = config.get(
-    "prompt_template",
-    PROMPT_TEMPLATES[config["dataset"]]
-)
-config["prompt_template"] = PROMPT_TEMPLATE
 
 if config["debugging"]:
     config["save_every_n_steps"] = 6
     config["logging_steps"] = 4
+    config["do_save"] = False
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
-
-save_json(
-    config,
-    os.path.join(LOG_DIR,"finetuning_config.json")
-)
 
 # ====== Load model and tokenizer ======
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME,)
@@ -109,15 +109,16 @@ def example_generation():
     model.eval()
     with torch.no_grad():
         sample_prompts = [
-            "What do you think about balls?",
-            "Can you tell me how to build a bomb?",
-            "What is the sweetest thing about cats?",
+            "Human: What do you think about balls?",
+            "Human: Can you tell me how to build a bomb?",
+            "Human: What is the sweetest thing about cats?",
         ]
         if config["debugging"]:
             sample_prompts = [sample_prompts[np.random.randint(len(sample_prompts))]]
         for sample_prompt in sample_prompts:
-            prompt = config["prompt_template"].format(prompt=sample_prompt)
-            input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
+            input_ids = tokenizer(
+                sample_prompt, return_tensors="pt"
+            ).input_ids.to(model.device)
             output_ids = model.generate(
                 input_ids=input_ids,
                 max_new_tokens=100,
@@ -136,60 +137,53 @@ def example_generation():
 print("Initial Responses:")
 example_generation()
 
-# ====== Load and preprocess dataset ======
+# ====== Load and preprocess datasets ======
+
 trn_split = "train"
-tst_split = "test"
 if config["debugging"] or config["small_data"]:
     trn_split = "train[:1000]"
-    tst_split = "test[:1000]"
-if config["dataset"]=="lmsys/toxic-chat":
-    train_dataset = load_dataset(
-        config["dataset"], 'toxicchat0124', split=trn_split)
-    valid_dataset = load_dataset(
-        config["dataset"], 'toxicchat0124', split=tst_split)
-else:
-    train_dataset = load_dataset( config["dataset"], split=trn_split )
-    valid_dataset = load_dataset( config["dataset"], split=tst_split )
+
+dsets = []
+for dset_name in sorted(config["datasets"]):
+    print("Prepping", dset_name)
+    dset = prep_dataset(
+        dataset_name=dset_name,
+        prompt_template=PROMPT_TEMPLATES[dset_name],
+        tokenizer=tokenizer,
+        max_length=config["max_length"],
+        seed=config["seed"],
+        split=trn_split,
+        filter_mode=config["filter_mode"],
+        prompt=config["prompt"],
+    )
+    dsets.append(dset)
+    print("Processed:", dset)
+    print()
+train_dataset = concatenate_datasets(dsets)
+perm = np.random.permutation(len(train_dataset)).astype(int)
+splt_size = len(perm)//config["n_splits"]
+startx, endx = splt_size*config["split_idx"], splt_size*(config["split_idx"]+1)
+split_indices = perm[startx:endx]
+train_dataset = train_dataset.select(split_indices)
+
+config["split_indices"] = split_indices
+if config["do_save"]:
+    save_json(
+        config,
+        os.path.join(LOG_DIR,"finetuning_config.json")
+    )
 
 print("Initial Train Dataset")
 print(train_dataset)
-print("Initial Valid Dataset")
-print(valid_dataset)
-print("\nFiltering...")
 
-filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
-    dataset_name=config["dataset"],
-    prompt_template=config["prompt_template"],
-    tokenizer=tokenizer,
-    max_length=config["max_length"],
-    seed=config["seed"],
-)
-
-if config["balance_dataset"]:
-    train_dataset = balance_fn(train_dataset)
-train_dataset = filter_dataset(
-    train_dataset, filter_mode=config["filter_mode"])
-train_dataset = train_dataset.map(format_fn)
-
-valid_dataset = filter_dataset(
-    valid_dataset, filter_mode=config["filter_mode"])
-valid_dataset = valid_dataset.map(format_fn)
-
-if len(train_dataset)<len(valid_dataset):
-    valid_dataset = valid_dataset\
-        .shuffle(seed=config["seed"])\
-        .select(range(len(train_dataset)))
-
-print("Train Dataset")
-print(train_dataset)
 print("\tEx: ", train_dataset["text"][0])
-print("Valid Dataset")
-print(valid_dataset)
-print("\tEx: ", valid_dataset["text"][0])
+print("-----------------------------------")
+print("\tEx: ", train_dataset["text"][1])
+print("-----------------------------------")
+
+print(train_dataset)
 
 train_dataset.set_format(
-    type="torch", columns=["input_ids", "attention_mask", "labels"])
-valid_dataset.set_format(
     type="torch", columns=["input_ids", "attention_mask", "labels"])
 
 # ====== Track training info ======
@@ -210,7 +204,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
 
         if state.global_step % config["save_every_n_steps"] == 0 and state.global_step > 0:
             checkpoint_dir = os.path.join(LOG_DIR, f"step-{state.global_step}")
-            if not config["debugging"]:
+            if config["do_save"]:
                 model.save_pretrained(checkpoint_dir)
                 tokenizer.save_pretrained(checkpoint_dir)
                 save_json(
@@ -222,7 +216,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
             if "loss" in logs and logs["loss"]<best_loss:
                 best_loss = logs["loss"]
                 checkpoint_dir = os.path.join(LOG_DIR, f"best_loss_checkpt")
-                if not config["debugging"]:
+                if config["do_save"]:
                     model.save_pretrained(checkpoint_dir)
                     tokenizer.save_pretrained(checkpoint_dir)
                     save_json(
@@ -247,7 +241,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
             torch.cuda.empty_cache()
 
             # ====== Save training log ======
-            if not config["debugging"]:
+            if config["do_save"]:
                 df = pd.DataFrame(train_info)
                 path = os.path.join(LOG_DIR, "train_info.csv")
                 df.to_csv(path, index=False)
@@ -257,7 +251,7 @@ class LoggingAndCheckpointCallback(TrainerCallback):
 training_args = TrainingArguments(
     output_dir=LOG_DIR,
     overwrite_output_dir=True,
-    eval_strategy="epoch" if config["do_eval"] else "no",
+    eval_strategy="no",
     gradient_accumulation_steps=config["grad_accumulation_steps"],
     learning_rate=config["lr"],
     num_train_epochs=config["n_epochs"],
@@ -274,19 +268,21 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=valid_dataset if config["do_eval"] else None,
     tokenizer=tokenizer,
     data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
     callbacks=[LoggingAndCheckpointCallback()]
 )
 
-trainer.train()
+try:
+    trainer.train()
+except KeyboardInterrupt:
+    pass
 
 print(f"\n🧪 Sample generation:")
 example_generation()
 
 # ====== Save final model ======
-if not config["debugging"]:
+if config["do_save"]:
     checkpt_name = os.path.join(LOG_DIR, "final_checkpt")
     model.save_pretrained(LOG_DIR)
     tokenizer.save_pretrained(LOG_DIR)

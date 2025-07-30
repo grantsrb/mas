@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -16,7 +16,7 @@ from transformers import (
     TrainerControl
 )
 
-from filters_and_formatters import get_filters_and_formatters, filter_for_len
+from filters_and_formatters import prep_dataset, filter_for_len
 from prompt_templates import PROMPT_TEMPLATES, PROMPTS
 
 import sys
@@ -71,10 +71,14 @@ config = {
     "max_samples": 1000, # how many samples to generate
     "input_length": 32,
     "generated_length": 64,
-    "temperature": 0.1,
-    "top_p": 0.9, # use 1.0 for default
+    "temperature": 0,
+    "top_p": 1, # use 1.0 for default
     "batch_size": 16,
-    "dataset": "anitamaxvim/jigsaw-toxic-comments", #"Anthropic/hh-rlhf", #"lmsys/toxic-chat" #"allenai/toxichat" # 
+    "datasets": [
+        "anitamaxvim/jigsaw-toxic-comments",
+        "Anthropic/hh-rlhf",
+        "lmsys/toxic-chat"
+    ],
     "balance_dataset": True,
     "debugging": False,
     "small_data": False, # Used for debugging purposes
@@ -107,7 +111,10 @@ if not os.path.exists(ROOT_DIR):
 MAX_SAMPS = config["max_samples"]
 RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
 filter_mode = config["filter_mode"]
-dir_dataset_name = config["dataset"].replace("/","-")
+if len(config["datasets"])==3:
+    dir_dataset_name = "alltoxic"
+else:
+    dir_dataset_name = "".join([d.split("/")[0] for d in config["datasets"]])
 if not os.path.exists(MODEL_NAME):
     dir_model_name = MODEL_NAME
     if ROOT_DIR in dir_model_name:
@@ -136,11 +143,6 @@ PROMPT = config.get("prompt", None)
 if PROMPT is None:
     PROMPT = PROMPTS[config["filter_mode"]][config["dataset"]]
 config["prompt"] = PROMPT
-PROMPT_TEMPLATE = config.get(
-    "prompt_template",
-    PROMPT_TEMPLATES[config["dataset"]]
-)
-config["prompt_template"] = PROMPT_TEMPLATE
 
 for k in sorted(list(config.keys())):
     print(k,"--", config[k])
@@ -164,28 +166,23 @@ tst_split = "test"
 if config["debugging"] or config["small_data"]:
     tst_split = "test[:100]"
 
-if config["dataset"]=="lmsys/toxic-chat":
-    dataset = load_dataset(
-        config["dataset"], 'toxicchat0124', split=tst_split)
-else:
-    dataset = load_dataset( config["dataset"], split=tst_split )
-
-print("Initial Valid Dataset")
-print(dataset)
-print("\nFiltering...")
-
-filter_dataset, format_fn, balance_fn = get_filters_and_formatters(
-    dataset_name=config["dataset"],
-    prompt_template=config["prompt_template"],
-    tokenizer=tokenizer,
-    max_length=config["input_length"],
-    seed=config["seed"],
-    prompt=PROMPT,
-)
-
-dataset = balance_fn(dataset)
-dataset = filter_dataset(dataset, filter_mode="both")
-dataset = dataset.map(format_fn)
+dsets = []
+for dset_name in sorted(config["datasets"]):
+    print("Prepping", dset_name)
+    dset = prep_dataset(
+        dataset_name=dset_name,
+        prompt_template=PROMPT_TEMPLATES[dset_name],
+        tokenizer=tokenizer,
+        max_length=config["max_length"],
+        seed=config["seed"],
+        split=tst_split,
+        filter_mode=config["filter_mode"],
+        prompt=config["prompt"],
+    )
+    dsets.append(dset)
+    print("Processed:", dset)
+    print()
+dataset = concatenate_datasets(dsets)
 dataset = filter_for_len( # allows us to use batch generation for right pad
     dataset,
     tokenizer=tokenizer,
