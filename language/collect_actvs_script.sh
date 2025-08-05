@@ -1,17 +1,17 @@
 #!/bin/bash
 
-cuda_devices="0,1,2,3,4,5,6,7,8,9"
+cuda_devices="0,1,2,3,4,5,6,7"
 max_samples=1000
 temperature=0
 top_p=1
 
 model_folders=(
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-0o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-2o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-0o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-2o3_EleutherAI-pythia-410m/"
+    "/data/grantsrb/split_finetunes/nontoxic_alltoxic-0o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/toxic_alltoxic-0o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/nontoxic_alltoxic-1o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/nontoxic_alltoxic-2o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/toxic_alltoxic-1o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/toxic_alltoxic-2o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
 )
 
 IFS=',' read -ra CUDA_LIST <<< "$cuda_devices"

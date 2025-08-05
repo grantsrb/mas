@@ -5,15 +5,16 @@
 
 # Comma-separated list → array -- will use gpu pairs for each run
 #cuda_devices="0,1,2,3,4,5,6,7,8,9"
-cuda_devices="0,1,2,3,4,5,6,7,8,9"
+cuda_devices="6,7"
 
 model_folders=(
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-0o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/nontoxic_alltoxic-2o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-0o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-1o3_EleutherAI-pythia-410m/"
-    "/mnt/fs2/grantsrb/split_finetunes/toxic_alltoxic-2o3_EleutherAI-pythia-410m/"
+    #"/data/grantsrb/split_finetunes/nontoxic_alltoxic-0o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    #"/data/grantsrb/split_finetunes/toxic_alltoxic-0o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+
+    #"/data/grantsrb/split_finetunes/nontoxic_alltoxic-2o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/toxic_alltoxic-1o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/" # STILL NEED TO UNCOMMENT THIS ONE AND COMMENT OUT THE ABOVE
+    #"/data/grantsrb/split_finetunes/nontoxic_alltoxic-1o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
+    "/data/grantsrb/split_finetunes/toxic_alltoxic-2o3_deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B/"
 )
 
 arg1="n_train_samples=10000"
