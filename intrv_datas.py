@@ -904,10 +904,10 @@ def make_intrv_data_from_src_data(
     # Replaces trg sequences with src sequences after the intervention
     #   indices
     startt = time.time()
+    trg_len = trg_swap_mask.shape[1]-trg_prompt_len
+    src_len = src_swap_mask.shape[1]-src_prompt_len
     if not null_varb:
         print("Replacing elements with counterfactuals...")
-        trg_len = trg_swap_mask.shape[1]-trg_prompt_len
-        src_len = src_swap_mask.shape[1]-src_prompt_len
         endx = torch.zeros(len(trg_intrv_idxs))+min(trg_len,src_len)
         trg_replace_mask = get_mask_between(
             shape=trg_swap_mask.shape,
