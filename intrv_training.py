@@ -551,6 +551,14 @@ def get_cl_vectors(
         assert trg_swap_mask.long().sum()==len(idxs)
         cl_vectors[trg_swap_mask] = actvs[idxs[:,0],idxs[:,1]]
     else:
-        assert trg_swap_mask.long().sum()==idx_mask.long().sum()
+        try:
+            assert trg_swap_mask.long().sum()==idx_mask.long().sum()
+        except:
+            for i in range(len(trg_swap_mask)):
+                print("Trg:", trg_swap_mask[i].long())
+                print("Cl:", idx_mask[i].long())
+                print("Trg Sum:", trg_swap_mask[i].long().sum())
+                print("CL Sum:", idx_mask[i].long().sum())
+                print()
         cl_vectors[trg_swap_mask.bool()] = actvs[idx_mask.bool()]
     return cl_vectors
