@@ -200,7 +200,7 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
                 batch[k] = v[batch_indices]
     else:
         batch = tokenized_dataset.select(batch_indices)
-        batch = {k: torch.tensor(v) for k,v in batch.items()}
+        batch = {k: torch.tensor(batch[k]) for k in batch.column_names}
 
     d = {
         "input_ids":      batch["trg_input_ids"][...,:-1],
@@ -370,6 +370,9 @@ def add_prompt(
             if key in k:
                 if "input_ids" in k:
                     data_dict[k] = list(map(lambda x: [*ids] + x, data_dict[k]))
+                elif "cl_idx_masks"==k:
+                    mask = [0 for _ in range(el)]
+                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
                 elif "cl_idxs"==k:
                     data_dict[k] = list(map(lambda x: [x[0],x[1]+el], data_dict[k]))
                 elif "idxs" in k:
@@ -480,10 +483,12 @@ def pad_data_dict(
 
         for i in range(len(data_dict["trg_input_ids"])):
             offset = offsets[i]
-            if "cl_idxs"==k:
+            if "cl_idx_masks"==k:
+                mask = [0 for _ in range(offset)]
+            elif "cl_idxs"==k:
                 if left:
                     tensr = torch.tensor(data_dict[k])
-                    tensr[tensr[0]==i][-1] += offset
+                    tensr[tensr[:,0]==i][-1] += offset
                     data_dict[k] = tensr.tolist()
                 continue
             elif "idx" in k:
@@ -506,6 +511,7 @@ def pad_data_dict(
                 print("left:", left)
                 print("mask:", type(mask))
                 print("ddict:", type(data_dict[k][i]))
+    assert len(data_dict["cl_idx_masks"][0])==len(data_dict["cl_input_ids"][0])
     return data_dict
         
 def add_pad_masks(data_dict, src_info, trg_info):
