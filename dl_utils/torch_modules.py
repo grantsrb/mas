@@ -1956,14 +1956,6 @@ class RandSinPositionalEncoding(SinPositionalEncoding):
             self.forward = self.rand_forward
 
 
-if __name__=="__main__":
-    mlp = MLP(
-        inpt_size=10, outp_size=3, n_layers=4, h_sizes=None, lnorm=True,
-        noise=5, drop_p=0.5,
-        )
-    print(mlp)
-
-
 class PositiveSymmetricDefiniteMatrix(torch.nn.Module):
     def __init__(self, size, identity_init=False, *args, **kwargs):
         super().__init__()
@@ -2070,3 +2062,12 @@ class ReversibleResnet(nn.Module):
         for block in reversed(self.rev_blocks):
             fx = block.inv(fx)
         return fx
+
+if __name__=="__main__":
+    mlp = MLP(
+        inpt_size=10, outp_size=3, n_layers=4, h_sizes=None, lnorm=True,
+        noise=5, drop_p=0.5,
+        )
+    print(mlp)
+
+
