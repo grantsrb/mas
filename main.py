@@ -589,8 +589,9 @@ def main():
                 print("Src Model", src_idx, config["model_names"][src_idx])
                 print("Device:", device)
                 vbsize = config.get("eval_batch_size", 128)
+                bidxs = torch.arange(len(tokenized_datasets[k][dirvar_tup])).long()
                 batch = collate_fn(
-                    torch.arange(len(tokenized_datasets[k][dirvar_tup])).long(),
+                    bidxs,
                     tokenized_datasets[k][dirvar_tup],
                     incl_src=True,
                     device="cpu")
@@ -631,13 +632,22 @@ def main():
                 ## paired with cl indices to pick out the correct latents.
                 cl_vectors[k][dirvar_tup] = None
                 if (src_idx,trg_idx) in config["cl_directions"]:
+                    if not config["stepwise"]:
+                        cl_idxs = torch.tensor(tokenized_datasets[k][dirvar_tup]["cl_idxs"])
+                        keeps = torch.isin(cl_idxs[:,0], bidxs)
+                        cl_idxs = cl_idxs[keeps.bool()]
+                        idx_mask = None
+                    else:
+                        cl_idxs = None
+                        idx_mask = batch["cl_idx_masks"]
                     cl_vectors[k][dirvar_tup] = get_cl_vectors(
                         model=trg_model,
                         device=devices[trg_idx],
-                        swap_mask=batch["trg_swap_masks"]>=0,
+                        trg_swap_mask=batch["trg_swap_masks"]>=0,
                         input_ids=batch["cl_input_ids"],
                         tmask=batch.get("cl_task_masks", None),
-                        idx_mask=batch["cl_idx_masks"],
+                        idx_mask=idx_mask,
+                        idxs=cl_idxs,
                         layer=config["layers"][trg_idx],
                     )
 

@@ -238,6 +238,8 @@ def sample_cl_indices(
     varbs,
     keys=["obj_count", "phase", "count"],
     flatten=True,
+    ignore_input_ids={},
+    ignore_output_ids={},
 ):
     """
     A helper function for sampling indices from the data frame that have
@@ -261,14 +263,15 @@ def sample_cl_indices(
     keys = [k for k in keys if k in varbs[0][0]]
     assert len(keys)>0
     cl_indices = []
-    start_idx = np.ones(len(df)).astype(bool)
+    start_dfx = (~df["inpt_token_id"].isin(ignore_input_ids))&\
+                (~df["outp_token_id"].isin(ignore_output_ids))
     for varb_list in varbs:
         indices = []
-        for varb in varb_list:
-            idx = start_idx.copy()
+        for varb in varb_list: # Only length 1 if indywise
+            dfx = start_dfx.copy()
             for k in keys:
-                idx = idx&(df[k]==varb[k])
-            samp = df.loc[idx]
+                dfx = dfx&(df[k]==varb[k])
+            samp = df.loc[dfx]
             if len(samp)>0:
                 samp = samp.sample()
                 indices.append([
@@ -277,7 +280,7 @@ def sample_cl_indices(
                 ])
             else:
                 print("Failed to find CL Match!!")
-                samp = df.loc[start_idx].sample()
+                samp = df.loc[start_dfx].sample()
                 indices.append([
                     int(samp.iloc[0]["sample_idx"]),
                     int(samp.iloc[0]["step_idx"]),
@@ -580,13 +583,22 @@ def make_intrv_data_from_seqs(
             cl_seqs = src_seqs
             cl_tmasks = src_task_masks
         else:
-            cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
+            # src_swap_varbs: one varb dict wrapped in a list for each row
+            cl_idxs = sample_cl_indices(
+                df=trg_df, varbs=src_swap_varbs,
+                ignore_input_ids={
+                    trg_info["bos_token_id"],
+                    trg_info["eos_token_id"],
+                    *trg_info["trig_token_ids"],
+                },
+                ignore_output_ids={trg_info["pad_token_id"]},
+            )
             cl_seqs = trg_seqs
             cl_tmasks = trg_task_masks
         cl_idxs = torch.tensor(cl_idxs).long()
         cl_idx_mask = []
         for row,seq in enumerate(cl_seqs):
-            cols = cl_idxs[cl_idxs[0]==row, -1].tolist()
+            cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
             cl_idx_mask.append(
                 [1 if col in cols else 0 for col in range(len(seq))]
             )
@@ -631,9 +643,11 @@ def make_intrv_data_from_seqs(
         d["src_labels"] = src_labels
 
     if cl_idxs is not None:
+        d["cl_idxs"] = cl_idxs
         d["cl_idx_masks"] = cl_idx_mask
         d["cl_input_ids"] = cl_seqs
         d["cl_task_masks"] = cl_tmasks
+        assert len(cl_idx_mask[0])==len(cl_seqs[0])
     return d
 
 def make_intrv_data_from_src_data(
