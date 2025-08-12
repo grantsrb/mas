@@ -246,13 +246,13 @@ def main():
             # to using a vector of 0s for input embeddings at the intervention
             # positions
 
-        "num_training_steps": 50000,
+        "num_training_steps": 2500,
         "print_every": 100,
-        "batch_size": 32,
-        "grad_accumulation_steps": 8,
+        "batch_size": 128,
+        "grad_accumulation_steps": 1,
         "lr": 1e-3,
         "max_length": 128,                 # max token length for our (toy) examples
-        "eval_batch_size": 16,             # batch size for correctness evaluation
+        "eval_batch_size": 128,             # batch size for correctness evaluation
         "patience": 10, # only evaluated on print_every epochs
         "plateau": 0.001,
         "measure": "loss", #plateau measure (acc or loss)
