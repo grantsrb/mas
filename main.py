@@ -57,9 +57,6 @@ def config_prep(config):
         config["mtx_types"] = [config["mtx_types"] for _ in range(n_models)]
     config["mtx_kwargs"] = [ {**config} for _ in range(n_models) ]
     config["mask_kwargs"] = {**config}
-    config["filters"] = [
-        getattr(filters, fname) for fname in config["filter_names"]
-    ]
 
     # can assume different cmodels will default to appropriate parameters. This
     # reduces risk of error. Just make a new causal model for new interventions
@@ -75,11 +72,25 @@ def config_prep(config):
         config["cmodel_names"] = cnames
         print("Cmodel Names:", cnames)
 
-    kwargs = { "hold_outs": [], }
+    kwargs = { "hold_outs": config.get("hold_outs", []) }
     config["cmodels"] = [
         getattr(causal_models, cname)(**kwargs) for cname in config["cmodel_names"]
     ]
     print("Cmodels:", config["cmodels"])
+
+    for mi,name in enumerate(config["cmodel_names"]):
+        if name!="CountUpDown":
+            config["train_filter_names"][mi] = "default_filter"
+            config["valid_filter_names"][mi] = "default_filter"
+            print("Changing Filters!!")
+
+    config["train_filters"] = [
+        getattr(filters, fname) for fname in config["train_filter_names"]
+    ]
+    config["valid_filters"] = [
+        getattr(filters, fname) for fname in config["valid_filter_names"]
+    ]
+
 
     if config["swap_keys"] is None:
         config["swap_keys"] = [["full"], ["full"]]
@@ -696,7 +707,11 @@ def main():
             "embeddings"
         ],  
         "cmodel_names": None,
-        "filter_names": [
+        "train_filter_names": [
+            "default_filter",
+            "default_filter",
+        ],
+        "valid_filter_names": [
             "default_filter",
             "default_filter",
         ],
@@ -731,10 +746,10 @@ def main():
             # to using a vector of 0s for input embeddings at the intervention
             # positions
 
-        "num_training_steps": 50000,
+        "num_training_steps": 2500,
         "print_every": 100,
-        "batch_size": 32,
-        "grad_accumulation_steps": 8,
+        "batch_size": 256,
+        "grad_accumulation_steps": 1,
         "lr": 1e-3,
         "max_length": 128,                 # max token length for our (toy) examples
         "eval_batch_size": 16,             # batch size for correctness evaluation
@@ -881,6 +896,10 @@ def main():
             if "max_count" in config:
                 tconfig["max_count"] = config["max_count"]
             if tconfig: tconfig["unk_p"] = 0
+            tconfig["hold_outs"] = config.get("hold_outs", [])
+            if k=="valid" and len(tconfig["hold_outs"])>0:
+                mc = tconfig.get("max_count", 20)
+                tconfig["hold_outs"] = set(range(mc+1)) - tconfig["hold_outs"]
             # The dataset consists of text (and task masks if applicable)
             # Will eventually allow vector representations as well
             dataset = get_dataset(
@@ -981,7 +1000,7 @@ def main():
                         # Only want to include empty training on within model
                         # interventions
                         continue
-                    print(f"Making intrv data - Src{sidx} - Trg{tidx} - Var{vidx}")
+                    print(f"Making intrv data - {k} - Src{sidx} - Trg{tidx} - Var{vidx}")
                     print(sidx, "Info:", infos[sidx])
                     print(tidx, "Info:", infos[tidx])
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
@@ -1001,10 +1020,10 @@ def main():
                         trg_swap_keys=trg_swap_key,
                         src_cmodel=config["cmodels"][sidx],
                         src_info=config["infos"][sidx],
-                        src_filter=config["filters"][sidx],
+                        src_filter=config[f"{k}_filters"][sidx],
                         trg_cmodel=config["cmodels"][tidx],
                         trg_info=config["infos"][tidx],
-                        trg_filter=config["filters"][tidx],
+                        trg_filter=config[f"{k}_filters"][tidx],
                         stepwise=config.get("stepwise", False),
                         use_cl=(sidx,tidx) in config["cl_directions"],
                         use_src_data_for_cl=usdfc,
