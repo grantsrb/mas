@@ -26,3 +26,42 @@ def default_filter(df_row, info=None):
         *info.get("trig_token_ids", [7]),
     }
     return df_row.inpt_token_id not in bad_token_ids
+
+default_excl_vals = {
+    "count": { 2,4,9,14,17 },
+}
+def excl_varb_vals_filter(
+        df_row,
+        excl_varb_vals=default_excl_vals,
+        info=None
+):
+    if info is None: info = default_info
+    bad_token_ids = {
+        info.get("pad_token_id", 0),
+        info.get("bos_token_id", 1),
+        info.get("eos_token_id", 2),
+        *info.get("trig_token_ids", [7]),
+    }
+    dfx = df_row.inpt_token_id not in bad_token_ids
+    for key in excl_varb_vals:
+        if key in df_row:
+            dfx = dfx and not( int(df_row[key]) in excl_varb_vals[key] )
+    return dfx
+
+def keep_varb_vals_filter(
+        df_row,
+        keep_varb_vals=default_excl_vals,
+        info=None
+):
+    if info is None: info = default_info
+    bad_token_ids = {
+        info.get("pad_token_id", 0),
+        info.get("bos_token_id", 1),
+        info.get("eos_token_id", 2),
+        *info.get("trig_token_ids", [7]),
+    }
+    dfx = df_row.inpt_token_id not in bad_token_ids
+    for key in keep_varb_vals:
+        if key in df_row:
+            dfx = dfx and ( int( df_row[key] ) in keep_varb_vals[key])
+    return dfx
