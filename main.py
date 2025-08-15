@@ -132,6 +132,9 @@ def config_prep(config):
         print("use lr instead of learning_rate keyword")
         assert False
 
+    assert config["cl_eps"]<=1 and config["cl_eps"]>=0,\
+            "switched to weighted sum, cl_eps must range from 0 to 1"
+
     if config.get("debugging", False):
         config["n_train_samples"] = 100
         config["n_valid_samples"] = 100
@@ -941,7 +944,7 @@ def main():
                     if track_train: combo_loss = loss
                     if track_cl:
                         eps = config.get("cl_eps",1)
-                        combo_loss = combo_loss + eps*cl_loss
+                        combo_loss = (1-eps)*combo_loss + eps*cl_loss
 
                     if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
