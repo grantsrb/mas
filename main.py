@@ -381,6 +381,7 @@ def forward_pass(
         # deviations
     if cl_latents is not None and "intrv_vecs" in comms_dict:
         cl_latents = cl_latents[batch_indices].to(device)
+
         prev_grad_state = torch.is_grad_enabled()
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
@@ -391,13 +392,15 @@ def forward_pass(
             loss_type=config.get("cl_loss_type", "both"),
         )
         torch.set_grad_enabled(prev_grad_state)
+
         if cl_divergence:
-            cl_div, cl_sdx = cl_kl_divergence(
-                intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
-                cl_vecs=cl_latents,
-                swap_mask=batch["trg_swap_masks"]>=0,
-                laplace=1,
-            )
+            with torch.no_grad():
+                cl_div, cl_sdx = cl_kl_divergence(
+                    intrv_vecs=torch.stack(comms_dict["intrv_vecs"],dim=1),
+                    cl_vecs=cl_latents,
+                    swap_mask=batch["trg_swap_masks"]>=0,
+                    laplace=1,
+                )
 
     if "outp_tmask" in batch:
         tmask = batch["outp_tmask"].to(device)
@@ -697,11 +700,6 @@ def main():
             {"name": "main", "split":"train", } for _ in range(2)
         ],
         "task_kwargs": [{} for _ in range(2)],
-        "filter_by_correct": False,
-        "filtered_dataset_paths": [
-            "./data/filtered_gsm8k",  # where to save/load the filtered dataset
-            "./data/filtered_gsm8k",  # where to save/load the filtered dataset
-        ],
         "layers": [ # layers at which to attach the hooks
             "embeddings",
             "embeddings"
