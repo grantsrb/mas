@@ -1,19 +1,18 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="clmas"
-#gpus=( 0 1 2 3 4 5 6 7 8 9 )
-gpus=(4 5 6 7 8 9 )
+exp_name="lattest"
+gpus=( 2 3 4 5 6 7 0 1 8 9 )
+gpus=( 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
-config="configs/cl_mas.yaml"
-search1=( "n_units=128" "n_units=64" )
-search2=( "cl_eps=8" "cl_eps=13" ) # "swap_keys=count" ) 
-arg1="swap_keys=full"
-arg2=""
+config="configs/cl_baseline.yaml"
+search1=( "n_units=128" )
+search2=( "cl_eps=8"  "cl_eps=13" "cl_eps=1" ) # "swap_keys=count" ) 
+arg1=""
 
 echo Dispatching
 cuda_idx=0
@@ -35,7 +34,7 @@ do
                            echo Search1 ${search1[@]}
                            echo Search2 ${search2[@]}
 
-                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" $arg1 $arg2 &
+                           bash scripts/mas_scripts/single_model_search.sh $cuda $exp_name $model_path1 $model_path2 $config "${search1[*]}" "${search2[*]}" &
 
                            cuda_idx=$((1+$cuda_idx))
                            if [[ ${cuda_idx} == ${#gpus[@]} ]]; then
