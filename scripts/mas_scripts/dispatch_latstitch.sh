@@ -1,16 +1,17 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="latmap"
-gpus=( 2 3 4 5 6 7 0 1 8 9 )
+exp_name="lat"
+#gpus=( 2 3 4 5 6 7 0 1 8 9 )
+gpus=( 6 7 0 1 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
-config="configs/cl_baseline.yaml"
-search1=( "n_units=10000" )
-search2=( "swap_keys=full" ) # "swap_keys=count" ) 
+config="configs/latent_stitch.yaml"
+search1=( "n_units=128" )
+search2=( "cl_eps=8" "cl_eps=13" ) # "swap_keys=count" ) 
 
 echo Dispatching
 cuda_idx=0
