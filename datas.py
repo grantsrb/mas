@@ -511,7 +511,8 @@ def pad_data_dict(
                 print("left:", left)
                 print("mask:", type(mask))
                 print("ddict:", type(data_dict[k][i]))
-    assert len(data_dict["cl_idx_masks"][0])==len(data_dict["cl_input_ids"][0])
+    if "cl_idx_masks" in data_dict:
+        assert len(data_dict["cl_idx_masks"][0])==len(data_dict["cl_input_ids"][0])
     return data_dict
         
 def add_pad_masks(data_dict, src_info, trg_info):
