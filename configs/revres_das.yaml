@@ -55,3 +55,4 @@ eval_batch_size: 1000
 stepwise: False # can apply das at all token positions leading up to the
     # intervention index
 train_directions: null
+cl_directions: "all"
