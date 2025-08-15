@@ -1,18 +1,19 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="clmas"
-gpus=( 0 1 2 3 4 5 6 7 8 9 )
+exp_name="clvecs"
+#gpus=( 0 1 2 3 4 5 6 7 8 9 )
+gpus=( 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
 config="configs/cl_mas.yaml"
-search1=( "lr=0.001" "lr=0.003" )
-search2=( "cl_eps=8" "cl_eps=11" ) # "swap_keys=count" ) 
+search1=( "n_units=64" "n_units=128" )
+search2=( "cl_eps=8" "cl_eps=13" ) # "swap_keys=count" ) 
 arg1="swap_keys=full"
-arg2="n_units=128"
+arg2=""
 
 echo Dispatching
 cuda_idx=0

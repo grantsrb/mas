@@ -2,14 +2,14 @@
 # Use this script to run the DAS experiments
 
 exp_name="stch"
-gpus=( 8 9 0 1 2 3 4 5 6 7 )
+gpus=( 0 1 2 3 4 5 6 7 8 9 )
 root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 
-exp_folders1=( "multiobject_gru" "multiobject_lstm" "sameobject_gru" "sameobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
+exp_folders1=( "multiobject_gru" ) # "multiobject_lstm" "sameobject_gru" "sameobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
 config="configs/model_stitching.yaml"
-search1=( "n_units=1" )
+search1=( "n_units=128" "n_units=64" )
 search2=( "swap_keys=full" ) # "swap_keys=full" ) # 
 arg1="mask_type=ZeroMask"
 
