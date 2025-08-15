@@ -1,16 +1,17 @@
 #!/bin/bash
 # Use this script to run the DAS experiments
 
-exp_name="das"
-gpus=( 0 1 2 3 4 5 6 7 8 9 )
-root_folder="./models/"
+exp_name="ood"
+#gpus=( 0 1 2 3 4 5 6 7 8 9 )
+gpus=( 3 4 5  )
+root_folder="/data2/grantsrb/dasaf_saves/"
 
 exp_folders1=( "multiobject_gru" ) #"multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" "sameobject_lstm" "multiobjectmod_gru" )
-configs=("configs/orthogonal_das.yaml" "configs/linear_das.yaml")
-search1=( "n_units=1" "n_units=2" "n_units=4" "n_units=16" "n_units=32" "n_units=64" )
-search2=( "swap_keys=count" "swap_keys=phase" )
-arg1="cmodel_names=CountUpDown" # can also try cmodel_name=CountUpUp with swap_keys demo_count and resp_count
-arg2=""
+configs=("configs/multivar_das.yaml" )
+search1=("mtx_types=RotationMatrix" ) #"mtx_types=SDRotationMatrix") # "mtx_types=RevResnetRotation")  # 
+search2=( "cl_eps=5" )
+arg1="n_units=4"  # can also try cmodel_name=CountUpUp with swap_keys demo_count and resp_count
+arg2="" # cmodel_names=IncrementUpUp
 arg3=""
 
 echo Dispatching

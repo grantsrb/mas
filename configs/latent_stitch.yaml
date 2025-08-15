@@ -62,7 +62,8 @@ identity_rot: False
 #mask_type: ZeroMask #FixedMask #BoundlessMask
 #learnable_addition: True
 #n_units: 600
-mask_type: "FixedMask" #ZeroMask #BoundlessMask
+
+mask_type: "ZeroMask" #ZeroMask #BoundlessMask
 learnable_addition: False
 n_units: 1000000 # the size of the intervened subspace (n_neurons)
 

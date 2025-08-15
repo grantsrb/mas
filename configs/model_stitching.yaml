@@ -14,19 +14,6 @@ dataset_names:
 n_train_samples: 10000
 n_valid_samples: 1000
 
-train_data_paths:
-    - "./data/multiobj_systematic_10000.json"
-    - "./data/multiobj_systematic_10000.json"
-    #- "./data/multiobj.json"
-    #- "./data/multiobj.json"
-valid_data_paths:
-    - "./data/multiobj_systematic_1000.json"
-    - "./data/multiobj_systematic_1000.json"
-    #- "./data/multiobj.json"
-    #- "./data/multiobj.json"
-filter_by_correct: False
-filtered_dataset_path: null
-
 padding_sides:
     - "right"
     - "right"
@@ -65,7 +52,7 @@ mask_type: "ZeroMask" #FixedMask #BoundlessMask
 learnable_addition: False
 n_units: 1000000 # the size of the intervened subspace (n_neurons)
 
-num_training_steps: 20000
+num_training_steps: 2500
 print_every: 100
 batch_size: 128
 grad_accumulation_steps: 1
@@ -78,3 +65,4 @@ train_directions:
   - 
     - 0
     - 1
+

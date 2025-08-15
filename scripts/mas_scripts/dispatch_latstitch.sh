@@ -9,10 +9,9 @@ root_folder="/mnt/fs2/grantsrb/mas_neurips2025/"
 
 exp_folders1=( "multiobject_gru" ) # "sameobject_gru" "multiobject_lstm" ) # "multiobject_rope_tformer_unk" "sameobject_lstm" 
 exp_folders2=( "multiobject_gru" )
-config="configs/cl_baseline.yaml"
+config="configs/latent_stitch.yaml"
 search1=( "n_units=128" )
-search2=( "cl_eps=8"  "cl_eps=13" "cl_eps=1" ) # "swap_keys=count" ) 
-arg1=""
+search2=( "cl_eps=0.9" "cl_eps=0.95" ) # "swap_keys=count" ) 
 
 echo Dispatching
 cuda_idx=0
