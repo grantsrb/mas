@@ -263,6 +263,7 @@ def sample_cl_indices(
     keys = [k for k in keys if k in varbs[0][0]]
     assert len(keys)>0
     cl_indices = []
+    failures = []
     start_dfx = (~df["inpt_token_id"].isin(ignore_input_ids))&\
                 (~df["outp_token_id"].isin(ignore_output_ids))
     for varb_list in varbs:
@@ -278,18 +279,23 @@ def sample_cl_indices(
                     int(samp.iloc[0]["sample_idx"]),
                     int(samp.iloc[0]["step_idx"]),
                 ])
+                failures.append(0)
             else:
-                print("Failed to find CL Match!!")
+                print("Failed to find CL Match!! Varbs")
+                for k in keys:
+                    print(k,varb[k])
                 samp = df.loc[start_dfx].sample()
                 indices.append([
                     int(samp.iloc[0]["sample_idx"]),
                     int(samp.iloc[0]["step_idx"]),
                 ])
+                failures.append(1)
+                #print(df.head(30))
         if flatten:
             cl_indices += indices
         else:
             cl_indices.append(indices)
-    return cl_indices
+    return cl_indices, failures
 
 def make_counterfactual_seqs(
         trg_seqs,
@@ -582,10 +588,18 @@ def make_intrv_data_from_seqs(
             cl_idxs = get_nonzero_entries(src_swap_masks)
             cl_seqs = src_seqs
             cl_tmasks = src_task_masks
+            failures = [0 for _ in range(len(cl_idxs))]
         else:
+            print("Sampling cl indices...")
+            cl_df = make_df_from_seqs(
+                seqs=trg_seqs,
+                cmodel=trg_cmodel,
+                info=trg_info,
+                post_varbs=True,
+            )
             # src_swap_varbs: one varb dict wrapped in a list for each row
-            cl_idxs = sample_cl_indices(
-                df=trg_df, varbs=src_swap_varbs,
+            cl_idxs, failures = sample_cl_indices(
+                df=cl_df, varbs=src_swap_varbs,
                 ignore_input_ids={
                     trg_info["bos_token_id"],
                     trg_info["eos_token_id"],
@@ -596,6 +610,8 @@ def make_intrv_data_from_seqs(
             cl_seqs = trg_seqs
             cl_tmasks = trg_task_masks
         cl_idxs = torch.tensor(cl_idxs).long()
+        # TODO make use of failures
+        failures = torch.tensor(failures).bool()
         cl_idx_mask = []
         for row,seq in enumerate(cl_seqs):
             cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
