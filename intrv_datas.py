@@ -576,7 +576,13 @@ def make_intrv_data_from_seqs(
             cl_seqs = src_seqs
             cl_tmasks = src_task_masks
         else:
-            cl_idxs = sample_cl_indices(df=trg_df, varbs=src_swap_varbs)
+            cl_df = make_df_from_seqs(
+                seqs=trg_seqs,
+                cmodel=trg_cmodel,
+                info=trg_info,
+                post_varbs=True,
+            )
+            cl_idxs = sample_cl_indices(df=cl_df, varbs=src_swap_varbs)
             cl_seqs = trg_seqs
             cl_tmasks = trg_task_masks
         assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
