@@ -1125,7 +1125,7 @@ def get_nonzero_entries(arr):
     idxs = []
     for row,a in enumerate(arr):
         for col,aa in enumerate(a):
-            if aa: idxs.append([row,col])
+            if aa!=0: idxs.append([row,col])
     return idxs
 
 def analytical_linear_regression(
