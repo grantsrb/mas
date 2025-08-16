@@ -377,9 +377,11 @@ def make_counterfactual_seqs(
         intrv_varbs = {tkey: src_varbs[skey] for tkey,skey in zkeys}
         trg_cmodel.queue_intervention(intrv_varbs)
         if seq_i%500==0:
+            print()
             print("Src Varbs:", src_varbs)
             print("Trg Varbs:", trg_varbs)
             print("Intrv Varbs:", trg_cmodel.swap_varbs)
+            print()
         intrv_varbs = {**copy.deepcopy(trg_varbs), **intrv_varbs}
         intrv_varbs_list.append(intrv_varbs)
         if trg_idx<len(trg_seq):
@@ -458,6 +460,7 @@ def make_intrv_data_from_seqs(
         use_src_data_for_cl=True,
         tokenizer=None,
         ret_src_labels=True,
+        ret_varbs=False,
     ):
     """
     Constructs intervention data from the argued sequence pairs.
@@ -502,6 +505,8 @@ def make_intrv_data_from_seqs(
         ret_src_labels: bool
             if true, will return linear regression labels for the source
             data.
+        ret_varbs: bool
+            if true, will return the source and target swap variables
     Returns:
         intrv_data: dict
             'src_seqs': list of lists of tokenized strings
@@ -578,51 +583,9 @@ def make_intrv_data_from_seqs(
             stepwise=False,
         )
 
-    # Collect the counterfactual latent data if needed. cl_idxs are row,col
-    # pairs that can be used to index into and isolate the counterfactual
-    # latents produced using the cl_seqs from the target model.
-    cl_idxs = None
-    if use_cl:
-        if stepwise: raise NotImplemented
-        if use_src_data_for_cl:
-            cl_idxs = get_nonzero_entries(src_swap_masks)
-            cl_seqs = src_seqs
-            cl_tmasks = src_task_masks
-            failures = [0 for _ in range(len(cl_idxs))]
-        else:
-            print("Sampling cl indices...")
-            cl_df = make_df_from_seqs(
-                seqs=trg_seqs,
-                cmodel=trg_cmodel,
-                info=trg_info,
-                post_varbs=True,
-            )
-            # src_swap_varbs: one varb dict wrapped in a list for each row
-            cl_idxs, failures = sample_cl_indices(
-                df=cl_df, varbs=src_swap_varbs,
-                ignore_input_ids={
-                    trg_info["bos_token_id"],
-                    trg_info["eos_token_id"],
-                    *trg_info["trig_token_ids"],
-                },
-                ignore_output_ids={trg_info["pad_token_id"]},
-            )
-            cl_seqs = trg_seqs
-            cl_tmasks = trg_task_masks
-        cl_idxs = torch.tensor(cl_idxs).long()
-        # TODO make use of failures
-        failures = torch.tensor(failures).bool()
-        cl_idx_mask = []
-        for row,seq in enumerate(cl_seqs):
-            cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
-            cl_idx_mask.append(
-                [1 if col in cols else 0 for col in range(len(seq))]
-            )
-        assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
-
     # 3. Using the variables, seqs, and swap indices, create
     # intervention data.
-    intrv_seqs, _, intrv_task_masks = make_counterfactual_seqs(
+    intrv_seqs, intrv_varbs, intrv_task_masks = make_counterfactual_seqs(
         trg_swap_keys=trg_swap_keys,
         src_swap_keys=src_swap_keys,
         trg_seqs=trg_seqs,
@@ -636,6 +599,55 @@ def make_intrv_data_from_seqs(
         trg_info=trg_info,
         stepwise=stepwise,
     )
+
+    # Collect the counterfactual latent data if needed. cl_idxs are row,col
+    # pairs that can be used to index into and isolate the counterfactual
+    # latents produced using the cl_seqs from the target model.
+    cl_idxs = None
+    cl_varbs = intrv_varbs
+    if use_cl:
+        if stepwise: raise NotImplemented
+        if type(cl_varbs[0])!=list:
+            cl_varbs = [[v] for v in cl_varbs]  # Make it a list of lists
+        if use_src_data_for_cl:
+            print("Using Src Data For CL...")
+            cl_idxs = get_nonzero_entries(src_swap_masks)
+            cl_seqs = src_seqs
+            cl_tmasks = src_task_masks
+            failures = [0 for _ in range(len(cl_idxs))]
+        else:
+            print("Sampling New CL Indices...")
+            cl_df = make_df_from_seqs(
+                seqs=trg_seqs,
+                cmodel=trg_cmodel,
+                info=trg_info,
+                post_varbs=True,
+            )
+            # cl_varbs: one varb dict wrapped in a list for each row
+            cl_idxs, failures = sample_cl_indices(
+                df=cl_df,
+                varbs=cl_varbs,
+                ignore_input_ids={
+                    trg_info["bos_token_id"],
+                    trg_info["eos_token_id"],
+                    *trg_info["trig_token_ids"],
+                },
+                ignore_output_ids={trg_info["pad_token_id"]},
+            )
+            cl_seqs = trg_seqs
+            cl_tmasks = trg_task_masks
+
+        cl_idxs = torch.tensor(cl_idxs).long()
+        # TODO make use of failures
+        failures = torch.tensor(failures).bool()
+        cl_idx_mask = [] # marks the columns that are valid for each row
+        for row,seq in enumerate(cl_seqs):
+            cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
+            cl_idx_mask.append(
+                [1 if col in cols else 0 for col in range(len(seq))]
+            )
+        assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
+            
 
     if tokenizer is not None:
         print("Outids :", intrv_seqs[0])
@@ -664,6 +676,13 @@ def make_intrv_data_from_seqs(
         d["cl_input_ids"] = cl_seqs
         d["cl_task_masks"] = cl_tmasks
         assert len(cl_idx_mask[0])==len(cl_seqs[0])
+    if ret_varbs:
+        varbs = {
+            "src_swap_varbs": src_swap_varbs,
+            "trg_swap_varbs": trg_swap_varbs,
+            "cl_varbs": cl_varbs,
+        }
+        return d, varbs
     return d
 
 def make_intrv_data_from_src_data(
