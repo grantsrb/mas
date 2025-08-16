@@ -143,9 +143,6 @@ def config_prep(config):
         print("use lr instead of learning_rate keyword")
         assert False
 
-    assert config["cl_eps"]<=1 and config["cl_eps"]>=0,\
-            "switched to weighted sum, cl_eps must range from 0 to 1"
-
     if config.get("debugging", False):
         config["n_train_samples"] = 100
         config["n_valid_samples"] = 100
