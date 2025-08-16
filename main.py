@@ -574,7 +574,7 @@ def main():
                         cl_idxs = intrv_data.get("cl_idxs", None)
                         cl_seqs = intrv_data.get("cl_input_ids", None)
                         for _ in range(3):
-                            if cl_varbs is None: continue
+                            if cl_varbs is None or cl_idxs is None: continue
                             print("CL Varbs:", cl_varbs[_])
                             print("CL Indices:", cl_idxs[_])
                             print("CL Seqs:",
