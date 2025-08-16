@@ -12,7 +12,7 @@ from datas import (
     add_prompt, pad_data_dict, add_pad_masks, convert_to_tensors,
 )
 from utils import (
-    collect_activations, get_command_line_args,
+    collect_activations, get_command_line_args, tensor2str
 )
 import seq_models as smods
 from dl_utils.save_io import (
@@ -525,7 +525,7 @@ def main():
                     sk1 = config["swap_keys"][sidx]=="full"
                     sk2 = config["swap_keys"][tidx]=="full"
                     usdfc = ttype1==ttype2 and sk1 and sk2
-                    intrv_data = make_intrv_data_from_seqs(
+                    intrv_data, varbs_dict = make_intrv_data_from_seqs(
                         trg_data=tokenized_datasets[k][tidx],
                         src_data=tokenized_datasets[k][sidx],
                         src_swap_keys=src_swap_key,
@@ -541,6 +541,7 @@ def main():
                         use_src_data_for_cl=usdfc,
                         tokenizer=tokenizers[tidx],
                         ret_src_labels=True,
+                        ret_varbs=True,
                     )
                     intrv_data = add_prompt(
                         intrv_data,
@@ -570,6 +571,23 @@ def main():
                     print()
                     print()
                     intrv_data = convert_to_tensors(intrv_data)
+                    
+                    if config["debugging"]:
+                        cl_varbs = varbs_dict.get("cl_varbs", None)
+                        cl_idxs = intrv_data.get("cl_idxs", None)
+                        cl_seqs = intrv_data.get("cl_input_ids", None)
+                        for _ in range(3):
+                            if cl_varbs is None: continue
+                            print("CL Varbs:", cl_varbs[_])
+                            print("CL Indices:", cl_idxs[_])
+                            print("CL Seqs:",
+                                tensor2str(cl_seqs[cl_idxs[_][0]]))
+                            print("IDX:    ",
+                                tensor2str(torch.tensor(
+                                    list(range(
+                                        len(cl_seqs[cl_idxs[_][0]])))).long()))
+                            print()
+
                     intrv_datasets[k][(sidx,tidx,vidx)] = Dataset.from_dict(intrv_data)
     tokenized_datasets = intrv_datasets
 
@@ -958,7 +976,7 @@ def main():
                     if track_train: combo_loss = loss
                     if track_cl:
                         eps = config.get("cl_eps",1)
-                        combo_loss = (1-eps)*combo_loss + eps*cl_loss
+                        combo_loss = combo_loss + eps*cl_loss
 
                     if config["conserve_memory"] and track_grad:
                         n_tups = len(list(tokenized_datasets["train"].keys()))
