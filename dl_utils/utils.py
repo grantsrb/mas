@@ -1227,6 +1227,24 @@ def hf_generate_argmax(
         "logits": torch.cat(logits, dim=1)
     }
 
+def parse_custom_datetime(dt_str: str) -> datetime:
+    """
+    Convert a string in the format 'dyyyy-mm-dd_thhmmss' to a datetime object.
+    
+    # Example usage
+    d1 = parse_custom_datetime("d2025-08-16_t093015") # datetime(2025, 8, 16, 9, 30, 15)
+    """
+    if "_h" in dt_str:
+        dt_str = dt_str.split("_h")[0]
+    # Remove the leading 'd' and the 't'
+    dt_str = dt_str.lower().replace("d", "").replace("t", "")
+    # Parse with strptime
+    try:
+        return datetime.strptime(dt_str, "%Y-%m-%d_%H%M%S")
+    except:
+        return datetime.strptime("2000-01-01_000001", "%Y-%m-%d_%H%M%S")
+
+
 if __name__=="__main__":
     arr = torch.Tensor([
         [0,1,0,0],
