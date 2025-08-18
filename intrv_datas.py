@@ -532,9 +532,9 @@ def make_intrv_data_from_seqs(
     src_data = src_data.select(indices)
 
     # 1. get the source variables and the swap indices
-    src_seqs = src_data["input_ids"]
-    src_task_masks = src_data["task_mask"]
-    src_attn_masks = src_data["inpt_attn_mask"]
+    src_seqs = list(src_data["input_ids"])
+    src_task_masks = list(src_data["task_mask"])
+    src_attn_masks = list(src_data["inpt_attn_mask"])
     src_df = make_df_from_seqs(
         seqs=src_seqs,
         cmodel=src_cmodel,
@@ -553,9 +553,9 @@ def make_intrv_data_from_seqs(
     assert len(src_swap_masks[0])==len(src_seqs[0])
 
     # 2. get the target variables and swap indices
-    trg_seqs = trg_data["input_ids"]
-    trg_task_masks = trg_data["task_mask"]
-    trg_attn_masks = trg_data["inpt_attn_mask"]
+    trg_seqs =       list(trg_data["input_ids"])
+    trg_task_masks = list(trg_data["task_mask"])
+    trg_attn_masks = list(trg_data["inpt_attn_mask"])
     trg_df = make_df_from_seqs(
         seqs=trg_seqs,
         cmodel=trg_cmodel,
@@ -612,8 +612,8 @@ def make_intrv_data_from_seqs(
         if use_src_data_for_cl:
             print("Using Src Data For CL...")
             cl_idxs = get_nonzero_entries(src_swap_masks)
-            cl_seqs = src_seqs
-            cl_tmasks = src_task_masks
+            cl_seqs = copy.deepcopy(src_seqs)
+            cl_tmasks = copy.deepcopy(src_task_masks)
             failures = [0 for _ in range(len(cl_idxs))]
         else:
             print("Sampling New CL Indices...")
@@ -634,18 +634,18 @@ def make_intrv_data_from_seqs(
                 },
                 ignore_output_ids={trg_info["pad_token_id"]},
             )
-            cl_seqs = trg_seqs
-            cl_tmasks = trg_task_masks
+            cl_seqs = copy.deepcopy(trg_seqs)
+            cl_tmasks = copy.deepcopy(trg_task_masks)
 
         cl_idxs = torch.tensor(cl_idxs).long()
         # TODO make use of failures
         failures = torch.tensor(failures).bool()
-        cl_idx_mask = [] # marks the columns that are valid for each row
-        for row,seq in enumerate(cl_seqs):
-            cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
-            cl_idx_mask.append(
-                [1 if col in cols else 0 for col in range(len(seq))]
-            )
+        #cl_idx_mask = [] # marks the columns that are valid for each row
+        #for row,seq in enumerate(cl_seqs):
+        #    cols = cl_idxs[cl_idxs[:,0]==row, -1].tolist()
+        #    cl_idx_mask.append(
+        #        [1 if col in cols else 0 for col in range(len(seq))]
+        #    )
         assert len(cl_idxs)==np.sum([np.sum(np.asarray(s)>=0) for s in src_swap_masks])
             
 
@@ -672,10 +672,11 @@ def make_intrv_data_from_seqs(
 
     if cl_idxs is not None:
         d["cl_idxs"] = cl_idxs
-        d["cl_idx_masks"] = cl_idx_mask
+        #d["cl_idx_masks"] = cl_idx_mask
         d["cl_input_ids"] = cl_seqs
         d["cl_task_masks"] = cl_tmasks
-        assert len(cl_idx_mask[0])==len(cl_seqs[0])
+        d["cl_failures"] = failures
+        #assert len(cl_idx_mask[0])==len(cl_seqs[0])
     if ret_varbs:
         varbs = {
             "src_swap_varbs": src_swap_varbs,
