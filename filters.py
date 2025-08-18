@@ -17,7 +17,22 @@ default_info = {
     "eos_token_id": 2,
 }
 
-def default_filter(df_row, info=None):
+def default_filter(df_row, info=None, excl_varb_vals=None):
+    """
+    Default filter that returns True if the input token id is a keeper.
+    This occurs when the token is not
+    one of the special tokens (pad, bos, eos) or if it is not in
+    the exclusion variable values.
+
+    Args:
+        df_row: A row from a pandas DataFrame containing the input token id.
+        info: A dictionary containing token information (optional).
+        excl_varb_vals: A dictionary of variable values to exclude (optional).
+            keys:  variable names
+            values: set of values to exclude for that variable
+            example: {"count": {2, 4, 9, 14, 17}}
+    """
+
     if info is None: info = default_info
     bad_token_ids = {
         info.get("pad_token_id", 0),
@@ -25,7 +40,17 @@ def default_filter(df_row, info=None):
         info.get("eos_token_id", 2),
         *info.get("trig_token_ids", [7]),
     }
-    return df_row.inpt_token_id not in bad_token_ids
+    do_remove = df_row.inpt_token_id in bad_token_ids
+    #try:
+    #    do_remove = do_remove or (int(df_row["count"]) in {-1,0,20})
+    #except KeyError:
+    #    # If "count" is not in df_row, we do not exclude based on it.
+    #    pass
+    if excl_varb_vals is not None:
+        for key in excl_varb_vals:
+            if key in df_row:
+                do_remove = do_remove or (int(df_row[key]) in excl_varb_vals[key])
+    return not do_remove
 
 default_excl_vals = {
     "count": { 2,4,9,14,17 },
