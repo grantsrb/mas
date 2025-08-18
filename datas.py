@@ -239,7 +239,10 @@ def collate_fn(batch_indices, tokenized_dataset, device=0, incl_src=False):
     except: pass
     try:
         d["cl_idx_masks"] = batch["cl_idx_masks"][...,:-1].bool()
+    except: pass
+    try:
         d["cl_input_ids"] = batch["cl_input_ids"].long()
+        d["cl_failures"] = batch["cl_failures"].bool()
     except: pass
     try:
         d["cl_output_ids"] = batch["cl_output_ids"].long()
@@ -337,7 +340,8 @@ def add_prompt(
 ):
     """
     Prepends the prompt to the input ids and appropriately adjusts the
-    indices and masks in the data_dict.
+    indices and masks in the data_dict. Assumes the exsiting data already
+    has the bos token prepended to the input ids.
 
     Args:
         data_dict: dict
@@ -356,36 +360,38 @@ def add_prompt(
     tokenizers = [src_tokenizer, trg_tokenizer, trg_tokenizer]
     keys = ["src", "trg", "cl"]
     for prompt,tokenizer,key in zip(prompts,tokenizers,keys):
+        bos_id = tokenizer.bos_token_id
         if len(prompt)==0:
-            ids = [tokenizer.bos_token_id]
+            prompt_ids = []
         else:
-            ids = tokenizer(
+            prompt_ids = tokenizer(
                 prompt,
                 padding="do_not_pad",
                 truncation=False,
             )["input_ids"]
-        el = len(ids)
+        el = len(prompt_ids)
 
+        if el==0: continue
         for k in data_dict:
             if key in k:
                 if "input_ids" in k:
-                    data_dict[k] = list(map(lambda x: [*ids] + x, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: [*prompt_ids] + x[1:], data_dict[k]))
                 elif "cl_idx_masks"==k:
                     mask = [0 for _ in range(el)]
-                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: mask + x[1:], data_dict[k]))
                 elif "cl_idxs"==k:
-                    data_dict[k] = list(map(lambda x: [x[0],x[1]+el], data_dict[k]))
+                    data_dict[k] = list(map(lambda x: [x[0],x[1]+el-1], data_dict[k]))
                 elif "idxs" in k:
-                    data_dict[k] = list(map(lambda x: x+el, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: x+el-1, data_dict[k]))
                 elif "attention" in k or "attn" in k:
                     mask = [1 for _ in range(el)]
-                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: mask + x[1:], data_dict[k]))
                 elif "swap" in k or "src_labels" in k:
                     mask = [-1 for _ in range(el)]
-                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: mask + x[1:], data_dict[k]))
                 elif "task" in k:
                     mask = [0 for _ in range(el)]
-                    data_dict[k] = list(map(lambda x: mask + x, data_dict[k]))
+                    data_dict[k] = list(map(lambda x: mask + x[1:], data_dict[k]))
     return data_dict
 
 def tokenize_dataset(dataset, tokenizer, config):
@@ -416,12 +422,12 @@ def tokenize_dataset(dataset, tokenizer, config):
     token_ids = tok_dict["input_ids"]
     bos = token_ids[0][0]==tokenizer.bos_token_id
     task_masks = dataset["task_mask"]
-    if prespace and bos or not prespace:
-        token_ids =  [[t for t in seq[1:]] for seq in token_ids]
-    else:
-        token_ids =  [[t for t in seq] for seq in token_ids]
+    #if prespace and bos or not prespace:
+    #    token_ids =  [[t for t in seq[1:]] for seq in token_ids]
+    #else:
+    #    token_ids =  [[t for t in seq] for seq in token_ids]
     attn_masks = [[1 for _ in seq[:-1]]+[0] for seq in token_ids]
-    task_masks = [[t for t in tmask] for tmask in task_masks]
+    task_masks = [[0] + [t for t in tmask] for tmask in task_masks]
     if len(task_masks[0])!=len(token_ids[0]):
         print("Text:", text[0])
         print("Ids :", token_ids[0])
@@ -445,6 +451,11 @@ def pad_data_dict(
     Assumes values in data_dict are lists, but will explicitly convert
     them to lists if tensors are argued
     """
+    #maxes = [
+    #    [len(s) for s in data_dict[k+"_input_ids"]] for k\
+    #            in ["src", "trg", "cl"] if k+"_input_ids" in data_dict
+    #]
+    #max_len = int(max(*maxes))
     max_len = int(max(
         max([len(s) for s in data_dict["src_input_ids"]]),
         max([len(s) for s in data_dict["trg_input_ids"]]),
@@ -462,55 +473,62 @@ def pad_data_dict(
         assert src_offsets[i]==diff, f"{src_offsets[i]} != {diff}"
         diff = (max_len-len(data_dict["trg_swap_masks"][i]))
         assert trg_offsets[i]==diff, f"{trg_offsets[i]} != {diff}"
+        if "cl_idx_masks" in data_dict:
+            diff = (cl_max_len-len(data_dict["cl_idx_masks"][i]))
+            assert cl_offsets[i]==diff, f"{cl_offsets[i]} != {diff}"
     ### END TESTING
 
-    for k in data_dict:
-        if "src" in k:
+    for key in data_dict:
+        if "failure" in key: continue
+        if "src" in key:
             left = int(src_pad_side=="left")
             pad_id = src_pad_id
             offsets = src_offsets
-        elif "trg" in k:
+        elif "trg" in key:
             left = int(trg_pad_side=="left")
             pad_id = trg_pad_id
             offsets = trg_offsets
-        elif "cl" in k:
+        elif "cl" in key:
             left = int(trg_pad_side=="left")
             pad_id = trg_pad_id
             offsets = cl_offsets
         else:
-            print("Skipping", k, "in padding")
+            print("Skipping", key, "in padding")
             continue
 
         for i in range(len(data_dict["trg_input_ids"])):
             offset = offsets[i]
-            if "cl_idx_masks"==k:
+            if "cl_idx_mask" in key:
                 mask = [0 for _ in range(offset)]
-            elif "cl_idxs"==k:
+            elif "cl_idxs"==key:
                 if left:
-                    tensr = torch.tensor(data_dict[k])
+                    tensr = torch.tensor(data_dict[key])
                     tensr[tensr[:,0]==i][-1] += offset
-                    data_dict[k] = tensr.tolist()
+                    data_dict[key] = tensr.tolist()
                 continue
-            elif "idx" in k:
+            elif "idx" in key:
                 if left:
-                    data_dict[k][i] += offset
+                    data_dict[key][i] += offset
                 continue
-            elif "swap" in k or "src_labels" in k:
+            elif "swap" in key or "src_labels" in key:
                 mask = [-1 for _ in range(offset)]
-            elif "mask" in k:
+            elif "mask" in key:
                 mask = [0 for _ in range(offset)]
-            elif "input_id" in k:
+            elif "input_id" in key:
                 mask = [pad_id for _ in range(offset)]
             
-            if type(data_dict[k])==torch.Tensor:
-                data_dict[k] = data_dict[k].tolist()
+            if type(data_dict[key])==torch.Tensor:
+                data_dict[key] = data_dict[key].tolist()
+
             try:
-                data_dict[k][i] = left*mask + data_dict[k][i] + mask*(1-left)
+                data_dict[key][i] = left*mask + data_dict[key][i] + mask*(1-left)
             except:
-                print(k, i)
+                print(key, i)
                 print("left:", left)
                 print("mask:", type(mask))
-                print("ddict:", type(data_dict[k][i]))
+                print("ddict:", type(data_dict[key]))
+                print("ddict[i]:", type(data_dict[key][i]))
+                data_dict[key][i] = left*mask + data_dict[key][i] + mask*(1-left)
     if "cl_idx_masks" in data_dict:
         assert len(data_dict["cl_idx_masks"][0])==len(data_dict["cl_input_ids"][0])
     return data_dict
