@@ -5,15 +5,15 @@
 
 # Comma-separated list → array -- will use gpu pairs for each run
 #cuda_devices="0,1,2,3,4,5,6,7,8,9"
-cuda_devices="0,1,2,3,8,9"
+cuda_devices="0,1,2,3,4,5"
 
 split_idxs=(0 1 2)
 filter_modes=("toxic" "nontoxic")
 
 arg0="n_splits=3"
-arg1="root_dir=/mnt/fs2/grantsrb/split_finetunes/"
+arg1="root_dir=./"
 arg2="lr=0.0005"
-arg3="model_name=EleutherAI/pythia-410m"
+arg3="model_name=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 arg4=""
 arg5=""
 arg6=""
