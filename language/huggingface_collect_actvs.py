@@ -64,7 +64,7 @@ print("Running Hugging Face Toxicity Example...")
 config = {
     "root_dir": "/data2/grantsrb/mas_finetunings/",
     "seed": 42,  # Random seed for reproducibility, also the meaning of life, the universe, and everything
-    "model_name": "gpt2", #"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", # 
+    "model_name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", #"gpt2", # 
     "layers": [ ],
     "tokenizer_name": None,
     "filter_mode": "both", # "toxic", "nontoxic", or "both"
@@ -110,7 +110,7 @@ if not os.path.exists(ROOT_DIR):
 
 MAX_SAMPS = config["max_samples"]
 RUN_ID = datetime.now().strftime("d%Y-%m-%d_t%H-%M-%S")
-RUN_ID += "_h" + str(hash(MODEL_NAME)})[-4:]
+RUN_ID += "_h" + str(hash(MODEL_NAME))[-4:]
 filter_mode = config["filter_mode"]
 if len(config["datasets"])==3:
     dir_dataset_name = "alltoxic"
@@ -199,6 +199,9 @@ print()
 input_text = list(dataset["input_text"])
 dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 input_ids = torch.vstack(list(dataset["input_ids"]))
+
+print("BOS:", tokenizer.bos_token)
+print("BOS_ID:", tokenizer.bos_token_id)
 
 # ---------------- Clarify Layers ----------------
 
