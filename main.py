@@ -440,7 +440,8 @@ def main():
             kwrgs["prompt"] = kwrgs["prompts"][mi]
 
             # The tokenized dataset has replaced text specified in the
-            # replacements dict, has not prepended a prompt or a bos token,
+            # replacements dict, has not prepended a prompt, has prepended
+            # a bos token,
             # and has converted the text into tokens and then token ids.
             # None of the tokenized data is padded, and non are tensors.
             # fields include: "token_ids", "inpt_attn_mask", "task_mask"
@@ -463,7 +464,7 @@ def main():
                 )
         infos.append(info)
     config["infos"] = infos
-    print("Tok Dataset:", tokenized_datasets["train"][0])
+    print("Tokenized Dataset:", tokenized_datasets["train"][0])
     print("Cmodels:", config["cmodels"])
     for i in range(len(tokenized_datasets["train"])):
         print(i,"Example:")
@@ -513,10 +514,10 @@ def main():
                     print(sidx, "Info:", infos[sidx])
                     print(tidx, "Info:", infos[tidx])
                     print("Sample Src:", tokenized_datasets[k][sidx]["input_ids"][0])
-                    print("SSampl Src:", tokenized_datasets[k][sidx]["input_ids"][0][1:])
                     print("Decode Src:", tokenizers[sidx].decode(tokenized_datasets[k][sidx]["input_ids"][0]))
                     print("Sample Trg:", tokenized_datasets[k][tidx]["input_ids"][0])
                     print("Sample Tsk:", [int(t) for t in tokenized_datasets[k][tidx]["task_mask"][0]])
+                    print()
                     ttype1 = model_configs[sidx].get("task_type", "MultiObject")
                     ttype2 = model_configs[tidx].get("task_type", "MultiObject")
                     sk1 = config["swap_keys"][sidx]=="full"
@@ -573,10 +574,12 @@ def main():
                         cl_varbs = varbs_dict.get("cl_varbs", None)
                         cl_idxs = intrv_data.get("cl_idxs", None)
                         cl_seqs = intrv_data.get("cl_input_ids", None)
+                        cl_failures = intrv_data.get("cl_failures", None)
                         for _ in range(3):
                             if cl_varbs is None or cl_idxs is None: continue
                             print("CL Varbs:", cl_varbs[_])
                             print("CL Indices:", cl_idxs[_])
+                            print("CL Failures", cl_failures[_])
                             print("CL Seqs:",
                                 tensor2str(cl_seqs[cl_idxs[_][0]]))
                             print("IDX:    ",
@@ -609,6 +612,7 @@ def main():
     with torch.no_grad():
         all_src_activations = {k:dict() for k in datasets}
         cl_vectors = {k:dict() for k in datasets}
+        cl_failures = {k:dict() for k in datasets}
         print("Collecting Activations")
         for k in all_src_activations:
             for dirvar_tup in tokenized_datasets[k].keys():
@@ -663,6 +667,7 @@ def main():
                 ## Collect cl latents by generating them from cl sequences
                 ## paired with cl indices to pick out the correct latents.
                 cl_vectors[k][dirvar_tup] = None
+                cl_failures[k][dirvar_tup] = None
                 if (src_idx,trg_idx) in config["cl_directions"]:
                     if not config["stepwise"]:
                         cl_idxs = torch.tensor(tokenized_datasets[k][dirvar_tup]["cl_idxs"])
@@ -682,6 +687,9 @@ def main():
                         idxs=cl_idxs,
                         layer=config["layers"][trg_idx],
                     )
+                    fails = torch.zeros_like(cl_vectors[k][dirvar_tup])[:,:,0]
+                    fails[batch["cl_failures"].bool()] = 1
+                    cl_failures[k][dirvar_tup] = fails.bool()
 
                 pred_ids = actvs["pred_ids"].squeeze()
 
@@ -962,6 +970,7 @@ def main():
                         dataset=tokenized_datasets["train"][dirvar_tup],
                         src_activations=all_src_activations["train"][dirvar_tup],
                         cl_vectors=cl_vectors["train"][dirvar_tup],
+                        cl_failures=cl_failures["train"][dirvar_tup],
                         device=devices[tidx],
                         config=config,
                         tforce=True,
@@ -1013,6 +1022,7 @@ def main():
                                 dataset=tokenized_datasets["valid"][dirvar_tup],
                                 src_activations=all_src_activations["valid"][dirvar_tup],
                                 cl_vectors=cl_vectors["valid"][dirvar_tup],
+                                cl_failures=cl_failures["valid"][dirvar_tup],
                                 device=devices[tidx],
                                 tokenizer=tokenizers[tidx],
                                 config=config,
