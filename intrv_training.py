@@ -86,6 +86,7 @@ def forward_pass(
         src_activations,
         device,
         cl_vectors=None,
+        cl_failures=None,
         tokenizer=None,
         pad_mask=None,
         config=dict(),
@@ -102,6 +103,8 @@ def forward_pass(
         src_activations: torch tensor (B,S,D)
         cl_vectors: torch tensor (B,S,D)
             use the trg_swap_mask to isolate the cl latent targets
+        cl_failures: torch tensor (B,S)
+            use the failures to remove failed cl loss calculations
         cl_divergence: bool
             track the kl divergence between the intervened vectors
             and the counterfactual latents.
@@ -228,6 +231,7 @@ def forward_pass(
         # deviations
     if cl_vectors is not None and "intrv_vecs" in comms_dict:
         cl_vectors = cl_vectors[batch_indices].to(device)
+        cl_failures = cl_failures[batch_indices].to(device)
         prev_grad_state = torch.is_grad_enabled()
         enable = track_grad and (sidx,tidx) in config["cl_directions"]
         torch.set_grad_enabled(enable)
@@ -238,6 +242,7 @@ def forward_pass(
             cl_loss = cl_loss_fxn(
                 intrv_vecs=intrv_vecs,
                 cl_vectors=cl_vectors,
+                cl_failures=cl_failures,
                 swap_mask=batch["trg_swap_masks"]>=0,
                 loss_type=config.get("cl_loss_type", "both"),
             )
@@ -245,6 +250,7 @@ def forward_pass(
                 cl_div, cl_sdx = cl_kl_divergence(
                     intrv_vecs=intrv_vecs,
                     cl_vecs=cl_vectors,
+                    cl_failures=cl_failures,
                     swap_mask=batch["trg_swap_masks"]>=0,
                     laplace=1,
                 )
@@ -413,13 +419,16 @@ def np_kl_divergence(p, q):
     prob_logs[prob_logs!=prob_logs] = 100
     return prob_logs.sum()
 
-def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
+def cl_kl_divergence(intrv_vecs, cl_vecs, cl_failures, swap_mask, laplace=1):
     """
     Args:
         intrv_vecs: torch tensor (B,S,D)
             the intervened vectors
         cl_vecs: torch tensor (B,S,D)
             the target vectors
+        cl_failures: torch tensor (B,S)
+            the indices which we should exclude from the divergence. 1s
+            are exlcuded
         swap_mask: torch tensor (B,S)
             a mask where trues denote positions to use for the cl loss.
     Returns
@@ -430,8 +439,8 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
             exceeds that of the corresponding extreme from the natural
             distribution measured in standard deviations.
     """
-    intrv_vecs = intrv_vecs[swap_mask]
-    cl_vecs = cl_vecs[swap_mask]
+    intrv_vecs = intrv_vecs[swap_mask&~cl_failures]
+    cl_vecs = cl_vecs[swap_mask&~cl_failures]
     if type(intrv_vecs) is torch.Tensor:
         intrv_vecs = intrv_vecs.cpu().numpy()
     if type(cl_vecs) is torch.Tensor:
@@ -456,13 +465,15 @@ def cl_kl_divergence(intrv_vecs, cl_vecs, swap_mask, laplace=1):
         np_kl_divergence(cl_density, intrv_density),
     ]), cl_sdx
 
-def cl_loss_fxn(intrv_vecs, cl_vectors, swap_mask, loss_type="both"):
+def cl_loss_fxn(intrv_vecs, cl_vectors, cl_failures, swap_mask, loss_type="both"):
     """
     Args:
         intrv_vecs: torch tensor (B,S,D)
             the intervened vectors
         cl_vectors: torch tensor (B,S,D)
             the target vectors
+        cl_failures: torch tensor (B,S)
+            a mask where falses denote positions to use for the cl loss.
         swap_mask: torch tensor (B,S)
             a mask where trues denote positions to use for the cl loss.
         loss_type: str {"mse", "cos", "both"}
@@ -471,8 +482,8 @@ def cl_loss_fxn(intrv_vecs, cl_vectors, swap_mask, loss_type="both"):
         cl_loss: torch tensor (1,)
             the counterfactual latent loss
     """
-    preds = intrv_vecs[swap_mask]
-    labls = cl_vectors[swap_mask]
+    preds = intrv_vecs[swap_mask&(~cl_failures)]
+    labls = cl_vectors[swap_mask&(~cl_failures)]
     loss_fxn = get_loss_fxn(loss_type)
     return loss_fxn(preds,labls).mean()
 
