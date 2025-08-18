@@ -51,14 +51,15 @@ def ensure_accuracy(
         output_ids,
         tokenizer=None,
         device=None,
+        n_samps=50,
         verbose=False):
     """
     Simple function to check for 100% accuracy
     """
     if device is None: device = next(model.parameters()).get_device()
     perm = torch.randperm(len(input_ids)).long()
-    in_ids = input_ids[perm[:10]].cpu()
-    out_ids = output_ids[perm[:10]].cpu()
+    in_ids = input_ids[perm[:n_samps]].cpu()
+    out_ids = output_ids[perm[:n_samps]].cpu()
     with torch.no_grad():
         output = model(input_ids=in_ids.to(device))
         pred_ids = output.logits.argmax(-1).cpu()

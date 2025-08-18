@@ -305,6 +305,9 @@ with torch.no_grad():
 
         generated_ids.append(generated.sequences.cpu()[:,:-1])
         assert torch.all(generated_ids[-1][:,:ids.shape[1]]==ids)
+        print("Input IDs:", ids[0])
+        print("Gener IDs:", generated_ids[-1][0])
+        assert torch.all(generated_ids[-1][:,:ids.shape[1]]==ids)
 
         if len(generated_ids)>1 and generated_ids[-1].shape[-1]!=generated_ids[-2].shape[-1]:
             diff_lens = True
