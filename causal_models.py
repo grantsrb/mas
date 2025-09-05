@@ -193,6 +193,9 @@ class CountUpUp(CountUpDown):
             return info["resp_token_ids"][ridx], tmask
 
 class CountUpIncr(CountUpDown):
+    """
+    The CountUpIncr always uses the same increment in the demonstration phase.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.init_varbs_["max_count"] = kwargs.get("max_count", 20)
@@ -246,6 +249,12 @@ class CountUpIncr(CountUpDown):
 
 
 class IncrementUpUp(CountUpIncr):
+    """
+    This differs from the CountUpIncr in that it uses the existing
+    incr value when performing interventions from the response phase
+    to the demonstration phase. The CountUpIncr always uses the same
+    increment in the demonstration phase.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -265,7 +274,6 @@ class IncrementUpUp(CountUpIncr):
                 varbs["incr"] = 1/max(varbs["count"],1)
                 varbs["count"] = 0
             elif token_id in info["demo_token_ids"]:
-                #varbs["count"] += 1
                 varbs["count"] += varbs["incr"]*varbs["max_count"]
         else:
             if token_id in info["resp_token_ids"]:
