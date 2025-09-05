@@ -123,6 +123,8 @@ def config_prep(config):
         for s in range(n_models):
             for t in range(n_models):
                 config["train_directions"].append((s,t))
+    else:
+        config["train_directions"] = []
 
     if type(config["cl_directions"])==list:
         config["cl_directions"] = [tuple(td) for td in config["cl_directions"]]
