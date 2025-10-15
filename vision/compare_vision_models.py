@@ -184,13 +184,13 @@ def compare_models(config):
         lname = layer_name.replace("backbone.", "").replace(".", "-")
         mname = model_name.split("/")[-1]
         dname = dataset_name.split("/")[-1]
-        actvs_name = f"{model_save_dir}/{mname}_{dname}_{lname}_actvs_train.pt"
+        actvs_name = f"{model_save_dir}/{mname}_{dname}_{lname}_m{mi}_actvs_train.pt"
         if os.path.exists(actvs_name) and not config["overwrite"]:
             print(f"Loading actvs sets from disk...")
             actvs_train_sets.append(torch.load(actvs_name))
             actvs_valid_sets.append(torch.load(actvs_name.replace("train", "valid")))
         else:
-            print(f"Collecting actvs for model {model_name} and layer {layer_name}")
+            print(f"Collecting actvs for model {model_name}, layer {layer_name}, index {mi}")
             model.eval()
             model.to(device)
             train_loader = get_dataloader(
@@ -207,7 +207,7 @@ def compare_models(config):
             # leading up to the layer of interest, but that requires us to know
             # the architecture of the model.
             with torch.no_grad():
-                print(f"Collecting training set")
+                print(f"Collecting training set...")
                 actvs_train = get_actvs_data(
                     model=model,
                     data_loader=train_loader,
@@ -216,7 +216,7 @@ def compare_models(config):
                 )
                 actvs_train_sets.append(actvs_train)
     
-                print(f"Collecting validation set")
+                print(f"Collecting validation set...")
                 actvs_valid = get_actvs_data(
                     model=model,
                     data_loader=test_loaders[mi],
@@ -248,7 +248,7 @@ def compare_models(config):
     identity_rot = config["identity_rot"]
     debug = config["debug"]
     
-    if debug:
+    if debug and config.get("debug_mode","")=="single_model":
         models = [og_models[0] for _ in models]
         processors = [og_processors[0] for _ in processors]
         layer_names = [og_layer_names[0] for _ in layer_names]
@@ -279,7 +279,7 @@ def compare_models(config):
         normalize=normalize,
         batch_norm=batch_norm,
         identity_rot=identity_rot,
-        dtype=config.get("mas_dtype", None),
+        dtype=config.get("mas_dtype", next(models[0].parameters()).dtype),
     )
     
     # We need to hook the models in order to perform the patching intervention
@@ -331,6 +331,7 @@ def compare_models(config):
                 cl_directions=cl_directions,
                 cl_eps=cl_eps,
                 cl_method=cl_method,
+                debug=debug,
             )
             end_time = time.time()
             print(f"Epoch Duration: {end_time - start_time}s")
@@ -346,6 +347,7 @@ def compare_models(config):
                 cl_eps=cl_eps,
                 cl_method=cl_method,
                 verbose=True,
+                debug=debug,
             )
     
             cols = ["actn_loss","cl_loss","acc"]
@@ -521,6 +523,7 @@ default_config = {
         # before the transformation matrix
     "identity_rot": False, # uses the identity rotation matrix (only use for debugging)
     "debug": False, # if True, will use the first model for all models
+    "debug_mode": "",
 
     # MAS training parameters
     "train_directions": None, # will only train the MAS alignment for the

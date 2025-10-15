@@ -374,6 +374,7 @@ def train_mas_alignment_one_epoch(
         cl_method="sample",
         label_smoothing=0.0,
         use_ground_truth_labels=False,
+        debug=False,
 ):
     device = next(alignment.parameters()).device
     models = [model.to(device) for model in models]
@@ -484,6 +485,8 @@ def train_mas_alignment_one_epoch(
             df_dict["src_idx"].append(src_idx)
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
+        if debug and batch_idx>batch_size:
+            return pd.DataFrame(df_dict)
     if batch_idx//batch_size % batches_per_optim_step != 0:
         optimizer.step()
         optimizer.zero_grad()
@@ -501,6 +504,7 @@ def evaluate_mas_alignment(
         cl_eps=1,
         cl_method="sample",
         verbose=True,
+        debug=False,
 ):
     device = next(alignment.parameters()).device
     models = [model.to(device) for model in models]
@@ -596,6 +600,8 @@ def evaluate_mas_alignment(
             df_dict["src_idx"].append(src_idx)
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
+        if debug and batch_idx>batch_size:
+            return pd.DataFrame(df_dict)
     return pd.DataFrame(df_dict)
 
 def minimize_cka_one_epoch(

@@ -831,7 +831,8 @@ class MASAlignment(torch.nn.Module):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        if varb_idx is None: varb_idx = 0
+        if varb_idx is None:
+            varb_idx = 0
         og_dtype = target.dtype
         target = target.to(self.dtype)
         source = source.to(self.dtype)
