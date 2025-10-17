@@ -3,3 +3,6 @@ make_models/*
 scripts/*
 */csvs/*
 */figs/*
+analysis/*
+*/.ipynb_checkpoints/*
+
