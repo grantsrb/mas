@@ -337,6 +337,8 @@ def get_cl_vectors(activations, probs, method="mean", src_probs=None):
     elif method == "most_similar":
         ranks = torch.matmul(src_probs, probs.T).argmax(dim=-1)
         cl_vectors = activations[ranks]
+    else:
+        raise ValueError(f"Invalid CL method: {method}")
     return cl_vectors
 
 def cl_loss_fxn(intrv_vectors, cl_vectors):
@@ -416,7 +418,9 @@ def train_mas_alignment_one_epoch(
             for trg_idx in range(len(models)):
                 trg_data = actvs_sets[trg_idx]
                 trg_inputs = trg_data["inputs"][trg_batch]
-                cl_vectors = trg_data.get("cl_vectors", None) # (n_classes,C,H,W)
+                cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
+                if cl_vectors is not None:
+                    cl_vectors = cl_vectors[src_batch] # (B,C,H,W)
                 alignment.comms_dict["trg_idx"] = trg_idx
 
                 if train_directions is not None and (src_idx,trg_idx) not in train_directions:
@@ -443,14 +447,15 @@ def train_mas_alignment_one_epoch(
                 cl_loss = torch.zeros(1).to(device)
                 if cl_directions is not None\
                         and (src_idx,trg_idx) in cl_directions:
-                    if cl_vectors is None:
+                    if cl_method == "same_as_target":
+                        cl_vectors = trg_data["actvs"][src_batch] # (B,C,H,W)
+                    elif cl_vectors is None:
                         cl_vectors = get_cl_vectors(
                             activations=trg_data["actvs"],
                             probs=trg_data["logits"].softmax(dim=-1),
                             method=cl_method,
                             src_probs=src_logits.softmax(dim=-1),
-                        )[src_labels]
-                    else:
+                        )
                         cl_vectors = cl_vectors[src_labels] # (B,C,H,W)
                     intrv_vectors = alignment.comms_dict["intrv_vectors"].to(device)
                     cl_loss = cl_loss_fxn(intrv_vectors, cl_vectors.to(device))
@@ -545,6 +550,8 @@ def evaluate_mas_alignment(
                 trg_data = actvs_sets[trg_idx]
                 trg_inputs = trg_data["inputs"][trg_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (n_classes,C,H,W)
+                if cl_vectors is not None:
+                    cl_vectors = cl_vectors[src_batch] # (B,C,H,W)
                 alignment.comms_dict["trg_idx"] = trg_idx
 
                 with torch.no_grad():
@@ -563,16 +570,15 @@ def evaluate_mas_alignment(
                 cl_loss = torch.zeros(1).to(device)
                 if cl_directions is not None\
                         and (src_idx,trg_idx) in cl_directions:
-                    if cl_vectors is None:
+                    if cl_method == "same_as_target":
+                        cl_vectors = trg_data["actvs"][src_batch] # (B,C,H,W)
+                    elif cl_vectors is None:
                         cl_vectors = get_cl_vectors(
                             activations=trg_data["actvs"],
                             probs=trg_data["logits"].softmax(dim=-1),
                             method=cl_method,
                             src_probs=src_logits.softmax(dim=-1),
                         )
-                        if cl_vectors.shape[0]!=len(src_labels):
-                            cl_vectors = cl_vectors[src_labels]
-                    else:
                         cl_vectors = cl_vectors[src_labels] # (B,C,H,W)
                     intrv_vectors = alignment.comms_dict["intrv_vectors"].to(device)
                     cl_loss = cl_loss_fxn(intrv_vectors, cl_vectors.to(device))

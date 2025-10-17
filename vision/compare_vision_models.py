@@ -37,7 +37,7 @@ from vis_training import (
 )
 import torch
 from torchvision import datasets
-from alignment import MASAlignment
+from alignment import MASAlignment, ModelStitch
 from hooks import hook_vision_model
 import torch.optim as optim
 import numpy as np
@@ -230,6 +230,18 @@ def compare_models(config):
                 torch.save(actvs_train, actvs_name)
                 torch.save(actvs_valid, actvs_name.replace("train", "valid"))
     
+    if config.get("debug", False):
+        os.makedirs("figs", exist_ok=True)
+        plt.imshow(actvs_train_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
+        plt.savefig("figs/input_0.png", dpi=600)
+        plt.imshow(actvs_train_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
+        plt.savefig("figs/input_1.png", dpi=600)
+
+        plt.imshow(actvs_valid_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
+        plt.savefig("figs/input_0_valid.png", dpi=600)
+        plt.imshow(actvs_valid_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
+        plt.savefig("figs/input_1_valid.png", dpi=600)
+    
 
     ####################################################
     #    Instantiate the MAS alignment object
@@ -272,7 +284,10 @@ def compare_models(config):
         else:
             model_dims.append(actvs_train_sets[i]["actvs"].shape[1])
     print("Using Model Dims:", model_dims)
-    alignment = MASAlignment(
+    alignment_class = MASAlignment
+    if config["model_stitch"] and config.get("direct_mapping", False):
+        alignment_class = ModelStitch
+    alignment = alignment_class(
         model_dims=model_dims,
         mtx_type=mtx_type,
         subspace_sizes=subspace_size,
@@ -280,6 +295,7 @@ def compare_models(config):
         batch_norm=batch_norm,
         identity_rot=identity_rot,
         dtype=config.get("mas_dtype", next(models[0].parameters()).dtype),
+        same_matrix=config["same_matrix"],
     )
     
     # We need to hook the models in order to perform the patching intervention
@@ -374,8 +390,8 @@ def compare_models(config):
                 "|| Loss:", round(np.max(valid["valid_actn_loss"]), 5)
             )
         except KeyboardInterrupt:
-            print("Interrupted training, continuing...")
-            pass
+            print("Interrupted training, exiting...")
+            break
     
     
     train_df = pd.concat(train_dfs)
@@ -392,7 +408,11 @@ def compare_models(config):
     m1 = m1+layer_names[0].replace("backbone", "").replace(".", "-")
     m2 = model_names[1].replace("/", "_")
     m2 = m2+layer_names[1].replace("backbone", "").replace(".", "-")
-    main_df.to_csv(f"csvs/{m1}_{m2}_mas_{timestamp}.csv", index=False, header=True)
+    csv_name = f"{m1}_{m2}_{dataset_name}_mas_{timestamp}.csv"
+    main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
+    config_name = csv_name.replace(".csv", ".yaml")
+    save_yaml(config, f"csvs/{config_name}")
+    print(f"Saved results to {csv_name}")
     
     
     if not config["make_figs"]:
@@ -489,11 +509,16 @@ default_config = {
         # perform model stitching in stead of MAS, where model stitching
         # is performed in one direction, always using the first model as
         # the source and the second model as the target.
+    "same_matrix": False, # If true, will use the same matrix for all models.
+        # Only applies to model stitching, not MAS. Can only use two models.
+        # Will use the inverse of the matrix for the second model when intervening.
     "latent_model_stitch": False, # If true and model_stitch is true,
         # will change the training settings to
         # perform latent model stitching in stead of MAS, where latent model
         # stitching is performed in both directions. model_stitch must be true
         # for this to take effect.
+    "direct_mapping": False, # If true will use a ModelStitch object
+        # instead of MASAlignment. Only applies if model_stitch is true.
 
     "dataset_name": "cifar10",
     "model_names": [
@@ -521,6 +546,8 @@ default_config = {
     "normalize": False,
     "batch_norm": True, # applies invertible batch norm to the activations
         # before the transformation matrix
+    "post_batch_norm": False, # applies invertible batch norm to the activations
+        # after the transformation matrix. Mainly useful for model stitching.
     "identity_rot": False, # uses the identity rotation matrix (only use for debugging)
     "debug": False, # if True, will use the first model for all models
     "debug_mode": "",
@@ -556,7 +583,13 @@ default_config = {
         # affect the normal loss other than that it will be added to the
         # normal loss
     "cl_method": "sample", # determines how the CL vectors are generated.
-        # choices: sample, mean, most_similar
+        # choices:
+        #   "sample": sample a random activation for each class
+        #   "mean": take the mean of the activations for each class
+        #   "most_similar": take the activations with the highest similarity
+        #     to the source class probabilities
+        #   "same_as_target": use the target model's activations created
+        #     under the same inputs as the source model
     "cl_causal_dims_only": False, # if True, will only use the causal dimensions
         # for the CL loss.
 }
@@ -568,6 +601,7 @@ def prepare_config(config):
         if config["latent_model_stitch"]:
             config["train_directions"] = []
             config["cl_directions"] = [(0,1),(1,0)]
+            config["cl_method"] = "same_as_target"
         else:
             config["train_directions"] = [(0,1)]
     return config

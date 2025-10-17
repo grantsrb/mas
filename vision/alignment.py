@@ -1,5 +1,5 @@
 import copy
-
+import math
 import torch
 import torch.nn.functional as F
 
@@ -25,6 +25,7 @@ class RotationMatrix(torch.nn.Module):
             nonlin_align_fn=None,
             normalize=False,
             batch_norm=False,
+            post_batch_norm=False,
             dtype=None,
             **kwargs):
         """
@@ -50,6 +51,9 @@ class RotationMatrix(torch.nn.Module):
         batch_norm: bool
             if true, will learn batch normalization parameters for the
             activations before the rotation matrix.
+        post_batch_norm: bool
+            if true, will apply a batch normalization after the rotation
+            matrix.
         """
         super().__init__()
         self.identity_rot = identity_rot
@@ -73,6 +77,11 @@ class RotationMatrix(torch.nn.Module):
             self.bn = InvertibleBatchNorm1d(size)
         else:
             self.bn = IdentityModule()
+        if post_batch_norm:
+            self.post_bn = InvertibleBatchNorm1d(size)
+        else:
+            self.post_bn = IdentityModule()
+
 
         lin = torch.nn.Linear(size, size, bias=False)
         if identity_init:
@@ -186,9 +195,12 @@ class RotationMatrix(torch.nn.Module):
         h = self.nonlin_fwd(h)
         h = (h-self.mu)/torch.abs(self.sigma+1e-8)
         h = self.bn(h)
-        return torch.matmul(h+self.bias, self.weight)
+        h = torch.matmul(h+self.bias, self.weight)
+        h = self.post_bn(h)
+        return h
 
     def rot_inv(self, h):
+        h = self.post_bn.inv(h)
         h = torch.matmul(h, self.weight_inv)-self.bias
         h = self.bn.inv(h)
         h = h*torch.abs(self.sigma+1e-8) + self.mu
@@ -355,6 +367,44 @@ class SDRotationMatrix(PSDRotationMatrix):
         self.rot_module = SymmetricDefiniteMatrix(
             size=size,
             identity_init=identity_init)
+
+class LinearMatrix(RotationMatrix):
+    """
+    Creates a linear matrix
+    """
+    def __init__(self,
+            size,
+            identity_init=False,
+            **kwargs):
+        """
+        size: int
+            the height and width of the rotation matrix
+        identity_init: bool
+            if true, will initialize the rotation matrix to the identity
+            matrix.
+        bias: bool
+            if true, will include a shifting term in the rotation matrix
+        """
+        super().__init__(size=size, **kwargs)
+        self.rot_module = torch.nn.Linear(size, size, bias=False)
+        if identity_init:
+            self.rot_module.weight.data = torch.eye(
+              size,
+              dtype=self.rot_module.weight.data.dtype,
+              device=device_fxn(self.rot_module.weight.get_device()),
+            )
+        else:
+            self.rot_module.weight.data = torch.randn(size, size)/math.sqrt(size)
+
+    @property
+    def weight_inv(self):
+        if self.identity_rot:
+            return torch.eye(
+              self.size,
+              dtype=self.rot_module.weight.data.dtype,
+              device=device_fxn(self.rot_module.weight.get_device()),
+            )
+        return torch.linalg.inv(self.rot_module.weight)
 
 class RevResnetRotation(torch.nn.Module):
     """
@@ -681,80 +731,9 @@ class ZeroMask(Mask):
             swapped[...,:masked_src.shape[-1]] += masked_src
         return swapped
 
-class MASAlignment(torch.nn.Module):
-    def __init__(self,
-            model_dims,
-            mtx_type="orthogonal",
-            subspace_sizes=None,
-            mtx_kwargs=None,
-            mask_type="FixedMask", 
-            mask_kwargs=None,
-            dtype=None,
-            *args, **kwargs):
-        """
-        Args:
-            model_dims: list of ints
-                the sizes of the distributed vectors for each matrix. The
-                length of this list defines the number of models to align.
-            mtx_type: str
-                options are: "orthogonal", "linear", and "revresnet".
-            mtx_kwargs: dict
-                the key word arguments to pass to each matrix instantiation
-            mask_type: str
-                the type of mask for doing the substitution
-            mask_kargs: dict
-                keyword arguments for the mask object
-            subspace_sizes: int or list of ints
-                Determines the number of units to swap in the intervention.
-                If a list of ints, will use to determine the size of each
-                subspace for n_subspaces-1. The last subspace always takes
-                the size of the remaining neurons (0 is a possible size).
-            dtype: torch.dtype
-                the dtype to use for the alignment module. If None, will use
-                float32
-        """
+class AlignmentModule(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        self.model_dims = model_dims
-        self.dtype = dtype
-        if self.dtype is None:
-            self.dtype = torch.float32
-        self.n_models = len(self.model_dims)
-        if mask_kwargs is None:
-            mask_kwargs = {}
-        if subspace_sizes is None:
-            subspace_sizes = [int(max(self.model_dims))]
-        if type(subspace_sizes)==int:
-            subspace_sizes = [subspace_sizes]
-
-        print(f"Using subspace sizes: {subspace_sizes}")
-
-        # Make the swap masks
-        mask_kwargs["subspace_sizes"] = subspace_sizes
-        mask_kwargs["size"] = max(self.model_dims)
-        mask_kwargs["dtype"] = self.dtype
-        self.swap_mask = globals()[mask_type](**mask_kwargs)
-
-        # Make the rotation matrices
-        self.rot_mtxs = torch.nn.ModuleList([])
-        if mtx_type=="orthogonal":
-            mtx_class = RotationMatrix
-        elif mtx_type=="linear":
-            mtx_class = SDRotationMatrix
-        elif mtx_type=="positive_linear":
-            mtx_class = PSDRotationMatrix
-        elif mtx_type=="revresnet":
-            mtx_class = RevResnetRotation
-        else:
-            raise ValueError(f"Invalid mtx_type: {mtx_type}")
-        if mtx_kwargs is None:
-            mtx_kwargs = {**kwargs}
-        for si,size in enumerate(self.model_dims):
-            if type(mtx_kwargs)==list:
-                mkwargs = mtx_kwargs[si]
-            else:
-                mkwargs = mtx_kwargs
-            mkwargs["dtype"] = self.dtype
-            self.rot_mtxs.append(mtx_class(size=size, **mkwargs))
 
     def set_normalization_params(self, midx, mu=None, sigma=None):
         """
@@ -808,6 +787,83 @@ class MASAlignment(torch.nn.Module):
             if hasattr(mtx, "reset"):
                 mtx.reset()
 
+
+class MASAlignment(AlignmentModule):
+    def __init__(self,
+            model_dims,
+            mtx_type="orthogonal",
+            subspace_sizes=None,
+            mtx_kwargs=None,
+            mask_type="FixedMask", 
+            mask_kwargs=None,
+            dtype=None,
+            *args, **kwargs):
+        """
+        Args:
+            model_dims: list of ints
+                the sizes of the distributed vectors for each matrix. The
+                length of this list defines the number of models to align.
+            mtx_type: str
+                options are: "orthogonal", "symmetric_definite",
+                "positive_symmetric_definite", and "revresnet".
+            mtx_kwargs: dict
+                the key word arguments to pass to each matrix instantiation
+            mask_type: str
+                the type of mask for doing the substitution
+            mask_kargs: dict
+                keyword arguments for the mask object
+            subspace_sizes: int or list of ints
+                Determines the number of units to swap in the intervention.
+                If a list of ints, will use to determine the size of each
+                subspace for n_subspaces-1. The last subspace always takes
+                the size of the remaining neurons (0 is a possible size).
+            dtype: torch.dtype
+                the dtype to use for the alignment module. If None, will use
+                float32
+        """
+        super().__init__()
+        self.model_dims = model_dims
+        self.dtype = dtype
+        if self.dtype is None:
+            self.dtype = torch.float32
+        self.n_models = len(self.model_dims)
+        if mask_kwargs is None:
+            mask_kwargs = {}
+        if subspace_sizes is None:
+            subspace_sizes = [int(max(self.model_dims))]
+        if type(subspace_sizes)==int:
+            subspace_sizes = [subspace_sizes]
+
+        print(f"Using subspace sizes: {subspace_sizes}")
+
+        # Make the swap masks
+        mask_kwargs["subspace_sizes"] = subspace_sizes
+        mask_kwargs["size"] = max(self.model_dims)
+        mask_kwargs["dtype"] = self.dtype
+        self.swap_mask = globals()[mask_type](**mask_kwargs)
+
+        # Make the rotation matrices
+        self.rot_mtxs = torch.nn.ModuleList([])
+        if mtx_type=="orthogonal":
+            mtx_class = RotationMatrix
+        elif mtx_type=="symmetric_definite":
+            mtx_class = SDRotationMatrix
+        elif mtx_type=="positive_symmetric_definite":
+            mtx_class = PSDRotationMatrix
+        elif mtx_type=="revresnet":
+            mtx_class = RevResnetRotation
+        else:
+            raise ValueError(f"Invalid mtx_type: {mtx_type}")
+        if mtx_kwargs is None:
+            mtx_kwargs = {**kwargs}
+        for si,size in enumerate(self.model_dims):
+            if type(mtx_kwargs)==list:
+                mkwargs = mtx_kwargs[si]
+            else:
+                mkwargs = mtx_kwargs
+            mkwargs["dtype"] = self.dtype
+            self.rot_mtxs.append(mtx_class(size=size, **mkwargs))
+
     def forward(self,
             target,
             source,
@@ -852,6 +908,108 @@ class MASAlignment(torch.nn.Module):
         new_h = trg_mtx(rot_swapped, inverse=True)
         return new_h.to(og_dtype)
     
+    
+class ModelStitch(AlignmentModule):
+    def __init__(self,
+            model_dims,
+            mtx_type="linear",
+            mtx_kwargs=None,
+            dtype=None,
+            same_matrix=False,
+            *args, **kwargs):
+        """
+        Args:
+            model_dims: list of ints
+                the sizes of the distributed vectors for each matrix. The
+                length of this list defines the number of models to align.
+            mtx_type: str
+                options are: "orthogonal", "linear", "revresnet", "symmetric_definite",
+                "positive_symmetric_definite".
+            mtx_kwargs: dict
+                the key word arguments to pass to each matrix instantiation
+            same_matrix: bool
+                if true, will use the same matrix for all models. Must only
+                have two models and cannot use linear matrices.
+            dtype: torch.dtype
+                the dtype to use for the alignment module. If None, will use
+                float32
+        """
+        super().__init__()
+        self.model_dims = model_dims
+        self.dtype = dtype
+        self.same_matrix = same_matrix
+        if self.dtype is None:
+            self.dtype = torch.float32
+        self.n_models = len(self.model_dims)
+
+        # Make the swap masks
+        self.swap_mask = FixedMask(
+            subspace_sizes=[max(self.model_dims)],
+            size=max(self.model_dims),
+            dtype=self.dtype,
+        )
+
+        # Make the rotation matrices
+        self.rot_mtxs = torch.nn.ModuleList([])
+        if mtx_type=="orthogonal":
+            mtx_class = RotationMatrix
+        elif mtx_type=="linear":
+            assert not same_matrix, "Cannot use same matrix for all models with linear matrices."
+            assert self.n_models==2, "Linear matrices must have two models."
+            mtx_class = LinearMatrix
+        elif mtx_type=="symmetric_definite":
+            mtx_class = SDRotationMatrix
+        elif mtx_type=="positive_symmetric_definite":
+            mtx_class = PSDRotationMatrix
+        elif mtx_type=="revresnet":
+            mtx_class = RevResnetRotation
+        else:
+            raise ValueError(f"Invalid mtx_type: {mtx_type}")
+        if mtx_kwargs is None:
+            mtx_kwargs = {**kwargs}
+        for si,size in enumerate(self.model_dims):
+            if type(mtx_kwargs)==list:
+                mkwargs = mtx_kwargs[si]
+            else:
+                mkwargs = mtx_kwargs
+            mkwargs["dtype"] = self.dtype
+            if self.same_matrix and si==1:
+                self.rot_mtxs[1] = self.rot_mtxs[0]
+            else:
+                self.rot_mtxs.append(mtx_class(size=size, **mkwargs))
+
+    def forward(self,
+            target,
+            source,
+            target_idx=0,
+            source_idx=-1,
+            *args, **kwargs
+        ):
+        """
+        target: torch tensor (B,H)
+            the vector that will receive new neurons
+        source: torch tensor (B,H)
+            the vector that will give neurons
+        target_idx: int
+            the index of the target rotation matrix
+        source_idx: int
+            the index of the source rotation matrix
+
+        Returns:
+            new_h: torch tensor (B,H)
+                the causally interchanged vector
+        """
+        og_dtype = source.dtype
+        source = source.to(self.dtype)
+
+        src_mtx = self.rot_mtxs[source_idx]
+
+        if self.same_matrix and source_idx==1:
+            rot_src_h = src_mtx(source, inverse=True)
+        else:
+            rot_src_h = src_mtx(source)
+
+        return rot_src_h.to(og_dtype)
     
 def solve_for_orthogonal_param(
         rot_module,
