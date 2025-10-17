@@ -1,3 +1,5 @@
 configs/*
 make_models/*
 scripts/*
+*/csvs/*
+*/figs/*

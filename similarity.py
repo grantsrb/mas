@@ -85,7 +85,15 @@ def compute_CKA(K, L):
     LL = compute_HSIC(L,L)
     return KL/torch.sqrt(KK*LL)
 
-def get_cka(X, X2, batch_size=None, n_runs=1, sim_metric="cosine", prenorm=True):
+def get_cka(
+        X, X2,
+        batch_size=None,
+        n_runs=1,
+        sim_metric="cosine",
+        prenorm=True,
+        to_numpy=True,
+        to_cpu=False,
+):
     """
     X: torch tensor (B,N)
     X2: torch tensor (B,M)
@@ -93,16 +101,22 @@ def get_cka(X, X2, batch_size=None, n_runs=1, sim_metric="cosine", prenorm=True)
         "l2" or "cosine"
     prenorm: bool
         if true will normalize each neuron over the B dim
+    to_numpy: bool
+        if true, the CKA is returned as a numpy array
+    to_cpu: bool
+        if true, the CKA is returned on the cpu
     """
-    cors = []
+    ckas = []
     device = device_fxn(X.get_device())
     for run in tqdm(range(n_runs)):
         if batch_size is not None:
             perm = torch.randperm(len(X)).long().to(device)[:batch_size]
+            x1 = X[perm]
+            x2 = X2[perm]
         else:
-            perm = torch.arange(len(X)).long().to(device)
-        x1 = X[perm]
-        x2 = X2[perm]
+            x1 = X
+            x2 = X2
+
         if prenorm:
             x1 = (x1-x1.mean(0))/x1.std(0)
             x2 = (x2-x2.mean(0))/x2.std(0)
@@ -115,9 +129,13 @@ def get_cka(X, X2, batch_size=None, n_runs=1, sim_metric="cosine", prenorm=True)
         else:
             mtx1 = get_l2_rdm(x1)
             mtx2 = get_l2_rdm(x2)
-        cka = compute_CKA(mtx1, mtx2).cpu().data.numpy()
-        cors.append(cka)
-    return np.mean(cors)
+        cka = compute_CKA(mtx1, mtx2)
+        if to_cpu:
+            cka = cka.cpu()
+        ckas.append(cka)
+    if to_numpy:
+        return np.mean([c.cpu().data.numpy() for c in ckas])
+    return torch.mean(ckas)
 
 def get_rsa(X,X2, batch_size=None, n_runs=1, sim_metric="cosine", cor_type="spearmanr", prenorm=False):
     """
