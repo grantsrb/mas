@@ -12,7 +12,9 @@ from torchvision import datasets
 from torch.utils.data import DataLoader
 import pandas as pd
 from hooks import hook_model_layer
+from vis_utils import mtx_cor
 from vis_similarity import get_cka
+from alignment import MASAlignment
 
 def device_fxn(device):
     if type(device)==int and device<0:
@@ -33,9 +35,14 @@ def get_model_and_processor(model_name, pretrained=True):
     """
     model = AutoModel.from_pretrained(model_name)
     if not pretrained:
-        for p in model.parameters():
-            fan_in = p.data.shape[0]
-            p.data = torch.randn_like(p.data) * (2/fan_in)**0.5
+        for name,modu in model.named_modules():
+            if "Linear" in str(type(modu)) or "Conv" in str(type(modu)) or "Embedding" in str(type(modu)):
+                for pname,p in modu.named_parameters():
+                    if pname in {"bias"}:
+                        p.data = torch.zeros_like(p.data)
+                    else:
+                        fan_in = p.data.shape[0]
+                        p.data = torch.randn_like(p.data) * (2/fan_in)**0.5
     processor = AutoImageProcessor.from_pretrained(
         model_name, use_fast=True,
     )
@@ -341,9 +348,14 @@ def get_cl_vectors(activations, probs, method="mean", src_probs=None):
         raise ValueError(f"Invalid CL method: {method}")
     return cl_vectors
 
-def cl_loss_fxn(intrv_vectors, cl_vectors):
-    return F.mse_loss(intrv_vectors, cl_vectors)\
-        - F.cosine_similarity(intrv_vectors, cl_vectors, dim=-1).mean()
+def cl_loss_fxn(intrv_vectors, cl_vectors, loss_type="both"):
+    mse = 0
+    cos = 0
+    if loss_type in {"mse", "both"}:
+        mse = F.mse_loss(intrv_vectors, cl_vectors)
+    if loss_type in {"cos", "both"}:
+        cos = 1-F.cosine_similarity(intrv_vectors, cl_vectors, dim=-1).mean()
+    return mse + cos
 
 def extract_logits(outputs):
     logits = outputs
@@ -373,11 +385,46 @@ def train_mas_alignment_one_epoch(
         batches_per_optim_step=1,
         cl_directions=None,
         cl_eps=1,
-        cl_method="sample",
+        cl_method="sample", # {"mean", "sample", "most_similar", "same_as_target"}
+        cl_loss_type="both", # {"mse", "cos", "both"}
         label_smoothing=0.0,
         use_ground_truth_labels=False,
+        use_trg_labels=False,
         debug=False,
 ):
+    """
+    Args:
+        models: list of models
+        alignment: MASAlignment object
+        actvs_sets: list of actvs sets
+        batch_size: batch size
+        optimizer: optimizer
+        varb_idx: variable index
+        verbose: bool
+        one_hot_loss: bool
+        use_ground_truth_labels: bool
+            use the ground truth labels for the training objective (as
+            opposed to the model predictions)
+        use_trg_labels: bool
+            use the target model labels for the training objective (as
+            opposed to the source model predictions). Be careful combining
+            this with low dimensional subspace sizes. It is possible to
+            learn a trivial/null alignment where the target model simply
+            passes its representations through the alignment module.
+        debug: bool
+        train_directions: list of tuples
+        batches_per_optim_step: int
+        cl_directions: list of tuples
+        cl_eps: float
+        cl_method: str
+        cl_loss_type: str
+        label_smoothing: float
+
+    Returns:
+        df: pandas DataFrame
+            the dataframe containing the loss and accuracy for each model
+            and each variable index
+    """
     device = next(alignment.parameters()).device
     models = [model.to(device) for model in models]
     models = [model.eval() for model in models]
@@ -387,6 +434,7 @@ def train_mas_alignment_one_epoch(
     df_dict["actn_loss"] = []
     df_dict["cl_loss"] = []
     df_dict["acc"] = []
+    df_dict["penalty"] = []
     df_dict["trg_idx"] = []
     df_dict["src_idx"] = []
     df_dict["varb_idx"] = []
@@ -405,6 +453,7 @@ def train_mas_alignment_one_epoch(
         src_batch = src_perm[batch_idx:batch_idx+batch_size]
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
         accs = dict()
+        penalties = dict()
         cl_losses = dict()
         actn_losses = dict()
         for src_idx in range(len(models)):
@@ -417,19 +466,32 @@ def train_mas_alignment_one_epoch(
             alignment.comms_dict["src_idx"] = src_idx
             for trg_idx in range(len(models)):
                 trg_data = actvs_sets[trg_idx]
+                if use_trg_labels:
+                    src_logits = trg_data["logits"][src_batch]
+                    src_preds =  trg_data["preds"][src_batch]
+                    src_labels = trg_data[label_key][src_batch]
                 trg_inputs = trg_data["inputs"][trg_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
                 if cl_vectors is not None:
                     cl_vectors = cl_vectors[src_batch] # (B,C,H,W)
                 alignment.comms_dict["trg_idx"] = trg_idx
 
-                if train_directions is not None and (src_idx,trg_idx) not in train_directions:
+                prev_grad_state = torch.is_grad_enabled()
+                do_train_loss = train_directions is None or (src_idx,trg_idx) in train_directions
+                do_cl_loss = cl_directions is not None and (src_idx,trg_idx) in cl_directions
+                if not do_train_loss:
                     with torch.no_grad():
+                        alignment.comms_dict["req_grad"] = do_cl_loss
                         outputs = models[trg_idx](trg_inputs.to(device))
+                        alignment.comms_dict["req_grad"] = None
+                    torch.set_grad_enabled(prev_grad_state)
                 else:
+                    alignment.comms_dict["req_grad"] = None
                     outputs = models[trg_idx](trg_inputs.to(device))
                 logits = extract_logits(outputs)
-                
+
+                if not do_train_loss:
+                    torch.set_grad_enabled(False)
                 if one_hot_loss:
                     if label_smoothing > 0:
                         actn_loss = nn.functional.cross_entropy(
@@ -443,10 +505,10 @@ def train_mas_alignment_one_epoch(
                     actn_loss = nn.functional.cross_entropy(
                         logits, src_logits.to(device).softmax(dim=-1)
                     ).mean()
+                torch.set_grad_enabled(prev_grad_state)
 
                 cl_loss = torch.zeros(1).to(device)
-                if cl_directions is not None\
-                        and (src_idx,trg_idx) in cl_directions:
+                if do_cl_loss:
                     if cl_method == "same_as_target":
                         cl_vectors = trg_data["actvs"][src_batch] # (B,C,H,W)
                     elif cl_vectors is None:
@@ -458,14 +520,18 @@ def train_mas_alignment_one_epoch(
                         )
                         cl_vectors = cl_vectors[src_labels] # (B,C,H,W)
                     intrv_vectors = alignment.comms_dict["intrv_vectors"].to(device)
-                    cl_loss = cl_loss_fxn(intrv_vectors, cl_vectors.to(device))
+                    cl_loss = cl_loss_fxn(
+                        intrv_vectors, cl_vectors.to(device), loss_type=cl_loss_type
+                    )
 
                 loss = (actn_loss+cl_eps*cl_loss)/len(models)**2
                 if loss.requires_grad:
                     loss.backward()
                 
-                acc = (logits.argmax(dim=-1) == src_preds.to(device)).float().mean()
-                accs[(src_idx,trg_idx)] = acc.item()
+                acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
+                accs[(src_idx,trg_idx)] = acc
+                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean()
+                penalties[(src_idx,trg_idx)] = (src_acc-acc).item()
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -477,6 +543,7 @@ def train_mas_alignment_one_epoch(
             n_batches = len(actvs_sets[0]['inputs'])
             print(f"Batch {batch_idx}/{n_batches}",
                 "IIA:", min(accs.values()),
+                "Penalty:", min(penalties.values()),
                 "Loss:", max(actn_losses.values()),
                 "Time:", end_time - start_time,
                 end=" "*50+"\r"
@@ -490,6 +557,7 @@ def train_mas_alignment_one_epoch(
             df_dict["src_idx"].append(src_idx)
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
+            df_dict["penalty"].append(penalties[(src_idx,trg_idx)])
         if debug and batch_idx>batch_size:
             return pd.DataFrame(df_dict)
     if batch_idx//batch_size % batches_per_optim_step != 0:
@@ -508,6 +576,7 @@ def evaluate_mas_alignment(
         cl_directions=None,
         cl_eps=1,
         cl_method="sample",
+        use_trg_labels=False,
         verbose=True,
         debug=False,
 ):
@@ -522,6 +591,7 @@ def evaluate_mas_alignment(
         label_key = "preds"
 
     df_dict = dict()
+    df_dict["penalty"] = []
     df_dict["actn_loss"] = []
     df_dict["cl_loss"] = []
     df_dict["acc"] = []
@@ -536,6 +606,7 @@ def evaluate_mas_alignment(
         src_batch = src_perm[batch_idx:batch_idx+batch_size]
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
         accs = dict()
+        penalties = dict()
         cl_losses = dict()
         actn_losses = dict()
         for src_idx in range(len(models)):
@@ -549,6 +620,10 @@ def evaluate_mas_alignment(
             for trg_idx in range(len(models)):
                 trg_data = actvs_sets[trg_idx]
                 trg_inputs = trg_data["inputs"][trg_batch]
+                if use_trg_labels:
+                    src_logits = trg_data["logits"][src_batch]
+                    src_preds = trg_data["preds"][src_batch]
+                    src_labels = trg_data[label_key][src_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (n_classes,C,H,W)
                 if cl_vectors is not None:
                     cl_vectors = cl_vectors[src_batch] # (B,C,H,W)
@@ -585,8 +660,10 @@ def evaluate_mas_alignment(
 
                 loss = (actn_loss+cl_eps*cl_loss)/len(models)**2
                 
-                acc = (logits.argmax(dim=-1) == src_preds.to(device)).float().mean()
-                accs[(src_idx,trg_idx)] = acc.item()
+                acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
+                accs[(src_idx,trg_idx)] = acc
+                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean()
+                penalties[(src_idx,trg_idx)] = (src_acc-acc).item()
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -594,6 +671,7 @@ def evaluate_mas_alignment(
             n_batches = len(actvs_sets[0]['inputs'])
             print(f"Batch {batch_idx}/{n_batches}",
                 "IIA:", min(accs.values()),
+                "Penalty:", min(penalties.values()),
                 "Loss:", max(actn_losses.values()),
                 end=" "*50+"\r"
             )
@@ -606,6 +684,7 @@ def evaluate_mas_alignment(
             df_dict["src_idx"].append(src_idx)
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
+            df_dict["penalty"].append(penalties[(src_idx,trg_idx)])
         if debug and batch_idx>batch_size:
             return pd.DataFrame(df_dict)
     return pd.DataFrame(df_dict)
@@ -705,3 +784,198 @@ def minimize_cka_one_epoch(
         [torch.stack(actn_loss) for actn_loss in actn_losses],\
         torch.stack(ckas)
 
+def orthogonal_procrustes(
+    X, Y, center=True, scale=False, allow_reflection=True, batch_size=1000, verbose=True
+):
+    """
+    Solve the (weighted) orthogonal Procrustes problem:
+        minimize_R,t,s  || s * (X - mu_X) R - (Y - mu_Y) ||_F^2
+    subject to R^T R = I, and (optionally) det(R)=+1 if allow_reflection=False.
+    
+    Args:
+        X : torch tensor (N, D)
+            Source points (rows = samples, columns = dimensions).
+        Y : torch tensor (N, D)
+            Target points, paired to X by row.
+        center : bool, default True
+            If True, estimate and remove means before solving and return translation t.
+            If False, solve for R (and optional s) with no translation term.
+        scale : bool, default False
+            If True, also estimate a global scalar s >= 0 that minimizes the error.
+        allow_reflection : bool, default False
+            If False, constrain det(R)=1 (proper rotation). If True, R may reflect.
+        batch_size: int, default 1000
+            Batch size for the matrix correlation calculation.
+
+    Returns:
+        R: torch tensor (D, D)
+            Orthogonal matrix (rotation/reflection).
+        t: torch tensor (D,)
+            Translation vector such that Y ≈ s * X R + t. If center=False, t is zeros.
+        s: float
+            Scale (1.0 if scale=False).
+        info: dict
+            Diagnostics including 'residual', 'detR', 'fro_error', and 'trace_sigma'.
+    """
+    X = X.to(torch.float)
+    Y = Y.to(torch.float)
+    assert X.shape == Y.shape and X.ndim == 2, "X and Y must be (N,D) with same shape."
+    N, D = X.shape
+
+    # Means (weighted or not)
+    if center:
+        mu_X = X.mean(dim=0)
+        mu_Y = Y.mean(dim=0)
+    else:
+        mu_X = torch.zeros(D)
+        mu_Y = torch.zeros(D)
+
+    # Centered copies used for solving R (and s)
+    X = X - mu_X
+    Y = Y - mu_Y
+    X0 = X
+    Y0 = Y
+
+    # Cross-covariance (D x D): we solve min_R ||X0 R - Y0||, so C = X0^T Y0
+    if batch_size is not None:
+        C = mtx_cor(
+            X0, Y0,
+            zscore=False,
+            scale=False,
+            to_numpy=False,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+    else:
+        C = X0.T @ Y0
+
+    # SVD of cross-covariance
+    U, S, Vt = torch.linalg.svd(C, full_matrices=False)
+    # Base solution
+    R = U @ Vt
+
+    # Enforce det(R)=1 if requested (no reflection)
+    detR = torch.linalg.det(R)
+    if not allow_reflection and detR < 0:
+        # Flip last column of U to change sign of det
+        U[:, -1] *= -1
+        R = U @ Vt
+        detR = torch.linalg.det(R)  # should now be +1
+
+    # Optional optimal global scale
+    if scale:
+        # For min || s X0 R - Y0 ||, s* = trace(S) / ||X0||_F^2 (with weights handled above)
+        num = S.sum()
+        den = (X0 * X0).sum()  # ||X0||_F^2 with weights
+        s = (num / den) if den > 0 else 1.0
+    else:
+        s = 1.0
+
+    # Diagnostics
+    Y_hat = s * (X @ R)
+    fro_error = torch.linalg.norm(Y_hat - Y, ord='fro')
+    info = {
+        "R": R,
+        "singular_values": S,
+        "left_matrix": U,
+        "right_matrix": Vt,
+        "s": float(s),
+        "residual": Y_hat - Y,
+        "fro_error": fro_error,
+        "detR": detR,
+        "trace_sigma": float(S.sum()),
+        "mu_X": mu_X,
+        "mu_Y": mu_Y,
+    }
+    return info
+
+def solve_alignment_procrustes(
+        X, Y,
+        center=True,
+        scale=False,
+        allow_reflection=True,
+        n_samples=None,
+        batch_size=1000,
+        verbose=True,
+):
+    """
+    Solve the alignment analytically using orthogonal procrustes.
+
+    Args:
+        alignment: MASAlignment
+        X: torch tensor (N,D) or (B,C,H,W) or (B,S,D)
+            Source points (rows = samples, columns = dimensions).
+        Y: torch tensor (N,D) or (B,C,H,W) or (B,S,D)
+            Target points, paired to X by row.
+        center: bool, default True
+        n_samples: int, default None
+            Number of samples to use for the alignment. If None, will use all samples.
+        verbose: bool, default True
+            Whether to print verbose output.
+    Returns:
+        alignment: MASAlignment
+            The aligned alignment object.
+    """
+    if len(X.shape)==4:
+        X = X.permute(0, 2, 3, 1)
+    if len(Y.shape)==4:
+        Y = Y.permute(0, 2, 3, 1)
+    D = X.shape[-1]
+    X = X.reshape(-1,D)
+    Y = Y.reshape(-1,D)
+    if n_samples is not None:
+        perm = torch.randperm(len(X))[:n_samples].long()
+        X = X[perm]
+        Y = Y[perm]
+
+    alignment = MASAlignment(
+        model_dims=[D, D],
+        mtx_type="linear",
+        dtype=X.dtype,
+    )
+
+    soln = orthogonal_procrustes(
+        X, Y,
+        center=center,
+        scale=scale,
+        allow_reflection=allow_reflection,
+        batch_size=batch_size,
+        verbose=verbose,
+    )
+    if verbose:
+        print(f"Solved alignment using orthogonal procrustes")
+    alignment.rot_mtxs[0].weight.data = soln["left_matrix"]*soln["s"]
+    alignment.rot_mtxs[0].set_normalization_params(mu=soln["mu_X"])
+    alignment.rot_mtxs[1].weight.data = soln["right_matrix"].T
+    alignment.rot_mtxs[1].set_normalization_params(mu=soln["mu_Y"])
+    return alignment
+
+# -------------------------
+# Minimal usage examples
+# -------------------------
+if __name__ == "__main__":
+    rng = np.random.default_rng(0)
+    N, D = 200, 5
+
+    # Ground-truth transform
+    A = rng.standard_normal((D, D))
+    Q, _ = np.linalg.qr(A)  # random orthogonal
+    s_true = 1.7
+    t_true = rng.standard_normal(D)
+
+    # Paired data
+    X = rng.standard_normal((N, D))
+    Y = s_true * (X @ Q) + t_true
+
+    # Recover (rotation only)
+    R1, t1, s1, info1 = orthogonal_procrustes(X, Y, center=True, scale=False)
+    # Recover (similarity: scale + rotation + translation)
+    R2, t2, s2, info2 = orthogonal_procrustes(X, Y, center=True, scale=True)
+
+    print("Rotation-only  det(R):", np.linalg.det(R1))
+    print("Rotation-only  |t|   :", np.linalg.norm(t1))
+    print("Similarity     det(R):", np.linalg.det(R2))
+    print("Recovered scale s2   :", s2, " (true:", s_true, ")")
+    print("Rotation error (||R - Q||_F):", np.linalg.norm(R2 - Q, "fro"))
+    print("Translation error (||t - t_true||):", np.linalg.norm(t2 - t_true))
+    print("Frobenius fit error:", info2["fro_error"])

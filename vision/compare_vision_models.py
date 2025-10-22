@@ -33,11 +33,11 @@ from vis_training import (
     get_model_and_processor, train_model, get_dataloaders,
     get_actvs_data, get_dataloader,
     train_mas_alignment_one_epoch, evaluate_mas_alignment,
-    get_datasets,
+    get_datasets, solve_alignment_procrustes,
 )
 import torch
 from torchvision import datasets
-from alignment import MASAlignment, ModelStitch
+from alignment import MASAlignment, ModelStitch, load_alignment
 from hooks import hook_vision_model
 import torch.optim as optim
 import numpy as np
@@ -47,12 +47,14 @@ import seaborn as sns
 from vis_utils import (
     get_valid_layer_names, read_command_line_args,
     get_layer_name_from_model_name, get_timestamp,
-    save_yaml,
+    save_yaml, get_git_revision_hash,
 )
 
 def compare_models(config):
+    config["git_hash"] = get_git_revision_hash()
+    config["datetime"] = get_timestamp()
     for k in sorted(config.keys()):
-        print(f"{k}: {config[k]}")
+        print(f"{k} ({type(config[k]).__name__}): {config[k]}")
     print()
 
     model_names = config["model_names"]
@@ -90,6 +92,9 @@ def compare_models(config):
     print("Loading datasets...")
     
     finetune_dataset_name = config["dataset_name"]
+    if config.get("debug", False):
+        config["n_train_samples"] = 100
+        config["n_valid_samples"] = 100
     train_ds, test_ds = get_datasets(
         dataset_name=finetune_dataset_name,
         data_root=config["data_root"],
@@ -122,6 +127,8 @@ def compare_models(config):
         model_name = model_names[i].split("/")[-1]
         full_finetune = config["finetune_full_model"]
         model_save_path = f"{model_save_dir}/{model_name}_{finetune_dataset_name}_finetune{full_finetune}_sd_{i}.pt"
+        if not config["pretrained"]:
+            model_save_path = model_save_path.replace(".pt", "_unpretrained.pt")
         if os.path.exists(model_save_path) and not config["overwrite"]:
             print(f"Loading model from {model_save_path}")
             model.load_state_dict(torch.load(model_save_path))
@@ -166,9 +173,6 @@ def compare_models(config):
     n_models = len(models)
     assert n_models == len(layer_names)
     
-    actvs_train_sets = []
-    actvs_valid_sets = []
-    
     device = 0 if torch.cuda.is_available() else "cpu"
     actvs_train_sets = []
     actvs_valid_sets = []
@@ -184,8 +188,9 @@ def compare_models(config):
         lname = layer_name.replace("backbone.", "").replace(".", "-")
         mname = model_name.split("/")[-1]
         dname = dataset_name.split("/")[-1]
-        actvs_name = f"{model_save_dir}/{mname}_{dname}_{lname}_m{mi}_actvs_train.pt"
-        if os.path.exists(actvs_name) and not config["overwrite"]:
+        debug = config.get("debug", False)*"_debug"
+        actvs_name = f"{model_save_dir}/{mname}_{dname}_{lname}_m{mi}_actvs_train{debug}.pt"
+        if os.path.exists(actvs_name) and not config["overwrite"] and not config["fresh_actvs"]:
             print(f"Loading actvs sets from disk...")
             actvs_train_sets.append(torch.load(actvs_name))
             actvs_valid_sets.append(torch.load(actvs_name.replace("train", "valid")))
@@ -226,7 +231,7 @@ def compare_models(config):
                 actvs_valid_sets.append(actvs_valid)
             model.cpu()
     
-            if config.get("save_actvs", False):
+            if config.get("save_actvs", False) or (os.path.exists(actvs_name) and config["overwrite"]):
                 torch.save(actvs_train, actvs_name)
                 torch.save(actvs_valid, actvs_name.replace("train", "valid"))
     
@@ -297,6 +302,29 @@ def compare_models(config):
         dtype=config.get("mas_dtype", next(models[0].parameters()).dtype),
         same_matrix=config["same_matrix"],
     )
+    if config.get("alignment_load_file",""):
+        load_alignment(alignment, config["alignment_load_file"])
+        print(f"Loaded alignment from {config['alignment_load_file']}")
+    elif config.get("analytic_alignment", False):
+        alignment = solve_alignment_procrustes(
+            X=actvs_train_sets[0]["actvs"],
+            Y=actvs_train_sets[1]["actvs"],
+            center=True,
+            scale=True,
+            allow_reflection=True,
+            batch_size=config.get("analytic_batch_size", 1000),
+            n_samples=config.get("analytic_n_samples", 10000),
+            verbose=config.get("verbose", True),
+        )
+        config["mas_epochs"] = 1
+        config["train_directions"] = []
+        config["cl_directions"] = []
+        print(f"Solved alignment using analytic procrustes")
+        print(f"Training directions: {config['train_directions']}")
+        print(f"CL directions: {config['cl_directions']}")
+    print(f"Alignment Object:")
+    print(alignment)
+
     
     # We need to hook the models in order to perform the patching intervention
     # at the desired layer.
@@ -316,11 +344,13 @@ def compare_models(config):
     one_hot_loss = config["one_hot_loss"]
     label_smoothing = config["label_smoothing"]
     train_directions = config["train_directions"]
-    ground_truth_labels = config["ground_truth_labels"]
+    ground_truth_labels = config["ground_truth_labels"] # task matching
+    use_trg_labels = config["use_trg_labels"]
     val_batch_size = config["mas_val_batch_size"]
     cl_directions = config["cl_directions"]
     cl_eps = config["cl_eps"]
     cl_method = config["cl_method"]
+    cl_loss_type = config["cl_loss_type"]
     batches_per_optim_step = config["mas_batches_per_optim_step"]
     
     device = 0 if torch.cuda.is_available() else "cpu"
@@ -344,9 +374,11 @@ def compare_models(config):
                 label_smoothing=label_smoothing,
                 train_directions=train_directions,
                 use_ground_truth_labels=ground_truth_labels,
+                use_trg_labels=use_trg_labels,
                 cl_directions=cl_directions,
                 cl_eps=cl_eps,
                 cl_method=cl_method,
+                cl_loss_type=cl_loss_type,
                 debug=debug,
             )
             end_time = time.time()
@@ -366,7 +398,7 @@ def compare_models(config):
                 debug=debug,
             )
     
-            cols = ["actn_loss","cl_loss","acc"]
+            cols = ["actn_loss","penalty","cl_loss","acc"]
             groups = ["src_idx","trg_idx"]
     
             train = train_df.groupby(groups)[cols].mean().reset_index()
@@ -383,10 +415,12 @@ def compare_models(config):
             print(valid.sort_values(by=groups,ascending=True))
             print(
                 "Train IIA:", round(np.min(train["acc"]), 5),
+                "|| Penalty:", round(np.min(train["penalty"]), 5),
                 "|| Loss:", round(np.max(train["actn_loss"]), 5)
             )
             print(
                 "Valid IIA:", round(np.min(valid["valid_acc"]), 5),
+                "|| Penalty:", round(np.min(valid["valid_penalty"]), 5),
                 "|| Loss:", round(np.max(valid["valid_actn_loss"]), 5)
             )
         except KeyboardInterrupt:
@@ -409,10 +443,11 @@ def compare_models(config):
     m2 = model_names[1].replace("/", "_")
     m2 = m2+layer_names[1].replace("backbone", "").replace(".", "-")
     csv_name = f"{m1}_{m2}_{dataset_name}_mas_{timestamp}.csv"
-    main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
     config_name = csv_name.replace(".csv", ".yaml")
-    save_yaml(config, f"csvs/{config_name}")
-    print(f"Saved results to {csv_name}")
+    if not config.get("debug", False):
+        main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
+        save_yaml(config, f"csvs/{config_name}")
+        print(f"Saved results to {csv_name}")
     
     
     if not config["make_figs"]:
@@ -492,7 +527,8 @@ def compare_models(config):
         ax.set_ylabel("Loss")
         ax.set_title("Loss of MAS Alignment")
     
-        plt.savefig("figs/mas_loss.png", dpi=600)
+        if not config.get("debug", false) and config.get("make_figs", true):
+            plt.savefig("figs/mas_loss.png", dpi=600)
     except Exception as e:
         print(f"Error making figures: {e}")
         print("Valid columns:", main_df.columns)
@@ -501,6 +537,7 @@ def compare_models(config):
 
 default_config = {
     "overwrite": False,
+    "fresh_actvs": False, # if True, will overwrite the actvs sets even if they exist on disk
     "pretrained": True, # if True, will use the pretrained model weights from huggingface
     "finetune_full_model": True, # if True, will only finetune the classification head of the model
     "make_figs": True,
@@ -519,6 +556,8 @@ default_config = {
         # for this to take effect.
     "direct_mapping": False, # If true will use a ModelStitch object
         # instead of MASAlignment. Only applies if model_stitch is true.
+    "alignment_load_file": "", # if provided, will load the alignment from the
+        # specified file instead of training it from scratch.
 
     "dataset_name": "cifar10",
     "model_names": [
@@ -534,7 +573,7 @@ default_config = {
     "batch_size": 128,
     "val_batch_size": 1000,
     "num_workers": 1,
-    "num_epochs": 5,
+    "num_epochs": 10, # number of epochs to finetune the model for
     "train_lr": 0.001,
     "model_save_dir": "/data2/grantsrb/vision_mas/models",
     "data_root": "/data2/grantsrb/pytorch_datasets",
@@ -569,12 +608,19 @@ default_config = {
     "mas_dtype": None, # the dtype to use for the MAS alignment
     "ground_truth_labels": False, # will use data labels instead of model
         # predictions as the training objective for the MAS alignment
+    "use_trg_labels": False, # will use the target model logits/labels
+        # for the training objective for the MAS alignment (instead of the
+        # source model predictions). Be careful combining this with
+        # low dimensional subspace sizes. It is possible to learn a trivial/null
+        # alignment where the target model simply passes its representations
+        # through the alignment module.
     "one_hot_loss": False, # will use one-hot encoded labels as the training
         # objective for the MAS alignment
     "label_smoothing": 0.0, # will use label smoothing in the MAS loss.
         # Only used if one_hot_loss is True
 
     # CL training parameters
+    "cl_mas": False, # if True, will train the MAS alignment on the CL loss only.
     "cl_directions": None, # will only collect CL vectors for the specified
         # directions (argue a list of tuples of (src_idx, trg_idx)).
         # None defaults to no directions. Set cl_eps to 0 if you wish to
@@ -588,14 +634,19 @@ default_config = {
         #   "mean": take the mean of the activations for each class
         #   "most_similar": take the activations with the highest similarity
         #     to the source class probabilities
-        #   "same_as_target": use the target model's activations created
+        #   "same_as_target": use the source model's activations created
         #     under the same inputs as the source model
+    "cl_loss_type": "both", # {"mse", "cos", "both"}
     "cl_causal_dims_only": False, # if True, will only use the causal dimensions
         # for the CL loss.
 }
 
 def prepare_config(config):
     if config["model_stitch"]:
+        config["batch_norm"] = True
+        config["post_batch_norm"] = True
+        config["direct_mapping"] = True
+        config["same_matrix"] = True
         config["mask_type"] = "ZeroMask"# Ensures that the extraneous dimensions
             # are set to zero during the patching
         if config["latent_model_stitch"]:
@@ -604,7 +655,24 @@ def prepare_config(config):
             config["cl_method"] = "same_as_target"
         else:
             config["train_directions"] = [(0,1)]
-    return config
+    elif config.get("unimas", False):
+        config["train_directions"] = [(0,1)]
+        config["cl_directions"] = []
+    elif config.get("cl_mas", False):
+        config["train_directions"] = []
+        config["cl_directions"] = [(0,1),(1,0)]
+    if config["train_directions"] is not None and config["train_directions"] == "":
+        config["train_directions"] = []
+    elif config["train_directions"] is None or config["train_directions"] == "all":
+        config["train_directions"] = [(0,0),(0,1),(1,0),(1,1)]
+    if not config["cl_directions"]:
+        config["cl_directions"] = []
+
+    if config.get("analytic_alignment", False):
+        config["mas_epochs"] = 1
+        config["train_directions"] = []
+        config["cl_directions"] = []
+    return config    
 
 if __name__ == "__main__":
     _,_,kwargs = read_command_line_args()
@@ -619,23 +687,16 @@ if __name__ == "__main__":
         torch.backends.cudnn.benchmark = False
 
     layer_names = config.get("layer_names", None)
+    if type(layer_names)==str:
+        layer_names = [layer_names for _ in config["model_names"]]
+
     if layer_names is None:
         layer_names = [None for _ in config["model_names"]]
-
-    if type(layer_names[0])==list:
-        run_id = 0
-        for l1 in range(len(layer_names[0])):
-            for l2 in range(len(layer_names[1])):
-                print(f"Running {run_id} of {len(layer_names[0])*len(layer_names[1])}")
-                config["layer_names"] = [layer_names[0][l1], layer_names[1][l2]]
-                compare_models(config)
-                run_id += 1
-    else:
-        lname1 = layer_names[0]
-        lname2 = layer_names[1]
-        if lname1 is None:
-            lname1 = get_layer_name_from_model_name(config["model_names"][0])
-        if lname2 is None:
-            lname2 = get_layer_name_from_model_name(config["model_names"][1])
-        config["layer_names"] = [lname1, lname2]
-        compare_models(config)
+    lname1 = layer_names[0]
+    lname2 = layer_names[1]
+    if lname1 is None:
+        lname1 = get_layer_name_from_model_name(config["model_names"][0])
+    if lname2 is None:
+        lname2 = get_layer_name_from_model_name(config["model_names"][1])
+    config["layer_names"] = [lname1, lname2]
+    compare_models(config)
