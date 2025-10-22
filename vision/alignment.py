@@ -211,6 +211,56 @@ class RotationMatrix(torch.nn.Module):
         if inverse: return self.rot_inv(h)
         return self.rot_forward(h)
 
+class InvertedRotationMatrixWrapper(torch.nn.Module):
+    """
+    Inverts a rotation matrix
+    """
+    def __init__(self, rotation_matrix):
+        """
+        Args:
+            rotation_matrix: RotationMatrix
+                the rotation matrix to invert
+        """
+        super().__init__()
+        self.rotation_matrix = rotation_matrix
+
+    @property
+    def weight(self):
+        return self.rotation_matrix.weight_inv
+
+    @property
+    def weight_inv(self):
+        return self.rotation_matrix.weight
+
+    @property
+    def size(self):
+        return self.rot_module.weight.shape[0]
+
+    @property
+    def shape(self):
+        return self.weight.shape
+
+    def set_normalization_params(self, *args, **kwargs):
+        return self.rotation_matrix.set_normalization_params(*args, **kwargs)
+
+    def reset(self):
+        pass
+
+    def get_condition(self, p=None):
+        return torch.linalg.cond(self.weight, p=p)
+
+    def set_nonlin_fn(self, *args, **kwargs):
+        return self.rotation_matrix.set_nonlin_fn(*args, **kwargs)
+
+    def rot_forward(self, *args, **kwargs):
+        return self.rotation_matrix.rot_inv(*args, **kwargs)
+
+    def rot_inv(self, *args, **kwargs):
+        return self.rotation_matrix.rot_forward(*args, **kwargs)
+
+    def forward(self, h, inverse=False):
+        return self.rotation_matrix(h, inverse=not inverse)
+
 class FCARotationMatrix(torch.nn.Module):
     def __init__(self, 
             size,
@@ -846,6 +896,8 @@ class MASAlignment(AlignmentModule):
         self.rot_mtxs = torch.nn.ModuleList([])
         if mtx_type=="orthogonal":
             mtx_class = RotationMatrix
+        elif mtx_type=="linear":
+            mtx_class = LinearMatrix
         elif mtx_type=="symmetric_definite":
             mtx_class = SDRotationMatrix
         elif mtx_type=="positive_symmetric_definite":
@@ -928,7 +980,8 @@ class ModelStitch(AlignmentModule):
             mtx_kwargs: dict
                 the key word arguments to pass to each matrix instantiation
             same_matrix: bool
-                if true, will use the same matrix for all models. Must only
+                if true, will use the same matrix for both models, but
+                will invert it for the second model. Must only
                 have two models and cannot use linear matrices.
             dtype: torch.dtype
                 the dtype to use for the alignment module. If None, will use
@@ -954,7 +1007,6 @@ class ModelStitch(AlignmentModule):
         if mtx_type=="orthogonal":
             mtx_class = RotationMatrix
         elif mtx_type=="linear":
-            assert not same_matrix, "Cannot use same matrix for all models with linear matrices."
             assert self.n_models==2, "Linear matrices must have two models."
             mtx_class = LinearMatrix
         elif mtx_type=="symmetric_definite":
@@ -974,7 +1026,8 @@ class ModelStitch(AlignmentModule):
                 mkwargs = mtx_kwargs
             mkwargs["dtype"] = self.dtype
             if self.same_matrix and si==1:
-                self.rot_mtxs[1] = self.rot_mtxs[0]
+                self.rot_mtxs.append(
+                    InvertedRotationMatrixWrapper(self.rot_mtxs[0]))
             else:
                 self.rot_mtxs.append(mtx_class(size=size, **mkwargs))
 
@@ -1101,6 +1154,15 @@ def solve_for_orthogonal_param(
 
     return rot_module
 
+def load_alignment(alignment, path):
+    try:
+        sd = torch.load(path)
+        alignment.load_state_dict(sd)
+    except:
+        alignment.rot_mtxs[0].mu = sd["rot_mtxs.0.mu"]
+        alignment.rot_mtxs[1].mu = sd["rot_mtxs.1.mu"]
+        alignment.load_state_dict(sd)
+    return alignment
 
 if __name__=="__main__":
     seq_len = 10
