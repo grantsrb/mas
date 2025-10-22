@@ -77,6 +77,11 @@ def get_vision_hook(comms_dict):
         trg_idx = comms_dict.get("trg_idx",1)
         varb_idx = comms_dict.get("varb_idx",None)
 
+        grad_state = comms_dict.get("req_grad", None)
+        if grad_state is not None:
+            prev_grad_state = torch.is_grad_enabled()
+            torch.set_grad_enabled(grad_state)
+
         src_actvs = comms_dict["src_activations"]
         trg_actvs, src_actvs = equalize_shapes(trg_actvs, src_actvs)
         src_actvs = src_actvs.to(device)
@@ -114,6 +119,9 @@ def get_vision_hook(comms_dict):
                     og_actvs[:,0:1], intrv_out.reshape(B,S,D)
                 ], dim=1)
         comms_dict["intrv_vectors"] = intrv_out
+
+        if grad_state is not None:
+            torch.set_grad_enabled(prev_grad_state)
 
         if type(out)==dict:
             out["hidden_states"] = intrv_out
