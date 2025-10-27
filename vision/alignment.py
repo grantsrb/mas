@@ -454,7 +454,28 @@ class LinearMatrix(RotationMatrix):
               dtype=self.rot_module.weight.data.dtype,
               device=device_fxn(self.rot_module.weight.get_device()),
             )
-        return torch.linalg.inv(self.rot_module.weight)
+        return torch.linalg.pinv(self.rot_module.weight)
+
+class LowRankTransformation(torch.nn.Module):
+    def __init__(self, original_dimensions=10, added_dimensions=10, transformation_type="zeros"):
+        super().__init__()
+        self.transformation_type = transformation_type
+        self.original_dimensions = original_dimensions
+        self.added_dimensions = added_dimensions
+        D = original_dimensions+added_dimensions
+        self.rotation_matrix = RotationMatrix(size=D, bias=False)
+        for p in self.rotation_matrix.parameters():
+            p.requires_grad = False
+
+    def forward(self, x, inverse=False):
+        if inverse:
+            return self.rotation_matrix(x, inverse=True)[:, :self.original_dimensions]
+        device = device_fxn(x.get_device())
+        if self.transformation_type == "noise":
+            x = torch.cat([x, torch.randn(x.shape[0], self.added_dimensions).to(device)], dim=-1)
+        else: # zeros
+            x = torch.cat([x, torch.zeros(x.shape[0], self.added_dimensions).to(device)], dim=-1)
+        return self.rotation_matrix(x)
 
 class RevResnetRotation(torch.nn.Module):
     """

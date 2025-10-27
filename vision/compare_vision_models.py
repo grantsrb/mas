@@ -28,16 +28,17 @@
 
 import os
 import time
+import gc
 
 from vis_training import (
     get_model_and_processor, train_model, get_dataloaders,
     get_actvs_data, get_dataloader,
     train_mas_alignment_one_epoch, evaluate_mas_alignment,
-    get_datasets, solve_alignment_procrustes,
+    get_datasets, solve_alignment,
 )
 import torch
 from torchvision import datasets
-from alignment import MASAlignment, ModelStitch, load_alignment
+from alignment import MASAlignment, ModelStitch, load_alignment, LowRankTransformation
 from hooks import hook_vision_model
 import torch.optim as optim
 import numpy as np
@@ -184,6 +185,8 @@ def compare_models(config):
         processors,
     )
     for mi, (model_name, layer_name, model, processor) in enumerate(z):
+        if config.get("model_mode","")=="single_model" and mi>0:
+            continue
         print(f"Processing {model_name}, layer {layer_name}")
         lname = layer_name.replace("backbone.", "").replace(".", "-")
         mname = model_name.split("/")[-1]
@@ -239,13 +242,18 @@ def compare_models(config):
         os.makedirs("figs", exist_ok=True)
         plt.imshow(actvs_train_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
         plt.savefig("figs/input_0.png", dpi=600)
-        plt.imshow(actvs_train_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
-        plt.savefig("figs/input_1.png", dpi=600)
-
+        try:
+            plt.imshow(actvs_train_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
+            plt.savefig("figs/input_1.png", dpi=600)
+        except:
+            pass
         plt.imshow(actvs_valid_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
         plt.savefig("figs/input_0_valid.png", dpi=600)
-        plt.imshow(actvs_valid_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
-        plt.savefig("figs/input_1_valid.png", dpi=600)
+        try:
+            plt.imshow(actvs_valid_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
+            plt.savefig("figs/input_1_valid.png", dpi=600)
+        except:
+            pass
     
 
     ####################################################
@@ -265,12 +273,17 @@ def compare_models(config):
     identity_rot = config["identity_rot"]
     debug = config["debug"]
     
-    if debug and config.get("debug_mode","")=="single_model":
-        models = [og_models[0] for _ in models]
-        processors = [og_processors[0] for _ in processors]
-        layer_names = [og_layer_names[0] for _ in layer_names]
-        actvs_train_sets = [og_actvs_train_sets[0] for _ in actvs_train_sets]
-        actvs_valid_sets = [og_actvs_valid_sets[0] for _ in actvs_valid_sets]
+    if config.get("model_mode","")=="single_model":
+        models = [og_models[0] for _ in og_models]
+        processors = [og_processors[0] for _ in og_models]
+        layer_names = [og_layer_names[0] for _ in og_models]
+        actvs_train_sets = [og_actvs_train_sets[0] for _ in og_models]
+        actvs_valid_sets = [og_actvs_valid_sets[0] for _ in og_models]
+        del og_models[1:]
+        del og_processors[1:]
+        del og_layer_names[1:]
+        del og_actvs_train_sets[1:]
+        del og_actvs_valid_sets[1:]
     else:
         models = [model for model in og_models]
         processors = [processor for processor in og_processors]
@@ -282,12 +295,17 @@ def compare_models(config):
     # and the patching masks for each model. It also contains the logic for
     # performing an alignment intervention (i.e. transferring causal activity
     # from a source model to a target model).
-    model_dims = []
+    og_dims = []
     for i in range(len(actvs_train_sets)):
         if len(actvs_train_sets[i]["actvs"].shape)==3:
-            model_dims.append(actvs_train_sets[i]["actvs"].shape[-1])
+            og_dims.append(actvs_train_sets[i]["actvs"].shape[-1])
         else:
-            model_dims.append(actvs_train_sets[i]["actvs"].shape[1])
+            og_dims.append(actvs_train_sets[i]["actvs"].shape[1])
+    if config.get("do_low_rank_transformation", False):
+        new_dims = config.get("low_rank_transformation_added_dimensions", 10)
+        model_dims = [og_dims[i]+new_dims for i in range(len(og_dims))]
+    else:
+        model_dims = og_dims
     print("Using Model Dims:", model_dims)
     alignment_class = MASAlignment
     if config["model_stitch"] and config.get("direct_mapping", False):
@@ -302,30 +320,35 @@ def compare_models(config):
         dtype=config.get("mas_dtype", next(models[0].parameters()).dtype),
         same_matrix=config["same_matrix"],
     )
+    low_rank_transformation = None
     if config.get("alignment_load_file",""):
         load_alignment(alignment, config["alignment_load_file"])
         print(f"Loaded alignment from {config['alignment_load_file']}")
     elif config.get("analytic_alignment", False):
-        alignment = solve_alignment_procrustes(
-            X=actvs_train_sets[0]["actvs"],
-            Y=actvs_train_sets[1]["actvs"],
-            center=True,
-            scale=True,
-            allow_reflection=True,
-            batch_size=config.get("analytic_batch_size", 1000),
-            n_samples=config.get("analytic_n_samples", 10000),
-            verbose=config.get("verbose", True),
-        )
+        with torch.no_grad():
+            alignment,low_rank_transformation = solve_alignment(
+                X=actvs_train_sets[0]["actvs"],
+                Y=actvs_train_sets[1]["actvs"],
+                method=config.get("mtx_type","orthogonal"),
+                center=True,
+                scale=True,
+                allow_reflection=True,
+                batch_size=config.get("analytic_batch_size", 10000),
+                n_samples=config.get("analytic_n_samples", 10000),
+                do_low_rank_transformation=config.get("do_low_rank_transformation", False),
+                low_rank_transformation_type=config.get("low_rank_transformation_type", "noise"),
+                low_rank_transformation_added_dimensions=config.get("low_rank_transformation_added_dimensions", 10),
+                verbose=config.get("verbose", True),
+            )
         config["mas_epochs"] = 1
         config["train_directions"] = []
         config["cl_directions"] = []
-        print(f"Solved alignment using analytic procrustes")
+        print(f"Solved alignment using analytic", config["mtx_type"], "method")
         print(f"Training directions: {config['train_directions']}")
         print(f"CL directions: {config['cl_directions']}")
     print(f"Alignment Object:")
     print(alignment)
 
-    
     # We need to hook the models in order to perform the patching intervention
     # at the desired layer.
     hooks = []
@@ -333,6 +356,17 @@ def compare_models(config):
         hooks.append(
             hook_vision_model(model, layer, alignment)
         )
+
+    if config.get("do_low_rank_transformation", False):
+        assert model_dims[0] == model_dims[1], "The low-rank transformation can only be used for two models of the same dimension"
+        if low_rank_transformation is None:
+            low_rank_transformation = LowRankTransformation(
+                original_dimensions=og_dims[0],
+                added_dimensions=config.get("low_rank_transformation_added_dimensions", 10),
+                transformation_type=config.get("low_rank_transformation_type","noise"),
+            )
+        low_rank_transformation.to(device)
+        alignment.comms_dict["low_rank_transformation"] = low_rank_transformation
 
     ####################################################
     #    Train the MAS alignment
@@ -381,6 +415,7 @@ def compare_models(config):
                 cl_loss_type=cl_loss_type,
                 debug=debug,
             )
+            gc.collect()
             end_time = time.time()
             print(f"Epoch Duration: {end_time - start_time}s")
             print(f"Epoch {epoch} - Validating")
@@ -394,10 +429,12 @@ def compare_models(config):
                 cl_directions=cl_directions,
                 cl_eps=cl_eps,
                 cl_method=cl_method,
+                cl_loss_type=cl_loss_type,
                 verbose=True,
                 debug=debug,
             )
-    
+            gc.collect()
+
             cols = ["actn_loss","penalty","cl_loss","acc"]
             groups = ["src_idx","trg_idx"]
     
@@ -527,7 +564,7 @@ def compare_models(config):
         ax.set_ylabel("Loss")
         ax.set_title("Loss of MAS Alignment")
     
-        if not config.get("debug", false) and config.get("make_figs", true):
+        if not config.get("debug", False) and config.get("make_figs", True):
             plt.savefig("figs/mas_loss.png", dpi=600)
     except Exception as e:
         print(f"Error making figures: {e}")
@@ -540,7 +577,7 @@ default_config = {
     "fresh_actvs": False, # if True, will overwrite the actvs sets even if they exist on disk
     "pretrained": True, # if True, will use the pretrained model weights from huggingface
     "finetune_full_model": True, # if True, will only finetune the classification head of the model
-    "make_figs": True,
+    "make_figs": False,
     "layer_sweep": False,
     "model_stitch": False, # If true, will change the training settings to
         # perform model stitching in stead of MAS, where model stitching
@@ -558,6 +595,16 @@ default_config = {
         # instead of MASAlignment. Only applies if model_stitch is true.
     "alignment_load_file": "", # if provided, will load the alignment from the
         # specified file instead of training it from scratch.
+    
+    "low_rank_transformation_type": "noise", # the type of low-rank transformation to use.
+        # choices:
+        #   "noise": add noise to the representations
+        #   "zeros": set the low-rank dimensions to zero
+    "do_low_rank_transformation": False, # if True, will use a transformation
+        # that pads the representations with zeros or noise and then rotates
+        # them into a new basis before the alignment intervention.
+    "low_rank_transformation_added_dimensions": 10, # the number of dimensions to
+        # add to the representations.
 
     "dataset_name": "cifar10",
     "model_names": [
@@ -589,7 +636,10 @@ default_config = {
         # after the transformation matrix. Mainly useful for model stitching.
     "identity_rot": False, # uses the identity rotation matrix (only use for debugging)
     "debug": False, # if True, will use the first model for all models
-    "debug_mode": "",
+    "model_mode": "", # "single_model" or "multi_model"
+        # "single_model" will use the first model for all models
+        # "multi_model" will use the models specified in the model_names parameter
+        # None defaults to "multi_model"
 
     # MAS training parameters
     "train_directions": None, # will only train the MAS alignment for the
@@ -620,7 +670,10 @@ default_config = {
         # Only used if one_hot_loss is True
 
     # CL training parameters
-    "cl_mas": False, # if True, will train the MAS alignment on the CL loss only.
+    "bnn_mas": False, # if True, will train the MAS alignment on the behavioral
+        # and the latent loss in a similar fashion to a biological neural network
+        # compared to an artificial neural network.
+    "latent_mas": False, # if True, will train the MAS alignment on the CL loss only.
     "cl_directions": None, # will only collect CL vectors for the specified
         # directions (argue a list of tuples of (src_idx, trg_idx)).
         # None defaults to no directions. Set cl_eps to 0 if you wish to
@@ -628,7 +681,7 @@ default_config = {
     "cl_eps": 1, # raw multiplicative factor for the cl_loss does not
         # affect the normal loss other than that it will be added to the
         # normal loss
-    "cl_method": "sample", # determines how the CL vectors are generated.
+    "cl_method": "same_as_target", # determines how the CL vectors are generated.
         # choices:
         #   "sample": sample a random activation for each class
         #   "mean": take the mean of the activations for each class
@@ -658,7 +711,10 @@ def prepare_config(config):
     elif config.get("unimas", False):
         config["train_directions"] = [(0,1)]
         config["cl_directions"] = []
-    elif config.get("cl_mas", False):
+    elif config.get("bnn_mas", False):
+        config["train_directions"] = [(0,1),(1,1)]
+        config["cl_directions"] = [(1,0),(1,1)]
+    elif config.get("latent_mas", False):
         config["train_directions"] = []
         config["cl_directions"] = [(0,1),(1,0)]
     if config["train_directions"] is not None and config["train_directions"] == "":
@@ -676,6 +732,9 @@ def prepare_config(config):
 
 if __name__ == "__main__":
     _,_,kwargs = read_command_line_args()
+    for k in kwargs:
+        if k not in default_config:
+            print(f"WARNING: {k} is not in the default configuration parameters")
     config = {**default_config, **kwargs}
     config = prepare_config(config)
     if "seed" in config:

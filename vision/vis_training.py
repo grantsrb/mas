@@ -1,4 +1,5 @@
 import time
+import math
 import numpy as np
 from tqdm import tqdm
 import torch
@@ -12,9 +13,9 @@ from torchvision import datasets
 from torch.utils.data import DataLoader
 import pandas as pd
 from hooks import hook_model_layer
-from vis_utils import mtx_cor
+from vis_utils import mtx_cor, mtx_pinv
 from vis_similarity import get_cka
-from alignment import MASAlignment
+from alignment import MASAlignment, LowRankTransformation
 
 def device_fxn(device):
     if type(device)==int and device<0:
@@ -385,7 +386,7 @@ def train_mas_alignment_one_epoch(
         batches_per_optim_step=1,
         cl_directions=None,
         cl_eps=1,
-        cl_method="sample", # {"mean", "sample", "most_similar", "same_as_target"}
+        cl_method="same_as_target", # {"mean", "sample", "most_similar", "same_as_target"}
         cl_loss_type="both", # {"mse", "cos", "both"}
         label_smoothing=0.0,
         use_ground_truth_labels=False,
@@ -459,7 +460,6 @@ def train_mas_alignment_one_epoch(
         for src_idx in range(len(models)):
             src_data = actvs_sets[src_idx]
             src_actvs = src_data["actvs"][src_batch]
-            src_preds = src_data["preds"][src_batch]
             src_logits = src_data["logits"][src_batch]
             src_labels = src_data[label_key][src_batch]
             alignment.comms_dict["src_activations"] = src_actvs
@@ -468,7 +468,6 @@ def train_mas_alignment_one_epoch(
                 trg_data = actvs_sets[trg_idx]
                 if use_trg_labels:
                     src_logits = trg_data["logits"][src_batch]
-                    src_preds =  trg_data["preds"][src_batch]
                     src_labels = trg_data[label_key][src_batch]
                 trg_inputs = trg_data["inputs"][trg_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
@@ -484,11 +483,11 @@ def train_mas_alignment_one_epoch(
                         alignment.comms_dict["req_grad"] = do_cl_loss
                         outputs = models[trg_idx](trg_inputs.to(device))
                         alignment.comms_dict["req_grad"] = None
-                    torch.set_grad_enabled(prev_grad_state)
                 else:
                     alignment.comms_dict["req_grad"] = None
                     outputs = models[trg_idx](trg_inputs.to(device))
                 logits = extract_logits(outputs)
+                torch.set_grad_enabled(prev_grad_state)
 
                 if not do_train_loss:
                     torch.set_grad_enabled(False)
@@ -530,8 +529,8 @@ def train_mas_alignment_one_epoch(
                 
                 acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
                 accs[(src_idx,trg_idx)] = acc
-                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean()
-                penalties[(src_idx,trg_idx)] = (src_acc-acc).item()
+                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean().item()
+                penalties[(src_idx,trg_idx)] = (src_acc-acc)
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -575,7 +574,8 @@ def evaluate_mas_alignment(
         use_ground_truth_labels=False,
         cl_directions=None,
         cl_eps=1,
-        cl_method="sample",
+        cl_method="same_as_target",
+        cl_loss_type="both",
         use_trg_labels=False,
         verbose=True,
         debug=False,
@@ -587,6 +587,7 @@ def evaluate_mas_alignment(
 
     if use_ground_truth_labels:
         label_key = "labels"
+        one_hot_loss = True
     else:
         label_key = "preds"
 
@@ -612,19 +613,17 @@ def evaluate_mas_alignment(
         for src_idx in range(len(models)):
             src_data = actvs_sets[src_idx]
             src_actvs = src_data["actvs"][src_batch]
-            src_preds = src_data["preds"][src_batch]
             src_logits = src_data["logits"][src_batch]
             src_labels = src_data[label_key][src_batch]
             alignment.comms_dict["src_activations"] = src_actvs
             alignment.comms_dict["src_idx"] = src_idx
             for trg_idx in range(len(models)):
                 trg_data = actvs_sets[trg_idx]
-                trg_inputs = trg_data["inputs"][trg_batch]
                 if use_trg_labels:
                     src_logits = trg_data["logits"][src_batch]
-                    src_preds = trg_data["preds"][src_batch]
                     src_labels = trg_data[label_key][src_batch]
-                cl_vectors = trg_data.get("cl_vectors", None) # (n_classes,C,H,W)
+                trg_inputs = trg_data["inputs"][trg_batch]
+                cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
                 if cl_vectors is not None:
                     cl_vectors = cl_vectors[src_batch] # (B,C,H,W)
                 alignment.comms_dict["trg_idx"] = trg_idx
@@ -643,8 +642,8 @@ def evaluate_mas_alignment(
                     ).mean()
 
                 cl_loss = torch.zeros(1).to(device)
-                if cl_directions is not None\
-                        and (src_idx,trg_idx) in cl_directions:
+                do_cl_loss = cl_directions is not None and (src_idx,trg_idx) in cl_directions
+                if do_cl_loss:
                     if cl_method == "same_as_target":
                         cl_vectors = trg_data["actvs"][src_batch] # (B,C,H,W)
                     elif cl_vectors is None:
@@ -656,14 +655,17 @@ def evaluate_mas_alignment(
                         )
                         cl_vectors = cl_vectors[src_labels] # (B,C,H,W)
                     intrv_vectors = alignment.comms_dict["intrv_vectors"].to(device)
-                    cl_loss = cl_loss_fxn(intrv_vectors, cl_vectors.to(device))
+                    cl_loss = cl_loss_fxn(
+                        intrv_vectors, cl_vectors.to(device), loss_type=cl_loss_type
+                    )
+
 
                 loss = (actn_loss+cl_eps*cl_loss)/len(models)**2
                 
                 acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
                 accs[(src_idx,trg_idx)] = acc
-                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean()
-                penalties[(src_idx,trg_idx)] = (src_acc-acc).item()
+                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean().item()
+                penalties[(src_idx,trg_idx)] = (src_acc-acc)
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -785,21 +787,22 @@ def minimize_cka_one_epoch(
         torch.stack(ckas)
 
 def orthogonal_procrustes(
-    X, Y, center=True, scale=False, allow_reflection=True, batch_size=1000, verbose=True
+    X, Y,
+    scale=False,
+    allow_reflection=True,
+    batch_size=1000,
+    verbose=True,
 ):
     """
     Solve the (weighted) orthogonal Procrustes problem:
-        minimize_R,t,s  || s * (X - mu_X) R - (Y - mu_Y) ||_F^2
+        minimize_R,s  || s * X R - Y ||_F^2
     subject to R^T R = I, and (optionally) det(R)=+1 if allow_reflection=False.
     
     Args:
         X : torch tensor (N, D)
-            Source points (rows = samples, columns = dimensions).
+            Source points (rows = samples, columns = dimensions). Assumes centered.
         Y : torch tensor (N, D)
-            Target points, paired to X by row.
-        center : bool, default True
-            If True, estimate and remove means before solving and return translation t.
-            If False, solve for R (and optional s) with no translation term.
+            Target points, paired to X by row. Assumes centered.
         scale : bool, default False
             If True, also estimate a global scalar s >= 0 that minimizes the error.
         allow_reflection : bool, default False
@@ -810,8 +813,6 @@ def orthogonal_procrustes(
     Returns:
         R: torch tensor (D, D)
             Orthogonal matrix (rotation/reflection).
-        t: torch tensor (D,)
-            Translation vector such that Y ≈ s * X R + t. If center=False, t is zeros.
         s: float
             Scale (1.0 if scale=False).
         info: dict
@@ -822,24 +823,10 @@ def orthogonal_procrustes(
     assert X.shape == Y.shape and X.ndim == 2, "X and Y must be (N,D) with same shape."
     N, D = X.shape
 
-    # Means (weighted or not)
-    if center:
-        mu_X = X.mean(dim=0)
-        mu_Y = Y.mean(dim=0)
-    else:
-        mu_X = torch.zeros(D)
-        mu_Y = torch.zeros(D)
-
-    # Centered copies used for solving R (and s)
-    X = X - mu_X
-    Y = Y - mu_Y
-    X0 = X
-    Y0 = Y
-
-    # Cross-covariance (D x D): we solve min_R ||X0 R - Y0||, so C = X0^T Y0
+    # Cross-covariance (D x D): we solve min_R ||X R - Y||, so C = X^T Y
     if batch_size is not None:
         C = mtx_cor(
-            X0, Y0,
+            X, Y,
             zscore=False,
             scale=False,
             to_numpy=False,
@@ -847,7 +834,7 @@ def orthogonal_procrustes(
             verbose=verbose,
         )
     else:
-        C = X0.T @ Y0
+        C = X.T @ Y
 
     # SVD of cross-covariance
     U, S, Vt = torch.linalg.svd(C, full_matrices=False)
@@ -864,38 +851,125 @@ def orthogonal_procrustes(
 
     # Optional optimal global scale
     if scale:
-        # For min || s X0 R - Y0 ||, s* = trace(S) / ||X0||_F^2 (with weights handled above)
+        # For min || s X R - Y ||, s* = trace(S) / ||X||_F^2 (with weights handled above)
         num = S.sum()
-        den = (X0 * X0).sum()  # ||X0||_F^2 with weights
+        den = (X * X).sum()  # ||X||_F^2 with weights
         s = (num / den) if den > 0 else 1.0
     else:
         s = 1.0
 
     # Diagnostics
     Y_hat = s * (X @ R)
-    fro_error = torch.linalg.norm(Y_hat - Y, ord='fro')
+    fro_error = torch.linalg.norm(Y_hat - Y, ord='fro')/math.sqrt(len(Y))
     info = {
         "R": R,
         "singular_values": S,
         "left_matrix": U,
         "right_matrix": Vt,
         "s": float(s),
-        "residual": Y_hat - Y,
+        "residual": (Y_hat - Y)/len(Y),
         "fro_error": fro_error,
         "detR": detR,
         "trace_sigma": float(S.sum()),
-        "mu_X": mu_X,
-        "mu_Y": mu_Y,
     }
     return info
 
-def solve_alignment_procrustes(
+def linear_map_one_way(
+    X, Y,
+    ridge=0.0,
+    batch_size=None,
+    verbose=True,
+):
+    """
+    Solve for A (and translation t) in one direction:
+        minimize_{A,t} || X A - Y ||_F^2
+
+    Parameters
+    ----------
+    X : (N, D1) array
+        Source data (rows are samples). Assumes centered.
+    Y : (N, D2) array
+        Target data paired with X by row. Assumes centered.
+    ridge : float, default 0.0
+        L2 regularization strength (ridge). ridge=0 -> ordinary least squares.
+
+    Returns
+    -------
+    A : (D1, D2) array
+        Linear map so that Y ≈ X A + t.
+    info : dict
+        Diagnostics: residuals, Frobenius error, rank_used, cond_XTX, etc.
+    """
+    if type(X) == type(np.array([])):
+        X = torch.tensor(X).float()
+    if type(Y) == type(np.array([])):
+        Y = torch.tensor(Y).float()
+    X = X.float()
+    Y = Y.float()
+    assert X.ndim == 2 and Y.ndim == 2 and X.shape[0] == Y.shape[0]
+    N, D1 = X.shape
+    _, D2 = Y.shape
+
+    # Full-rank least squares (with optional ridge)
+    if ridge > 0:
+        XtX = mtx_cor(
+            X, X,
+            zscore=False,
+            scale=False,
+            to_numpy=False,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        # Ridge stabilize
+        XtX_r = XtX + ridge * np.eye(D1)
+        Xty = mtx_cor(
+            X, Y,
+            zscore=False,
+            scale=False,
+            to_numpy=False,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        A = np.linalg.solve(XtX_r, Xty)
+        cond = np.linalg.cond(XtX_r)
+    else:
+        # Pseudoinverse gives the minimum-norm solution
+        pinv = mtx_pinv(X, batch_size=batch_size, verbose=verbose)
+        A = mtx_cor(
+            pinv.T, Y,
+            zscore=False,
+            scale=False,
+            to_numpy=False,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        cond = torch.linalg.cond(A) if X.size else torch.inf
+
+    # Diagnostics
+    Yhat = X @ A
+    resid = (Yhat - Y)/len(Y)
+    fro_err = torch.linalg.norm(resid, ord="fro")/math.sqrt(len(Y))
+    info = {
+        "A": A,
+        "left_matrix": A,
+        "right_matrix": torch.eye(max(D1,D2))[:D1,:D2],
+        "residual": Yhat - Y,
+        "fro_error": fro_err,
+        "cond": cond,
+    }
+    return info
+
+def solve_alignment(
         X, Y,
         center=True,
         scale=False,
         allow_reflection=True,
         n_samples=None,
         batch_size=1000,
+        do_low_rank_transformation=False,
+        low_rank_transformation_type="noise",
+        low_rank_transformation_added_dimensions=10,
+        method="orthogonal_procrustes",
         verbose=True,
 ):
     """
@@ -910,6 +984,15 @@ def solve_alignment_procrustes(
         center: bool, default True
         n_samples: int, default None
             Number of samples to use for the alignment. If None, will use all samples.
+        do_low_rank_transformation: bool, default False
+            Whether to apply a low-rank transformation to the data.
+        low_rank_transformation_type: str, default "zeros"
+            The type of low-rank transformation to apply.
+        low_rank_transformation_added_dimensions: int, default 10
+            The number of dimensions to add to the data.
+        method: str, default "orthogonal_procrustes"
+            The method to use for the alignment. Options are:
+            "orthogonal_procrustes", "linear_map_one_way".
         verbose: bool, default True
             Whether to print verbose output.
     Returns:
@@ -928,27 +1011,57 @@ def solve_alignment_procrustes(
         X = X[perm]
         Y = Y[perm]
 
+    low_rank_transformation = None
+    if do_low_rank_transformation:
+        new_dims = low_rank_transformation_added_dimensions
+        model_dims = [D+new_dims, D+new_dims]
+        low_rank_transformation = LowRankTransformation(
+            original_dimensions=D,
+            added_dimensions=new_dims,
+            transformation_type=low_rank_transformation_type,
+        )
+        X = low_rank_transformation(X)
+        Y = low_rank_transformation(Y)
+    else:
+        model_dims = [D, D]
     alignment = MASAlignment(
-        model_dims=[D, D],
+        model_dims=model_dims,
         mtx_type="linear",
         dtype=X.dtype,
     )
 
-    soln = orthogonal_procrustes(
-        X, Y,
-        center=center,
-        scale=scale,
-        allow_reflection=allow_reflection,
-        batch_size=batch_size,
-        verbose=verbose,
-    )
-    if verbose:
-        print(f"Solved alignment using orthogonal procrustes")
-    alignment.rot_mtxs[0].weight.data = soln["left_matrix"]*soln["s"]
-    alignment.rot_mtxs[0].set_normalization_params(mu=soln["mu_X"])
+    if center:
+        mu_X = X.mean(0)
+        mu_Y = Y.mean(0)
+    else:
+        mu_X = torch.zeros(D)
+        mu_Y = torch.zeros(D)
+    X = X - mu_X
+    Y = Y - mu_Y
+
+    if method == "orthogonal_procrustes" or "orthogonal" in method:
+        soln = orthogonal_procrustes(
+            X, Y,
+            scale=scale,
+            allow_reflection=allow_reflection,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+    elif method == "linear_map_one_way" or "linear" in method:
+        soln = linear_map_one_way(
+            X, Y,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+    else:
+        raise ValueError(f"Invalid method: {method}")
+    alignment.rot_mtxs[0].weight.data = soln["left_matrix"]*soln.get("s",1)
+    alignment.rot_mtxs[0].set_normalization_params(mu=mu_X)
     alignment.rot_mtxs[1].weight.data = soln["right_matrix"].T
-    alignment.rot_mtxs[1].set_normalization_params(mu=soln["mu_Y"])
-    return alignment
+    alignment.rot_mtxs[1].set_normalization_params(mu=mu_Y)
+    if verbose:
+        print(f"Solved alignment using {method} method with Frobenius error {soln['fro_error']:.4e}")
+    return alignment, low_rank_transformation
 
 # -------------------------
 # Minimal usage examples

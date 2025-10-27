@@ -168,7 +168,7 @@ def mtx_cor(
         X, Y,
         batch_size=500,
         to_numpy=False,
-        zscore=True,
+        zscore=False,
         scale=False,
         device=None,
         verbose=True,
@@ -241,3 +241,50 @@ def mtx_cor(
         return cor_mtx.numpy()
     return cor_mtx
 
+def mtx_pinv(X, batch_size=500, to_numpy=False, to_cpu=False, device=None, verbose=True):
+    """
+    Computes the pseudoinverse of a matrix using the GPU
+    X: torch tensor (N, D)
+    batch_size: int
+        batches the calculation if this is not None
+    to_numpy: bool
+        if true, returns matrix as ndarray
+    to_cpu: bool
+        if true, returns matrix on the cpu
+    device: int
+        optionally argue a device to use for the matrix multiplications
+    verbose: bool
+        if true, will print a progress bar
+
+    Returns:
+        pinv: (D,N)
+            the pseudoinverse of the matrix
+    """
+    if batch_size is not None:
+        C = mtx_cor(
+            X, X,
+            zscore=False,
+            scale=False,
+            to_numpy=False,
+            device=device,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        mms = []
+        pinv = torch.linalg.pinv(C)
+        device = device_fxn(pinv.get_device())
+        for i in range(0,len(X),batch_size):
+            mtx = pinv @ X[i:i+batch_size].T.to(device)
+            mms.append(mtx)
+        pinv = torch.cat(mms, dim=1)
+    else:
+        pinv = torch.linalg.pinv(X)
+    if to_numpy:
+        return pinv.cpu().numpy()
+    if to_cpu:
+        return pinv.cpu()
+    return pinv
+
+def device_fxn(device):
+    if device<0: return "cpu"
+    return device
