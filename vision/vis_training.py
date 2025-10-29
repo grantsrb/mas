@@ -12,9 +12,9 @@ from transformers import AutoImageProcessor, AutoModel  # or AutoModelForImageCl
 from torchvision import datasets
 from torch.utils.data import DataLoader
 import pandas as pd
-from hooks import hook_model_layer
+from hooks import hook_model_layer, equalize_shapes
 from vis_utils import mtx_cor, mtx_pinv
-from vis_similarity import get_cka
+from vis_similarity import get_cka, pearsonr
 from alignment import MASAlignment, LowRankTransformation
 
 def device_fxn(device):
@@ -373,6 +373,47 @@ def extract_logits(outputs):
         logits = logits.hidden_states[-1]
     return logits
 
+def get_actn_loss(
+        pred_logits,
+        labels,
+        objective_logits,
+        label_smoothing=0.0,
+        one_hot_loss=False,
+):
+    if one_hot_loss:
+        return nn.functional.cross_entropy(
+            pred_logits, labels, label_smoothing=label_smoothing
+        ).mean()
+    else:
+        return nn.functional.cross_entropy(
+            pred_logits, objective_logits.softmax(dim=-1),
+        ).mean()
+
+
+def get_actvs_grads(
+    model,
+    inputs,
+    labels,
+    objective_logits,
+    alignment,
+    label_smoothing=0.0,
+    one_hot_loss=False,
+):
+    outputs = model(inputs)
+    new_logits = extract_logits(outputs)
+    actvs = alignment.comms_dict["src_actvs_with_grad_tracking"]
+    loss = get_actn_loss(
+        pred_logits=new_logits,
+        labels=labels,
+        objective_logits=objective_logits,
+        label_smoothing=label_smoothing,
+        one_hot_loss=one_hot_loss,
+    )
+    loss.backward()
+    grad = actvs.grad.data.clone().cpu()
+    return grad, new_logits, loss
+
+
 def train_mas_alignment_one_epoch(
         models,
         alignment,
@@ -430,12 +471,16 @@ def train_mas_alignment_one_epoch(
     models = [model.to(device) for model in models]
     models = [model.eval() for model in models]
     alignment.train()
+    alignment.comms_dict["track_grads"] = False
 
     df_dict = dict()
     df_dict["actn_loss"] = []
     df_dict["cl_loss"] = []
     df_dict["acc"] = []
     df_dict["penalty"] = []
+    df_dict["label_acc"] = []
+    df_dict["behav_acc"] = []
+    df_dict["src_acc"] = []
     df_dict["trg_idx"] = []
     df_dict["src_idx"] = []
     df_dict["varb_idx"] = []
@@ -443,6 +488,7 @@ def train_mas_alignment_one_epoch(
 
     if use_ground_truth_labels:
         label_key = "labels"
+        one_hot_loss = True
     else:
         label_key = "preds"
     alignment.comms_dict["varb_idx"] = varb_idx
@@ -455,12 +501,16 @@ def train_mas_alignment_one_epoch(
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
         accs = dict()
         penalties = dict()
+        label_accs = dict()
+        behav_accs = dict()
+        src_accs = dict()
         cl_losses = dict()
         actn_losses = dict()
         for src_idx in range(len(models)):
             src_data = actvs_sets[src_idx]
             src_actvs = src_data["actvs"][src_batch]
             src_logits = src_data["logits"][src_batch]
+            src_data_labels = src_data["labels"][src_batch]
             src_labels = src_data[label_key][src_batch]
             alignment.comms_dict["src_activations"] = src_actvs
             alignment.comms_dict["src_idx"] = src_idx
@@ -469,6 +519,7 @@ def train_mas_alignment_one_epoch(
                 if use_trg_labels:
                     src_logits = trg_data["logits"][src_batch]
                     src_labels = trg_data[label_key][src_batch]
+                    src_data_labels = trg_data["labels"][src_batch]
                 trg_inputs = trg_data["inputs"][trg_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
                 if cl_vectors is not None:
@@ -491,19 +542,13 @@ def train_mas_alignment_one_epoch(
 
                 if not do_train_loss:
                     torch.set_grad_enabled(False)
-                if one_hot_loss:
-                    if label_smoothing > 0:
-                        actn_loss = nn.functional.cross_entropy(
-                            logits, src_labels.to(device), label_smoothing=label_smoothing
-                        ).mean()
-                    else:
-                        actn_loss = nn.functional.cross_entropy(
-                            logits, src_labels.to(device)
-                        ).mean()
-                else:
-                    actn_loss = nn.functional.cross_entropy(
-                        logits, src_logits.to(device).softmax(dim=-1)
-                    ).mean()
+                actn_loss = get_actn_loss(
+                    pred_logits=logits,
+                    labels=src_labels.to(device),
+                    objective_logits=src_logits.to(device),
+                    label_smoothing=label_smoothing,
+                    one_hot_loss=one_hot_loss,
+                )
                 torch.set_grad_enabled(prev_grad_state)
 
                 cl_loss = torch.zeros(1).to(device)
@@ -527,10 +572,16 @@ def train_mas_alignment_one_epoch(
                 if loss.requires_grad:
                     loss.backward()
                 
-                acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
+                preds = logits.argmax(dim=-1)
+                acc = (preds == src_labels.to(device)).float().mean().item()
                 accs[(src_idx,trg_idx)] = acc
-                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean().item()
-                penalties[(src_idx,trg_idx)] = (src_acc-acc)
+                label_acc = (preds == src_data_labels.to(device)).float().mean().item()
+                label_accs[(src_idx,trg_idx)] = label_acc
+                src_acc = (src_logits.argmax(dim=-1) == src_data_labels).float().mean().item()
+                src_accs[(src_idx,trg_idx)] = src_acc
+                penalties[(src_idx,trg_idx)] = (src_acc-label_acc)
+                behav_acc = (preds==src_logits.argmax(dim=-1).to(device)).float().mean().item()
+                behav_accs[(src_idx,trg_idx)] = behav_acc
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -542,7 +593,7 @@ def train_mas_alignment_one_epoch(
             n_batches = len(actvs_sets[0]['inputs'])
             print(f"Batch {batch_idx}/{n_batches}",
                 "IIA:", min(accs.values()),
-                "Penalty:", min(penalties.values()),
+                "Penalty:", max(penalties.values()),
                 "Loss:", max(actn_losses.values()),
                 "Time:", end_time - start_time,
                 end=" "*50+"\r"
@@ -557,6 +608,9 @@ def train_mas_alignment_one_epoch(
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
             df_dict["penalty"].append(penalties[(src_idx,trg_idx)])
+            df_dict["label_acc"].append(label_accs[(src_idx,trg_idx)])
+            df_dict["behav_acc"].append(behav_accs[(src_idx,trg_idx)])
+            df_dict["src_acc"].append(src_accs[(src_idx,trg_idx)])
         if debug and batch_idx>batch_size:
             return pd.DataFrame(df_dict)
     if batch_idx//batch_size % batches_per_optim_step != 0:
@@ -576,6 +630,7 @@ def evaluate_mas_alignment(
         cl_eps=1,
         cl_method="same_as_target",
         cl_loss_type="both",
+        label_smoothing=0.0,
         use_trg_labels=False,
         verbose=True,
         debug=False,
@@ -584,6 +639,7 @@ def evaluate_mas_alignment(
     models = [model.to(device) for model in models]
     models = [model.eval() for model in models]
     alignment.eval()
+    alignment.comms_dict["track_grads"] = False
 
     if use_ground_truth_labels:
         label_key = "labels"
@@ -593,6 +649,9 @@ def evaluate_mas_alignment(
 
     df_dict = dict()
     df_dict["penalty"] = []
+    df_dict["label_acc"] = []
+    df_dict["behav_acc"] = []
+    df_dict["src_acc"] = []
     df_dict["actn_loss"] = []
     df_dict["cl_loss"] = []
     df_dict["acc"] = []
@@ -608,6 +667,9 @@ def evaluate_mas_alignment(
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
         accs = dict()
         penalties = dict()
+        label_accs = dict()
+        behav_accs = dict()
+        src_accs = dict()
         cl_losses = dict()
         actn_losses = dict()
         for src_idx in range(len(models)):
@@ -615,6 +677,7 @@ def evaluate_mas_alignment(
             src_actvs = src_data["actvs"][src_batch]
             src_logits = src_data["logits"][src_batch]
             src_labels = src_data[label_key][src_batch]
+            src_data_labels = src_data["labels"][src_batch]
             alignment.comms_dict["src_activations"] = src_actvs
             alignment.comms_dict["src_idx"] = src_idx
             for trg_idx in range(len(models)):
@@ -622,6 +685,7 @@ def evaluate_mas_alignment(
                 if use_trg_labels:
                     src_logits = trg_data["logits"][src_batch]
                     src_labels = trg_data[label_key][src_batch]
+                    src_data_labels = trg_data["labels"][src_batch]
                 trg_inputs = trg_data["inputs"][trg_batch]
                 cl_vectors = trg_data.get("cl_vectors", None) # (N,C,H,W)
                 if cl_vectors is not None:
@@ -632,14 +696,13 @@ def evaluate_mas_alignment(
                     outputs = models[trg_idx](trg_inputs.to(device))
                 logits = extract_logits(outputs)
 
-                if one_hot_loss:
-                    actn_loss = nn.functional.cross_entropy(
-                        logits, src_labels.to(device)
-                    ).mean()
-                else:
-                    actn_loss = nn.functional.cross_entropy(
-                        logits, src_logits.to(device).softmax(dim=-1)
-                    ).mean()
+                actn_loss = get_actn_loss(
+                    pred_logits=logits,
+                    labels=src_labels.to(device),
+                    objective_logits=src_logits.to(device),
+                    label_smoothing=label_smoothing,
+                    one_hot_loss=one_hot_loss,
+                )
 
                 cl_loss = torch.zeros(1).to(device)
                 do_cl_loss = cl_directions is not None and (src_idx,trg_idx) in cl_directions
@@ -662,10 +725,16 @@ def evaluate_mas_alignment(
 
                 loss = (actn_loss+cl_eps*cl_loss)/len(models)**2
                 
-                acc = (logits.argmax(dim=-1) == src_labels.to(device)).float().mean().item()
+                preds = logits.argmax(dim=-1)
+                acc = (preds == src_labels.to(device)).float().mean().item()
                 accs[(src_idx,trg_idx)] = acc
-                src_acc = (src_logits.argmax(dim=-1) == src_labels).float().mean().item()
-                penalties[(src_idx,trg_idx)] = (src_acc-acc)
+                label_acc = (preds == src_data_labels.to(device)).float().mean().item()
+                label_accs[(src_idx,trg_idx)] = label_acc
+                src_acc = (src_logits.argmax(dim=-1) == src_data_labels).float().mean().item()
+                src_accs[(src_idx,trg_idx)] = src_acc
+                penalties[(src_idx,trg_idx)] = (src_acc-label_acc)
+                behav_acc = (preds==src_logits.argmax(dim=-1).to(device)).float().mean().item()
+                behav_accs[(src_idx,trg_idx)] = behav_acc
                 cl_losses[(src_idx,trg_idx)] = cl_loss.item()
                 actn_losses[(src_idx,trg_idx)] = actn_loss.item()
 
@@ -687,8 +756,194 @@ def evaluate_mas_alignment(
             df_dict["varb_idx"].append(varb_idx)
             df_dict["batch_idx"].append(batch_idx)
             df_dict["penalty"].append(penalties[(src_idx,trg_idx)])
+            df_dict["label_acc"].append(label_accs[(src_idx,trg_idx)])
+            df_dict["behav_acc"].append(behav_accs[(src_idx,trg_idx)])
+            df_dict["src_acc"].append(src_accs[(src_idx,trg_idx)])
         if debug and batch_idx>batch_size:
             return pd.DataFrame(df_dict)
+    return pd.DataFrame(df_dict)
+
+def evaluate_behavioral_relevance(
+        models,
+        alignment,
+        actvs_sets,
+        batch_size,
+        one_hot_loss=False,
+        use_ground_truth_labels=False,
+        varb_idx=0,
+        label_smoothing=0.0,
+        use_trg_labels=False,
+        ablate_low_rank_transformation=False,
+        verbose=True,
+        debug=False,
+):
+    """
+    Evaluate the behavioral relevance of the alignment. We do this by examining
+    the correlation between the gradients of the source and target model
+    predictions with respect to the source representations in the alignment.
+    
+    Args:
+        models: list of models
+        alignment: MASAlignment
+        actvs_sets: list of actvs sets
+        batch_size: int
+        one_hot_loss: bool
+        use_ground_truth_labels: bool
+        label_smoothing: float
+        use_trg_labels: bool
+        ablate_low_rank_transformation: bool
+            If true, will set the extraneous dimensions of the rank
+            transformation to zero. Also, will not track the gradients.
+        verbose: bool
+        debug: bool
+    Returns:
+        df_dict: dict
+            A dictionary containing the metrics.
+    """
+    device = next(alignment.parameters()).device
+    models = [model.to(device) for model in models]
+    models = [model.eval() for model in models]
+    alignment.eval()
+    alignment.comms_dict["track_grads"] = True
+    alignment.comms_dict["varb_idx"] = varb_idx
+    prev_grad_states = dict()
+    for p in alignment.parameters():
+        prev_grad_states[p] = p.requires_grad
+        p.requires_grad = False
+    for model in models:
+        for p in model.parameters():
+            prev_grad_states[p] = p.requires_grad
+            p.requires_grad = False
+
+    # Optionally set the low-rank transformation to zeros instead of
+    # its previous type.
+    lrt = alignment.comms_dict.get("low_rank_transformation", None)
+    if ablate_low_rank_transformation and lrt is not None:
+        alignment.comms_dict["low_rank_transformation"].set_ablation("zeros")
+
+    df_dict = dict()
+    df_dict["penalty"] = []
+    df_dict["label_acc"] = []
+    df_dict["behav_acc"] = []
+    df_dict["src_acc"] = []
+    df_dict["actn_loss"] = []
+    df_dict["acc"] = []
+    df_dict["trg_idx"] = []
+    df_dict["src_idx"] = []
+    df_dict["varb_idx"] = []
+    df_dict["batch_idx"] = []
+    df_dict["grad_mse"] = []
+    df_dict["grad_cosine"] = []
+    df_dict["grad_correlation"] = []
+
+    if use_ground_truth_labels:
+        label_key = "labels"
+        one_hot_loss = True
+    else:
+        label_key = "preds"
+
+    src_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
+    trg_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
+    for batch_idx in range(0,len(actvs_sets[0]["inputs"]),batch_size):
+        src_batch = src_perm[batch_idx:batch_idx+batch_size]
+        trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
+        accs = dict()
+        label_accs = dict()
+        src_accs = dict()
+        penalties = dict()
+        behav_accs = dict()
+        actn_losses = dict()
+        mses = dict()
+        cosines = dict()
+        correlations = dict()
+        for src_idx in range(len(models)):
+            src_data = actvs_sets[src_idx]
+            src_inputs = src_data["inputs"][src_batch]
+            src_actvs = src_data["actvs"][src_batch]
+            src_logits = src_data["logits"][src_batch]
+            src_labels = src_data[label_key][src_batch]
+            src_data_labels = src_data["labels"][src_batch]
+            alignment.comms_dict["src_activations"] = src_actvs
+            alignment.comms_dict["src_idx"] = src_idx
+            alignment.comms_dict["identity"] = True
+            src_grad, _, _ = get_actvs_grads(
+                model=models[src_idx],
+                alignment=alignment,
+                inputs=src_inputs.to(device),
+                labels=src_labels.to(device),
+                objective_logits=src_logits.to(device),
+                label_smoothing=label_smoothing,
+                one_hot_loss=one_hot_loss,
+            )
+            alignment.comms_dict["identity"] = False
+            for trg_idx in range(len(models)):
+                trg_data = actvs_sets[trg_idx]
+                assert not use_trg_labels, "use_trg_labels not supported for behavioral relevance evaluation"
+                trg_inputs = trg_data["inputs"][trg_batch]
+                alignment.comms_dict["trg_idx"] = trg_idx
+                trg_grad, logits, loss = get_actvs_grads(
+                    model=models[trg_idx],
+                    alignment=alignment,
+                    inputs=trg_inputs.to(device),
+                    labels=src_labels.to(device),
+                    objective_logits=src_logits.to(device),
+                    label_smoothing=label_smoothing,
+                    one_hot_loss=one_hot_loss,
+                )
+
+                preds = logits.argmax(dim=-1)
+                acc = (preds == src_labels.to(device)).float().mean().item()
+                accs[(src_idx,trg_idx)] = acc
+                label_acc = (preds == src_data_labels.to(device)).float().mean().item()
+                label_accs[(src_idx,trg_idx)] = label_acc
+                src_acc = (src_logits.argmax(dim=-1) == src_data_labels).float().mean().item()
+                src_accs[(src_idx,trg_idx)] = src_acc
+                penalties[(src_idx,trg_idx)] = (src_acc-label_acc)
+                behav_acc = (preds==src_logits.argmax(dim=-1).to(device)).float().mean().item()
+                behav_accs[(src_idx,trg_idx)] = behav_acc
+                actn_losses[(src_idx,trg_idx)] = loss.item()
+
+                trg = trg_grad
+                src = src_grad
+                mse = (((trg - src)**2).sum(-1)).mean()
+                mses[(src_idx,trg_idx)] = mse.item()
+                cosine = torch.nn.functional.cosine_similarity(
+                    trg, src, dim=-1).mean()
+                cosines[(src_idx,trg_idx)] = cosine.item()
+                correlation = pearsonr(trg.T, src.T).mean()
+                correlations[(src_idx,trg_idx)] = correlation.item()
+
+        if verbose:
+            n_batches = len(actvs_sets[0]['inputs'])
+            print(f"Batch {batch_idx}/{n_batches}",
+                "IIA:", min(accs.values()),
+                "Penalty:", min(penalties.values()),
+                "Loss:", max(actn_losses.values()),
+                end=" "*50+"\r"
+            )
+
+        for (src_idx,trg_idx) in sorted(list(accs.keys())):
+            df_dict["actn_loss"].append(actn_losses[(src_idx,trg_idx)])
+            df_dict["acc"].append(accs[(src_idx,trg_idx)])
+            df_dict["trg_idx"].append(trg_idx)
+            df_dict["src_idx"].append(src_idx)
+            df_dict["varb_idx"].append(0)
+            df_dict["batch_idx"].append(batch_idx)
+            df_dict["penalty"].append(penalties[(src_idx,trg_idx)])
+            df_dict["label_acc"].append(label_accs[(src_idx,trg_idx)])
+            df_dict["behav_acc"].append(behav_accs[(src_idx,trg_idx)])
+            df_dict["src_acc"].append(src_accs[(src_idx,trg_idx)])
+            df_dict["grad_mse"].append(mses[(src_idx,trg_idx)])
+            df_dict["grad_cosine"].append(cosines[(src_idx,trg_idx)])
+            df_dict["grad_correlation"].append(correlations[(src_idx,trg_idx)])
+        if debug and batch_idx>batch_size:
+            return pd.DataFrame(df_dict)
+
+    alignment.comms_dict["track_grads"] = False
+    for p, prev_grad_state in prev_grad_states.items():
+        p.requires_grad = prev_grad_state
+    if ablate_low_rank_transformation and lrt is not None:
+        alignment.comms_dict["low_rank_transformation"].set_ablation(False)
     return pd.DataFrame(df_dict)
 
 def minimize_cka_one_epoch(
