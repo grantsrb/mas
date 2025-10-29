@@ -99,19 +99,27 @@ def get_vision_hook(comms_dict):
         trg_inputs = trg_actvs.to(device)[trg_swap_bools]
         src_inputs = src_actvs.to(device)[src_swap_bools]
 
+        if comms_dict.get("track_grads", False):
+            src_inputs = src_inputs.clone()
+            src_inputs.requires_grad = True
+            comms_dict["src_actvs_with_grad_tracking"] = src_inputs
+            
         if comms_dict.get("low_rank_transformation", None) is not None:
             low_rank_transformation = comms_dict["low_rank_transformation"].to(device)
             trg_inputs = low_rank_transformation(trg_inputs)
             src_inputs = low_rank_transformation(src_inputs)
 
-        # Perform causal interchange
-        intrv_out = intrv_modu(
-            target=trg_inputs,
-            source=src_inputs,
-            target_idx=trg_idx,
-            source_idx=src_idx,
-            varb_idx=varb_idx,
-        )
+        if comms_dict.get("identity", False):
+            intrv_out = src_inputs
+        else:
+            # Perform causal interchange
+            intrv_out = intrv_modu(
+                target=trg_inputs,
+                source=src_inputs,
+                target_idx=trg_idx,
+                source_idx=src_idx,
+                varb_idx=varb_idx,
+            )
         if comms_dict.get("low_rank_transformation", None) is not None:
             low_rank_transformation = comms_dict["low_rank_transformation"]
             intrv_out = low_rank_transformation(intrv_out, inverse=True)
