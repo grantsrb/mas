@@ -34,7 +34,7 @@ from vis_training import (
     get_model_and_processor, train_model, get_dataloaders,
     get_actvs_data, get_dataloader,
     train_mas_alignment_one_epoch, evaluate_mas_alignment,
-    get_datasets, solve_alignment,
+    get_datasets, solve_alignment, evaluate_behavioral_relevance,
 )
 import torch
 from torchvision import datasets
@@ -48,7 +48,7 @@ import seaborn as sns
 from vis_utils import (
     get_valid_layer_names, read_command_line_args,
     get_layer_name_from_model_name, get_timestamp,
-    save_yaml, get_git_revision_hash,
+    save_yaml, get_git_revision_hash, get_newest_model_save_path,
 )
 
 def compare_models(config):
@@ -58,6 +58,18 @@ def compare_models(config):
         print(f"{k} ({type(config[k]).__name__}): {config[k]}")
     print()
 
+    id_keys = [
+        "exp_name", "model_names", "layer_names", "dataset_name",
+        "model_stitch",  "mtx_type",
+        "do_low_rank_transformation", "low_rank_transformation_type",
+    ]
+    dummy = {k: config.get(k, "") for k in id_keys if k in config}
+    dummy = {k.replace("_","").split(".")[-1].split("/")[-1]: v if type(v) != list else v[0] for k, v in dummy.items()}
+    id_str = "-".join([f"{k}={v}" for k, v in dummy.items()])
+
+    exp_name = config.get("exp_name", "")
+    if exp_name and exp_name != "":
+        exp_name = f"{exp_name}_"
     model_names = config["model_names"]
     n_models = len(model_names)
     batch_size = config["batch_size"]
@@ -66,8 +78,8 @@ def compare_models(config):
     num_epochs = config["num_epochs"]
     lr = config["train_lr"]
     model_save_dir = config["model_save_dir"]
-    data_root = config["data_root"]
     overwrite = config["overwrite"]
+    new_models = config.get("new_models", False)
 
     models = []
     processors = []
@@ -121,22 +133,27 @@ def compare_models(config):
     ####################################################
     #    Load the models and finetune
     ####################################################
+    seed = config.get("seed", None)
+    if seed is not None: seed_str = f"_seed{seed}"
+    else: seed_str = ""
     print("Loading models...")
     for i, (model, processor) in enumerate(zip(models, processors)):
         train_loader = train_loaders[i]
         test_loader = test_loaders[i]
         model_name = model_names[i].split("/")[-1]
         full_finetune = config["finetune_full_model"]
-        model_save_path = f"{model_save_dir}/{model_name}_{finetune_dataset_name}_finetune{full_finetune}_sd_{i}.pt"
+        model_save_path = f"{exp_name}{model_name}_{finetune_dataset_name}_finetune{full_finetune}{seed_str}_sd_{i}.pt"
+        model_save_path = os.path.join(model_save_dir, model_save_path)
         if not config["pretrained"]:
             model_save_path = model_save_path.replace(".pt", "_unpretrained.pt")
-        if os.path.exists(model_save_path) and not config["overwrite"]:
+        if new_models and os.path.exists(model_save_path):
+            model_save_path = get_newest_model_save_path(model_save_path)
+        config[f"model_save_path_{i}"] = model_save_path
+        if os.path.exists(model_save_path) and not overwrite and not new_models:
             print(f"Loading model from {model_save_path}")
             model.load_state_dict(torch.load(model_save_path))
         else:
-            print("Overwriting model")
-            config["overwrite"] = True
-            print(f"Finetuning model {i}")
+            print(f"Finetuning model {i} to {model_save_path}")
             try:
                 model, metrics = train_model(
                     model=model,
@@ -161,8 +178,14 @@ def compare_models(config):
         for p in model.parameters():
             p.requires_grad = False
         
-        torch.save(model.state_dict(), model_save_path)
+        if not config.get("debug", False):
+            torch.save(model.state_dict(), model_save_path)
+        print(f"Saved model to {model_save_path}")
     
+    file_save_dir = model_save_path.split("_sd_")[0]
+    if not os.path.exists(file_save_dir):
+        os.makedirs(file_save_dir, exist_ok=True)
+    config["file_save_dir"] = file_save_dir
     
     ####################################################
     #    Collect model intermediates and outputs
@@ -192,8 +215,8 @@ def compare_models(config):
         mname = model_name.split("/")[-1]
         dname = dataset_name.split("/")[-1]
         debug = config.get("debug", False)*"_debug"
-        actvs_name = f"{model_save_dir}/{mname}_{dname}_{lname}_m{mi}_actvs_train{debug}.pt"
-        if os.path.exists(actvs_name) and not config["overwrite"] and not config["fresh_actvs"]:
+        actvs_name = f"{file_save_dir}/{exp_name}{mname}_{dname}_{lname}{seed_str}_m{mi}_actvs_train{debug}.pt"
+        if os.path.exists(actvs_name) and not overwrite and not config["fresh_actvs"]:
             print(f"Loading actvs sets from disk...")
             actvs_train_sets.append(torch.load(actvs_name))
             actvs_valid_sets.append(torch.load(actvs_name.replace("train", "valid")))
@@ -234,26 +257,9 @@ def compare_models(config):
                 actvs_valid_sets.append(actvs_valid)
             model.cpu()
     
-            if config.get("save_actvs", False) or (os.path.exists(actvs_name) and config["overwrite"]):
+            if config.get("save_actvs", False) or (os.path.exists(actvs_name) and overwrite):
                 torch.save(actvs_train, actvs_name)
                 torch.save(actvs_valid, actvs_name.replace("train", "valid"))
-    
-    if config.get("debug", False):
-        os.makedirs("figs", exist_ok=True)
-        plt.imshow(actvs_train_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
-        plt.savefig("figs/input_0.png", dpi=600)
-        try:
-            plt.imshow(actvs_train_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
-            plt.savefig("figs/input_1.png", dpi=600)
-        except:
-            pass
-        plt.imshow(actvs_valid_sets[0]["inputs"][0].cpu().numpy().transpose(1,2,0))
-        plt.savefig("figs/input_0_valid.png", dpi=600)
-        try:
-            plt.imshow(actvs_valid_sets[1]["inputs"][0].cpu().numpy().transpose(1,2,0))
-            plt.savefig("figs/input_1_valid.png", dpi=600)
-        except:
-            pass
     
 
     ####################################################
@@ -302,6 +308,8 @@ def compare_models(config):
         else:
             og_dims.append(actvs_train_sets[i]["actvs"].shape[1])
     if config.get("do_low_rank_transformation", False):
+        if config.get("low_rank_transformation_type", "noise") == "dummy":
+            config["low_rank_transformation_added_dimensions"] = og_dims[0]
         new_dims = config.get("low_rank_transformation_added_dimensions", 10)
         model_dims = [og_dims[i]+new_dims for i in range(len(og_dims))]
     else:
@@ -310,6 +318,8 @@ def compare_models(config):
     alignment_class = MASAlignment
     if config["model_stitch"] and config.get("direct_mapping", False):
         alignment_class = ModelStitch
+    if type(subspace_size)==float:
+        subspace_size = int(subspace_size*min(model_dims))
     alignment = alignment_class(
         model_dims=model_dims,
         mtx_type=mtx_type,
@@ -386,6 +396,19 @@ def compare_models(config):
     cl_method = config["cl_method"]
     cl_loss_type = config["cl_loss_type"]
     batches_per_optim_step = config["mas_batches_per_optim_step"]
+
+    timestamp = get_timestamp()
+    m1 = model_names[0].replace("/", "_")
+    m1 = m1+layer_names[0].replace("backbone", "").replace(".", "-")
+    m2 = model_names[1].replace("/", "_")
+    m2 = m2+layer_names[1].replace("backbone", "").replace(".", "-")
+    if config["model_stitch"]: label = "stitch"
+    else: label = "mas"
+    csv_name = f"{m1}_{m2}_{dataset_name}_{label}_{timestamp}.csv"
+    config_name = csv_name.replace(".csv", ".yaml")
+    mas_save_name = config_name.replace(".yaml", ".pt")
+    mas_save_name = os.path.join(file_save_dir, mas_save_name)
+    config["alignment_save_path"] = mas_save_name
     
     device = 0 if torch.cuda.is_available() else "cpu"
     alignment.to(device)
@@ -393,9 +416,12 @@ def compare_models(config):
     optimizer = optim.RMSprop(alignment.parameters(), lr=lr)
     train_dfs = []
     valid_dfs = []
+    rel_dfs = []
+    best_train_acc = 0
+    best_valid_acc = 0
     for epoch in range(num_epochs):
         try:
-            print(f"Epoch {epoch} - Training")
+            print(f"Epoch {epoch} - Training", id_str)
             start_time = time.time()
             train_df = train_mas_alignment_one_epoch(
                 models=models,
@@ -435,7 +461,7 @@ def compare_models(config):
             )
             gc.collect()
 
-            cols = ["actn_loss","penalty","cl_loss","acc"]
+            cols = ["actn_loss","penalty","cl_loss","acc","behav_acc","label_acc","src_acc"]
             groups = ["src_idx","trg_idx"]
     
             train = train_df.groupby(groups)[cols].mean().reset_index()
@@ -460,6 +486,47 @@ def compare_models(config):
                 "|| Penalty:", round(np.min(valid["valid_penalty"]), 5),
                 "|| Loss:", round(np.max(valid["valid_actn_loss"]), 5)
             )
+
+            if config.get("track_relevance", False) and (epoch % 10 == 0 or debug):
+                print("Evaluating behavioral relevance...")
+                rel_df = evaluate_behavioral_relevance(
+                    models=models,
+                    alignment=alignment,
+                    actvs_sets=actvs_valid_sets,
+                    batch_size=batch_size,
+                    one_hot_loss=one_hot_loss,
+                    use_ground_truth_labels=ground_truth_labels,
+                    use_trg_labels=use_trg_labels,
+                    ablate_low_rank_transformation=config.get("ablate_low_rank_transformation", False),
+                    verbose=True,
+                    debug=debug,
+                )
+                rel_groups = [c for c in groups if c in rel_df.columns]
+                rel_cols = [c for c in cols if c in rel_df.columns] +\
+                           ["grad_mse", "grad_cosine", "grad_correlation"]
+                rel = rel_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+                rel["epoch"] = epoch
+                rel_dfs.append(rel)
+                print(rel.sort_values(by=rel_groups,ascending=True))
+                print()
+            
+            if config["debug"]:
+                continue
+            sname = mas_save_name.replace(".pt", f"_best.pt")
+            if config["model_stitch"] and valid["valid_acc"].max() > best_valid_acc:
+                best_valid_acc = valid["valid_acc"].max()
+                best_train_acc = train["acc"].max()
+                torch.save(alignment.state_dict(), sname)
+                print(f"Saved alignment to {mas_save_name}")
+                print(f"New best validation accuracy: {best_valid_acc}")
+                print(f"New best train accuracy: {best_train_acc}")
+            elif not config["model_stitch"] and valid["valid_acc"].min() > best_valid_acc:
+                best_valid_acc = valid["valid_acc"].min()
+                best_train_acc = train["acc"].min()
+                torch.save(alignment.state_dict(), sname)
+                print(f"New best validation accuracy: {best_valid_acc}")
+                print(f"New best train accuracy: {best_train_acc}")
+
         except KeyboardInterrupt:
             print("Interrupted training, exiting...")
             break
@@ -471,24 +538,96 @@ def compare_models(config):
     
     train_df.columns = ["train_"+col if col in cols else col for col in train_df.columns]
     valid_df.columns = ["valid_"+col if col in cols else col for col in valid_df.columns]
-    cols = ["train_acc","valid_acc", "train_actn_loss", "valid_actn_loss"]
+    cols = [
+        "train_label_acc", "valid_label_acc", "penalty",
+        "train_acc","valid_acc",
+        "train_actn_loss", "valid_actn_loss",
+    ]
     main_df = pd.merge(train_df, valid_df, on=groups+["epoch"])
+
+    ####################################################
+    #    Evaluate behavioral relevance
+    ####################################################
+    ablate_df = None
+    grad_df = None
+    cols = ["actn_loss","penalty","cl_loss","acc","behav_acc","label_acc","src_acc"]
+    groups = ["src_idx","trg_idx"]
+    rel_groups = [c for c in groups if c in rel_df.columns]
+    rel_cols = [c for c in cols if c in rel_df.columns] +\
+            ["grad_mse", "grad_cosine", "grad_correlation"]
+    grad_df = evaluate_behavioral_relevance(
+        models=models,
+        alignment=alignment,
+        actvs_sets=actvs_valid_sets,
+        batch_size=batch_size,
+        one_hot_loss=one_hot_loss,
+        use_ground_truth_labels=ground_truth_labels,
+        ablate_low_rank_transformation=False,
+        verbose=True,
+        debug=debug,
+    )
+    print("Gradient based relevance")
+    grad = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+    print(grad.sort_values(by=rel_groups,ascending=True))
+    dolow = config.get("do_low_rank_transformation", False)
+    if dolow:
+        ablate_df = evaluate_behavioral_relevance(
+            models=models,
+            alignment=alignment,
+            actvs_sets=actvs_valid_sets,
+            batch_size=batch_size,
+            one_hot_loss=one_hot_loss,
+            use_ground_truth_labels=ground_truth_labels,
+            ablate_low_rank_transformation=True,
+            verbose=True,
+            debug=debug,
+        )
+        print("Ablated low-rank transformation")
+        ablat = ablate_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+        print(ablat.sort_values(by=rel_groups,ascending=True))
+    if dolow and config.get("ablate_low_rank_transformation", False):
+        rel_df = pd.concat([grad_df, ablate_df])
+    else:
+        rel_df = grad_df
+    rel = rel_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+    rel["epoch"] = epoch
+    rel_dfs.append(rel)
+    rel_df = pd.concat(rel_dfs)
     
-    timestamp = get_timestamp()
-    m1 = model_names[0].replace("/", "_")
-    m1 = m1+layer_names[0].replace("backbone", "").replace(".", "-")
-    m2 = model_names[1].replace("/", "_")
-    m2 = m2+layer_names[1].replace("backbone", "").replace(".", "-")
-    csv_name = f"{m1}_{m2}_{dataset_name}_mas_{timestamp}.csv"
-    config_name = csv_name.replace(".csv", ".yaml")
+    ####################################################
+    #    Save results
+    ####################################################
     if not config.get("debug", False):
+        torch.save(alignment.state_dict(), mas_save_name)
+        print(f"Saved alignment to {mas_save_name}")
+
+        if config.get("track_relevance", False): # track the behavioral relevance of the alignment
+            rel_csv_name = csv_name.replace(".csv", "_rel.csv")
+            rel_save_name = os.path.join(file_save_dir, rel_csv_name)
+            rel_df.to_csv(rel_save_name, index=False, header=True)
+            print(f"Saved behavioral relevance results to {rel_save_name}")
+
+            if ablate_df is not None:
+                ablate_csv_name = csv_name.replace(".csv", "_ablate.csv")
+                ablate_save_name = os.path.join(file_save_dir, ablate_csv_name)
+                ablate_df.to_csv(ablate_save_name, index=False, header=True)
+                print(f"Saved behavioral relevance results to {ablate_save_name}")
+            if grad_df is not None:
+                grad_csv_name = csv_name.replace(".csv", "_grad.csv")
+                grad_save_name = os.path.join(file_save_dir, grad_csv_name)
+                grad_df.to_csv(grad_save_name, index=False, header=True)
+                print(f"Saved behavioral relevance results to {grad_save_name}")
+    
         main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
         save_yaml(config, f"csvs/{config_name}")
         print(f"Saved results to {csv_name}")
-    
+
     
     if not config["make_figs"]:
+        print("Ending", id_str)
+        print("--------------------------------")
         return main_df
+
     ####################################################
     #    Evaluate results
     ####################################################
@@ -574,6 +713,7 @@ def compare_models(config):
 
 default_config = {
     "overwrite": False,
+    "new_models": False, # if True, will create new model saves even if others exist.
     "fresh_actvs": False, # if True, will overwrite the actvs sets even if they exist on disk
     "pretrained": True, # if True, will use the pretrained model weights from huggingface
     "finetune_full_model": True, # if True, will only finetune the classification head of the model
@@ -600,11 +740,17 @@ default_config = {
         # choices:
         #   "noise": add noise to the representations
         #   "zeros": set the low-rank dimensions to zero
+        #   "dummy": use the original representations are duplicated along
+        #       the null dimensions.
     "do_low_rank_transformation": False, # if True, will use a transformation
         # that pads the representations with zeros or noise and then rotates
         # them into a new basis before the alignment intervention.
     "low_rank_transformation_added_dimensions": 10, # the number of dimensions to
         # add to the representations.
+    "track_relevance": True, # if True, will track the behavioral relevance of the alignment
+    "ablate_low_rank_transformation": True, # if True, will set the added low-rank
+        # transformation dims to zeros instead of its previous type during
+        # evaluation of behavioral relevance.
 
     "dataset_name": "cifar10",
     "model_names": [
@@ -723,6 +869,12 @@ def prepare_config(config):
         config["train_directions"] = [(0,0),(0,1),(1,0),(1,1)]
     if not config["cl_directions"]:
         config["cl_directions"] = []
+
+    if config["ground_truth_labels"]:
+        config["one_hot_loss"] = True
+
+    if config.get("single_model", False):
+        config["model_mode"] = "single_model"
 
     if config.get("analytic_alignment", False):
         config["mas_epochs"] = 1

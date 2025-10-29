@@ -460,12 +460,22 @@ class LowRankTransformation(torch.nn.Module):
     def __init__(self, original_dimensions=10, added_dimensions=10, transformation_type="zeros"):
         super().__init__()
         self.transformation_type = transformation_type
+        self.og_transformation_type = transformation_type
         self.original_dimensions = original_dimensions
+        if self.transformation_type == "dummy":
+            added_dimensions = original_dimensions
         self.added_dimensions = added_dimensions
         D = original_dimensions+added_dimensions
         self.rotation_matrix = RotationMatrix(size=D, bias=False)
         for p in self.rotation_matrix.parameters():
             p.requires_grad = False
+        self.ablation = False
+
+    def set_ablation(self, ablation):
+        if not ablation:
+            self.transformation_type = self.og_transformation_type
+        else:
+            self.transformation_type = ablation
 
     def forward(self, x, inverse=False):
         if inverse:
@@ -473,6 +483,8 @@ class LowRankTransformation(torch.nn.Module):
         device = device_fxn(x.get_device())
         if self.transformation_type == "noise":
             x = torch.cat([x, torch.randn(x.shape[0], self.added_dimensions).to(device)], dim=-1)
+        elif self.transformation_type == "dummy":
+            x = torch.cat([x, x.data.clone().detach()], dim=-1)
         else: # zeros
             x = torch.cat([x, torch.zeros(x.shape[0], self.added_dimensions).to(device)], dim=-1)
         return self.rotation_matrix(x)
