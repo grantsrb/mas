@@ -1,3 +1,4 @@
+import os
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
@@ -288,3 +289,11 @@ def mtx_pinv(X, batch_size=500, to_numpy=False, to_cpu=False, device=None, verbo
 def device_fxn(device):
     if device<0: return "cpu"
     return device
+
+def get_newest_model_save_path(model_save_path):
+    """
+    Gets the newest model save path from the model save path.
+    """
+    while os.path.exists(model_save_path):
+        model_save_path = model_save_path.replace(".pt", "1.pt")
+    return model_save_path
