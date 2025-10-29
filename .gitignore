@@ -3,3 +3,8 @@ make_models/*
 scripts/*
 */csvs/*
 */figs/*
+*.ipynb_checkpoints*
+*/.ipynb_checkpoints/*
+*/__pycache__/
+*deleteme*
+*.txt
