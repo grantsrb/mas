@@ -9,8 +9,18 @@ from utils import device_fxn
 from dl_utils.torch_modules import (
     IdentityModule, InvTanh, InvSigmoid,
     PositiveSymmetricDefiniteMatrix, SymmetricDefiniteMatrix,
-    ReversibleResnet,
+    ReversibleResnet, InvertibleBatchNorm1d,
 )
+
+class Identity:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, x, *args, **kwargs):
+        return x
+
+    def inv(self, x, *args, **kwargs):
+        return x
 
 class RankRotationMatrix(torch.nn.Module):
     def __init__(self,
@@ -21,6 +31,7 @@ class RankRotationMatrix(torch.nn.Module):
             mu=0,
             sigma=1,
             identity_rot=False,
+            batch_norm=False,
             orthogonal_map=None,
             nonlin_align_fn=None,
             **kwargs):
@@ -41,6 +52,9 @@ class RankRotationMatrix(torch.nn.Module):
         identity_rot: bool
             if true, will always reset the rotation matrix to the
             identity. Used for debugging.
+        batch_norm: bool
+            if true, will learn batch normalization parameters for the
+            activations before the rotation matrix.
         nonlin_align_fn: callable
             inverse of a function to apply to the input before the rotation matrix.
         """
@@ -78,6 +92,11 @@ class RankRotationMatrix(torch.nn.Module):
             # orthogonal
             self.rot_module = torch.nn.utils.parametrizations.orthogonal(
                 lin, orthogonal_map=orthogonal_map)
+
+        if batch_norm:
+            self.bn = InvertibleBatchNorm1d(size)
+        else:
+            self.bn = Identity()
 
     @property
     def weight(self):
@@ -165,10 +184,12 @@ class RankRotationMatrix(torch.nn.Module):
     def rot_forward(self, h):
         h = self.nonlin_fwd(h)
         h = (h-self.mu)/self.sigma
+        h = self.bn(h)
         return torch.matmul(h+self.bias, self.weight)
 
     def rot_inv(self, h):
         h = torch.matmul(h, self.weight_inv)-self.bias
+        h = self.bn.inv(h)
         h = h*self.sigma + self.mu
         h = self.nonlin_inv(h)
         return h
@@ -511,7 +532,8 @@ class RelaxedRotationMatrix(RankRotationMatrix):
         #return torch.matmul(h,torch.diag(1/(self.diag+self.eps)))
 
     def rot_first_forward(self, h, inverse=False):
-        if inverse: return self.rot_inv(self.diag_inv(h))-self.bias
+        if inverse:
+            return self.rot_inv(self.diag_inv(h))-self.bias
         return self.diag_forward(self.rot_forward(h+self.bias))
 
     def scale_first_forward(self, h, inverse=False):

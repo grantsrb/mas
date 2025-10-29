@@ -2063,6 +2063,47 @@ class ReversibleResnet(nn.Module):
             fx = block.inv(fx)
         return fx
 
+
+class InvertibleBatchNorm1d(nn.Module):
+    def __init__(self, size, momentum=0.999):
+        """
+        momentum - float (0 <= momentum < 1)
+            this is the exponentially moving average factor for
+            updating the running mean and std. 0 uses the mean and std
+            of the current activations. 1 uses the mean and std of the
+            activations at the last forward pass.
+        """
+        super().__init__()
+        self.size = size
+        self.momentum = momentum
+        self.scale = torch.nn.Parameter(torch.ones(size))
+        self.bias = torch.nn.Parameter(torch.zeros(size))
+        self.running_mean = torch.nn.Parameter(torch.zeros(size))
+        self.running_std = torch.nn.Parameter(torch.ones(size))
+        self.last_mean = torch.zeros(size)
+        self.last_std = torch.ones(size)
+
+    def forward(self, x):
+        if self.training:
+            self.last_mean = x.mean(dim=0)
+            self.last_std = x.std(dim=0)
+            self.running_mean.data = self.momentum * self.running_mean.data\
+                + (1 - self.momentum) * self.last_mean
+            self.running_std.data = self.momentum * self.running_std.data\
+                + (1 - self.momentum) * self.last_std
+        else:
+            self.last_mean = self.running_mean.data
+            self.last_std = self.running_std.data
+        x = (x - self.last_mean) / (self.last_std + 1e-5)
+        x = x * (self.scale+torch.sign(self.scale)*1e-5) + self.bias
+        return x
+
+    def inv(self, x):
+        x = (x - self.bias) / (self.scale+torch.sign(self.scale)*1e-5)
+        x = x * (self.last_std+1e-5) + self.last_mean
+        return x
+
+
 if __name__=="__main__":
     mlp = MLP(
         inpt_size=10, outp_size=3, n_layers=4, h_sizes=None, lnorm=True,
