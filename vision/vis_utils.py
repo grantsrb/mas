@@ -297,3 +297,10 @@ def get_newest_model_save_path(model_save_path):
     while os.path.exists(model_save_path):
         model_save_path = model_save_path.replace(".pt", "1.pt")
     return model_save_path
+
+def replace_module(root, predicate, factory):
+    for name, module in list(root.named_children()):
+        if predicate(module):
+            setattr(root, name, factory(module))
+        else:
+            replace_module(module, predicate, factory)

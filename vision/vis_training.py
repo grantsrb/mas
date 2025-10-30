@@ -13,7 +13,7 @@ from torchvision import datasets
 from torch.utils.data import DataLoader
 import pandas as pd
 from hooks import hook_model_layer, equalize_shapes
-from vis_utils import mtx_cor, mtx_pinv
+from vis_utils import mtx_cor, mtx_pinv, replace_module
 from vis_similarity import get_cka, pearsonr
 from alignment import MASAlignment, LowRankTransformation
 
@@ -22,7 +22,38 @@ def device_fxn(device):
         return "cpu"
     return device
 
-def get_model_and_processor(model_name, pretrained=True):
+def replace_first_conv(root, kernel_size=3, stride=1, padding=1, copy_weights_from_old=False):
+    for name, module in root.named_children():
+        print(f"Checking {name}")
+        if isinstance(module, nn.Conv2d):
+            print(f"Replacing {name} with a {kernel_size}x{kernel_size}, {stride} stride, {padding} padding convolution")
+            print(f"Old kernel size: {module.kernel_size}")
+            old = module
+            new_conv = nn.Conv2d(
+                in_channels=old.in_channels,
+                out_channels=old.out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                bias=old.bias is not None,
+            )
+            if copy_weights_from_old:
+                with torch.no_grad():
+                    if old.kernel_size == (7, 7):
+                        w = old.weight
+                        c = 7 // 2
+                        new_conv.weight.copy_(w[:, :, c-1:c+2, c-1:c+2])
+                        if old.bias is not None:
+                            new_conv.bias.copy_(old.bias)
+                    else:
+                        new_conv.weight.copy_(old.weight)
+            setattr(root, name, new_conv)
+            return True
+        if replace_first_conv(module, kernel_size, stride, padding, copy_weights_from_old):
+            return True
+    return False
+
+def get_model_and_processor(model_name, pretrained=True, image_resize=None):
     """
     Get a model and processor for a given model name.
 
@@ -33,9 +64,24 @@ def get_model_and_processor(model_name, pretrained=True):
     - "google/vit-small-patch16-224"
     - "google/vit-large-patch16-224"
     - "google/vit-huge-patch16-224"
+    
+    Args:
+        model_name: str
+            the name of the model to load
+        pretrained: bool
+            if True, will load the pretrained weights from the model hub
+        image_resize: int or None
+            if an int is provided, will resize the images to the specified size
+    Returns:
+        model: torch.nn.Module
+            the model
+        processor: AutoImageProcessor
+            the processor
     """
     model = AutoModel.from_pretrained(model_name)
     if not pretrained:
+        if "resnet" in model_name.lower() and image_resize is not None:
+            replace_first_conv(model, kernel_size=7, stride=1, padding=1)
         for name,modu in model.named_modules():
             if "Linear" in str(type(modu)) or "Conv" in str(type(modu)) or "Embedding" in str(type(modu)):
                 for pname,p in modu.named_parameters():
@@ -44,9 +90,16 @@ def get_model_and_processor(model_name, pretrained=True):
                     else:
                         fan_in = p.data.shape[0]
                         p.data = torch.randn_like(p.data) * (2/fan_in)**0.5
+
+    do_resize = image_resize is None or image_resize > 0
     processor = AutoImageProcessor.from_pretrained(
-        model_name, use_fast=True,
+        model_name, use_fast=True, do_resize=do_resize,
     )
+    if image_resize and image_resize > 0:
+        processor.size = {
+            "shortest_edge": image_resize,
+            "longest_edge": image_resize,
+        }
     if "vit" in model_name.lower():
         pooler_name = None
         for name, _ in model.named_modules():
@@ -119,6 +172,7 @@ def get_dataloader(
         dataset: datasets.CIFAR10 = None,
         data_root: str = "./data",
         shuffle: bool = True,
+        augment: bool = False,
 ):
    if dataset is None:
        # CIFAR-10 returns PIL images; we'll use the processor inside a
@@ -127,6 +181,10 @@ def get_dataloader(
 
    def collate_fn(batch):
        images, labels = zip(*batch)  # images are PIL.Image
+       if augment:
+           size = min(images[0].size)
+           images = [transforms.RandomHorizontalFlip()(image) for image in images]
+           images = [transforms.RandomCrop(size, padding=4)(image) for image in images]
        enc = processor(images=list(images), return_tensors="pt")
        pixel_values = enc["pixel_values"]  # (B, 3, 224, 224)
        labels_t = torch.tensor(labels, dtype=torch.long)
@@ -150,6 +208,7 @@ def get_dataloaders(
         train_dataset: datasets.CIFAR10 = None,
         test_dataset: datasets.CIFAR10 = None,
         data_root: str = "./data",
+        augment: bool = False,
 ):
     train_loader = get_dataloader(
         dataset=train_dataset,
@@ -158,6 +217,7 @@ def get_dataloaders(
         num_workers=num_workers,
         shuffle=True,
         data_root=data_root,
+        augment=augment,
     )
     if val_batch_size is None:
         val_batch_size = batch_size
@@ -180,28 +240,36 @@ def train_model(
             "train_lr": 0.001,
             "num_epochs": 10,
             "early_stopping": False,
+            "label_smoothing": 0.1,
+            "weight_decay": 0,
         },
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     optimizer = optim.Adam(
-        model.parameters(), lr=hyperparameters.get("train_lr", 0.001)
+        model.parameters(),
+        lr=hyperparameters.get("train_lr", 0.001),
+        weight_decay=hyperparameters.get("weight_decay", 0),
     )
-    model.train()
     best_test_acc = 0
     best_epoch = 0
+    label_smoothing = hyperparameters.get("label_smoothing", 0.1)
     if hyperparameters.get("early_stopping", False):
         patience = hyperparameters.get("patience", 10)
         patience_counter = 0
     for epoch in range(hyperparameters.get("num_epochs", 10)):
         avg_train_loss = 0
         avg_train_acc = 0
+        model.train()
         for batch_idx, (pixel_values, labels) in enumerate(train_loader):
             pixel_values = pixel_values.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
             outputs = model(pixel_values)
-            loss = nn.functional.cross_entropy(outputs, labels)
+            loss = nn.functional.cross_entropy(
+                outputs, labels,
+                label_smoothing=label_smoothing,
+            )
             loss.backward()
             optimizer.step()
             avg_train_loss += loss.item()
@@ -216,6 +284,7 @@ def train_model(
         avg_test_acc = 0
         if verbose:
             print("Validating...")
+        model.eval()
         itr = tqdm(enumerate(test_loader)) if verbose else enumerate(test_loader)
         for batch_idx, (pixel_values, labels) in itr:
             pixel_values = pixel_values.to(device)
@@ -396,19 +465,23 @@ def get_actvs_grads(
     labels,
     objective_logits,
     alignment,
+    sum_as_loss=True,
     label_smoothing=0.0,
     one_hot_loss=False,
 ):
     outputs = model(inputs)
     new_logits = extract_logits(outputs)
     actvs = alignment.comms_dict["src_actvs_with_grad_tracking"]
-    loss = get_actn_loss(
-        pred_logits=new_logits,
-        labels=labels,
-        objective_logits=objective_logits,
-        label_smoothing=label_smoothing,
-        one_hot_loss=one_hot_loss,
-    )
+    if sum_as_loss:
+        loss = new_logits.log_softmax(dim=-1).sum()
+    else:
+        loss = get_actn_loss(
+            pred_logits=new_logits,
+            labels=labels,
+            objective_logits=objective_logits,
+            label_smoothing=label_smoothing,
+            one_hot_loss=one_hot_loss,
+        )
     loss.backward()
     grad = actvs.grad.data.clone().cpu()
     return grad, new_logits, loss

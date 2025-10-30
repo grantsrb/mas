@@ -60,7 +60,7 @@ def compare_models(config):
 
     id_keys = [
         "exp_name", "model_names", "layer_names", "dataset_name",
-        "model_stitch",  "mtx_type",
+        "model_stitch",  "mtx_type", "ground_truth_labels",
         "do_low_rank_transformation", "low_rank_transformation_type",
     ]
     dummy = {k: config.get(k, "") for k in id_keys if k in config}
@@ -77,9 +77,12 @@ def compare_models(config):
     num_workers = config["num_workers"]
     num_epochs = config["num_epochs"]
     lr = config["train_lr"]
-    model_save_dir = config["model_save_dir"]
     overwrite = config["overwrite"]
     new_models = config.get("new_models", False)
+    model_save_dir = config["model_save_dir"]
+
+    if not os.path.exists(model_save_dir):
+        os.makedirs(model_save_dir, exist_ok=True)
 
     models = []
     processors = []
@@ -89,7 +92,9 @@ def compare_models(config):
         # with an untrained head (unfrozen parameters) that will be trained
         # on the cifar10 dataset before training the MAS alignment
         model, proc = get_model_and_processor(
-            model_name, pretrained=config["pretrained"]
+            model_name,
+            pretrained=config["pretrained"],
+            image_resize=config.get("image_resize", None),
         )
         models.append(model)
         processors.append(proc)
@@ -125,6 +130,7 @@ def compare_models(config):
             batch_size=batch_size,
             val_batch_size=val_batch_size,
             num_workers=num_workers,
+            augment=True, # only use augmentation for the training set
         )
         train_loaders.append(train_loader)
         test_loaders.append(test_loader)
@@ -136,18 +142,21 @@ def compare_models(config):
     seed = config.get("seed", None)
     if seed is not None: seed_str = f"_seed{seed}"
     else: seed_str = ""
-    print("Loading models...")
     for i, (model, processor) in enumerate(zip(models, processors)):
         train_loader = train_loaders[i]
         test_loader = test_loaders[i]
         model_name = model_names[i].split("/")[-1]
         full_finetune = config["finetune_full_model"]
-        model_save_path = f"{exp_name}{model_name}_{finetune_dataset_name}_finetune{full_finetune}{seed_str}_sd_{i}.pt"
+        model_save_path = f"{exp_name}{model_name}_{finetune_dataset_name}_finetune{full_finetune}{seed_str}_epochs{num_epochs}_sd_{i}.pt"
         model_save_path = os.path.join(model_save_dir, model_save_path)
         if not config["pretrained"]:
             model_save_path = model_save_path.replace(".pt", "_unpretrained.pt")
+        if config.get("image_resize", None) is not None:
+            size = config["image_resize"]
+            model_save_path = model_save_path.replace(".pt", f"_resize{size}.pt")
         if new_models and os.path.exists(model_save_path):
             model_save_path = get_newest_model_save_path(model_save_path)
+        print(f"Model save path: {model_save_path}")
         config[f"model_save_path_{i}"] = model_save_path
         if os.path.exists(model_save_path) and not overwrite and not new_models:
             print(f"Loading model from {model_save_path}")
@@ -163,6 +172,8 @@ def compare_models(config):
                         "train_lr": lr,
                         "num_epochs": num_epochs,
                         "early_stopping": True,
+                        "label_smoothing": config.get("og_train_label_smoothing", 0.1),
+                        "weight_decay": config.get("og_train_weight_decay", 0),
                     },
                 )
                 f = model_save_path.replace("pt", "metrics.csv")
@@ -173,15 +184,15 @@ def compare_models(config):
             except KeyboardInterrupt:
                 print("Interrupted training, continuing...")
                 pass
-            
+
+            if not config.get("debug", False):
+                torch.save(model.state_dict(), model_save_path)
+            print(f"Saved model to {model_save_path}")
+    
         # From here on, we will not update the model parameters
         for p in model.parameters():
             p.requires_grad = False
         
-        if not config.get("debug", False):
-            torch.save(model.state_dict(), model_save_path)
-        print(f"Saved model to {model_save_path}")
-    
     file_save_dir = "_".join(model_save_path.split("_sd_")).split(".")[0]
     if not os.path.exists(file_save_dir):
         os.makedirs(file_save_dir, exist_ok=True)
@@ -230,6 +241,7 @@ def compare_models(config):
                 batch_size=config.get("actvs_batch_size", 1000),
                 num_workers=num_workers,
                 shuffle=False,
+                augment=False,
             )
             # the actvs data is a dict of "inputs" (B,C,H,W), "labels" (B,),
             # "actvs" (B,D,H,W) or (B,D), "logits" (B,C), "preds" (B,).
@@ -260,7 +272,6 @@ def compare_models(config):
             if config.get("save_actvs", False) or (os.path.exists(actvs_name) and overwrite):
                 torch.save(actvs_train, actvs_name)
                 torch.save(actvs_valid, actvs_name.replace("train", "valid"))
-    
 
     ####################################################
     #    Instantiate the MAS alignment object
@@ -716,6 +727,7 @@ default_config = {
     "new_models": False, # if True, will create new model saves even if others exist.
     "fresh_actvs": False, # if True, will overwrite the actvs sets even if they exist on disk
     "pretrained": True, # if True, will use the pretrained model weights from huggingface
+    "image_resize": 64, # if an int is provided, will resize the images to the specified size
     "finetune_full_model": True, # if True, will only finetune the classification head of the model
     "make_figs": False,
     "layer_sweep": False,
@@ -766,11 +778,14 @@ default_config = {
     "batch_size": 128,
     "val_batch_size": 1000,
     "num_workers": 1,
-    "num_epochs": 10, # number of epochs to finetune the model for
-    "train_lr": 0.001,
+    "num_epochs": 25, # number of epochs to finetune the model for
+    "train_lr": 0.005,
     "model_save_dir": "/data2/grantsrb/vision_mas/models",
     "data_root": "/data2/grantsrb/pytorch_datasets",
     "actvs_batch_size": 2056,
+    "og_train_weight_decay": 0, # will use weight decay in the original training loss.
+    "og_train_label_smoothing": 0.1, # will use label smoothing in the original training loss.
+        # Only used if finetune_full_model is True
     
     # MAS alignment parameters
     "subspace_size": None,
