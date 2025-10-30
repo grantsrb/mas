@@ -309,7 +309,7 @@ def get_std(x, axis=None, batch_size=1000, mean=None):
             cumu_sum=cumu_sum+((x[i:i+batch_size]-mean)**2).sum(axis)
         return sqrt(cumu_sum/x.shape[axis])
 
-def pearsonr(x,y):
+def pearsonr(x,y,eps=1e-7):
     """
     Calculates the pearson correlation coefficient along the 0th dimension.
     This gives same results as scipy's version but allows you to calculate
@@ -323,6 +323,9 @@ def pearsonr(x,y):
         y: ndarray or torch tensor (T, ...)
             the dimension that will be averaged must be the first.
             dimensionality and type must match that of x
+        eps: float
+            the threshold at which values are set to 0 to avoid numerical
+            instability.
 
     Returns:
         pearsonr: ndarray or torch tensor (...)
@@ -345,18 +348,22 @@ def pearsonr(x,y):
             sqrt = np.sqrt
         else:
             sqrt = torch.sqrt
-        sigx = sqrt((x**2).mean(0)-mux**2)+1e-7
-        sigy = sqrt((y**2).mean(0)-muy**2)+1e-7
+        sigx = sqrt((x**2).mean(0)-mux**2)
+        sigy = sqrt((y**2).mean(0)-muy**2)
     except MemoryError as e:
         mux = get_mean(x,axis=0)
         muy = get_mean(y,axis=0)
-        sigx = get_std(x,mean=mux,axis=0)+1e-7
-        sigy = get_std(y,mean=muy,axis=0)+1e-7
+        sigx = get_std(x,mean=mux,axis=0)
+        sigy = get_std(y,mean=muy,axis=0)
     x = x-mux
     y = y-muy
+    sigx[sigx<eps] = 0
+    sigy[sigy<eps] = 0
     numer = (x*y).mean(0)
     denom = sigx*sigy
     r = numer/denom
+    r[(sigx==0)&(sigy==0)] = 1
+    r[((sigx==0)|(sigy==0))&~((sigx==0)&(sigy==0))] = 0
     if shape is not None:
         r = r.reshape(shape)
     return r
