@@ -80,7 +80,7 @@ def get_model_and_processor(model_name, pretrained=True, image_resize=None):
     """
     model = AutoModel.from_pretrained(model_name)
     if not pretrained:
-        if "resnet" in model_name.lower() and image_resize is not None:
+        if "resnet" in model_name.lower() and image_resize and image_resize > 0:
             replace_first_conv(model, kernel_size=7, stride=1, padding=1)
         for name,modu in model.named_modules():
             if "Linear" in str(type(modu)) or "Conv" in str(type(modu)) or "Embedding" in str(type(modu)):
