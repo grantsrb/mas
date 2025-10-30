@@ -4,5 +4,8 @@ scripts/*
 */csvs/*
 */figs/*
 analysis/*
+*.ipynb_checkpoints*
 */.ipynb_checkpoints/*
-
+*/__pycache__/
+*deleteme*
+*.txt

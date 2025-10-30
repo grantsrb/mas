@@ -259,3 +259,111 @@ def compute_similarities(
         prenorm=True, batch_size=sample_size)
     return sims
 
+def get_mean(x, axis=None, batch_size=1000):
+    """
+    Returns mean of x along argued axis. Used for reducing memory
+    footprint on large datasets.
+
+    x: ndarray or torch tensor
+    axis: int
+    batch_size: int
+        size of increment when calculating mean
+    """
+    cumu_sum = 0
+    if axis is None:
+        for i in range(0,len(x), batch_size):
+            cumu_sum = cumu_sum + x[i:i+batch_size].sum()
+        return cumu_sum/x.numel()
+    else:
+        for i in range(0,len(x), batch_size):
+            cumu_sum = cumu_sum + x[i:i+batch_size].sum(axis)
+        return cumu_sum/x.shape[axis]
+
+def get_std(x, axis=None, batch_size=1000, mean=None):
+    """
+    Returns std of x along argued axis. Used for reducing memory
+    footprint on large datasets. Does not use n-1 correction.
+
+    x: ndarray or torch tensor
+    axis: int
+    batch_size: int
+        size of increment when calculating mean
+    mean: int or ndarray or torch tensor
+        The mean to be used in calculating the std. If None, mean is
+        automatically calculated. If ndarray or torch tensor, must
+        match datatype of x.
+    """
+    if type(x) == type(np.array([])):
+        sqrt = np.sqrt
+    else:
+        sqrt = torch.sqrt
+    if mean is None:
+        mean = get_mean(x,axis,batch_size)
+    cumu_sum = 0
+    if axis is None:
+        for i in range(0,len(x), batch_size):
+            cumu_sum = cumu_sum + ((x[i:i+batch_size]-mean)**2).sum()
+        return sqrt(cumu_sum/x.numel())
+    else:
+        for i in range(0,len(x), batch_size):
+            cumu_sum=cumu_sum+((x[i:i+batch_size]-mean)**2).sum(axis)
+        return sqrt(cumu_sum/x.shape[axis])
+
+def pearsonr(x,y,eps=1e-7):
+    """
+    Calculates the pearson correlation coefficient along the 0th dimension.
+    This gives same results as scipy's version but allows you to calculate
+    the coefficient over much larger data sizes. Additionally allows
+    calculation for torch tensors.
+
+    Inputs:
+        x: ndarray or torch tensor (T, ...)
+            the dimension that will be averaged must be the first.
+            dimensionality and type must match that of y
+        y: ndarray or torch tensor (T, ...)
+            the dimension that will be averaged must be the first.
+            dimensionality and type must match that of x
+        eps: float
+            the threshold at which values are set to 0 to avoid numerical
+            instability.
+
+    Returns:
+        pearsonr: ndarray or torch tensor (...)
+            shape will be the same as input but without the first
+            dimension. As such, the correlations are calculated
+            between cells in the same spatial location.
+
+    """
+    shape = None if len(x.shape) == 1 else x.shape[1:]
+    assert type(x) == type(y)
+    x = x.reshape(len(x), -1)
+    y = y.reshape(len(y), -1)
+    try:
+        mux = x.mean(0)
+        muy = y.mean(0)
+        # STD calculation ensures same calculation is performed for
+        # ndarrays and torch tensors. Torch tensor .std() uses n-1 
+        # correction
+        if isinstance(x, np.ndarray):
+            sqrt = np.sqrt
+        else:
+            sqrt = torch.sqrt
+        sigx = sqrt((x**2).mean(0)-mux**2)
+        sigy = sqrt((y**2).mean(0)-muy**2)
+    except MemoryError as e:
+        mux = get_mean(x,axis=0)
+        muy = get_mean(y,axis=0)
+        sigx = get_std(x,mean=mux,axis=0)
+        sigy = get_std(y,mean=muy,axis=0)
+    x = x-mux
+    y = y-muy
+    sigx[sigx<eps] = 0
+    sigy[sigy<eps] = 0
+    numer = (x*y).mean(0)
+    denom = sigx*sigy
+    r = numer/denom
+    r[(sigx==0)&(sigy==0)] = 1
+    r[((sigx==0)|(sigy==0))&~((sigx==0)&(sigy==0))] = 0
+    if shape is not None:
+        r = r.reshape(shape)
+    return r

@@ -236,6 +236,8 @@ def main():
         "nonlin_align_fn": "identity", # Inverse of a function applied
             # before the rotation matrix during interventions. options:
             # "identity", "tanh", "sigmoid"
+        "mas_batch_norm": False, # If true, will use batch normalization before the rotation matrix.
+
         ## Not Implmented Yet
         "zscore_alignment": False, # If true, will zscore the reps
             # before alignment. zscoring is applied after the
@@ -817,12 +819,12 @@ def main():
         mtx_kwarg_keys = {
             "rank", "identity_init", "bias", "mu",
             "sigma", "identity_rot", "orthogonal_map",
-            "nonlin_align_fn", "n_layers",
+            "nonlin_align_fn", "n_layers", "mas_batch_norm",
         }
         mtx_kwargs = dict()
         for key in mtx_kwarg_keys:
             if key in config:
-                mtx_kwargs[key] = config[key]
+                mtx_kwargs[key.replace("mas_","")] = config[key]
         config["mtx_kwargs"] = [mtx_kwargs for _ in models]
     config["sizes"] = m_sizes
     intrv_module = InterventionModule(
@@ -1056,6 +1058,7 @@ def main():
                     print("\tSwap Keys:", config["swap_keys"])
                     print("Mtx  Type:", config["mtx_types"][0])
                     print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
+                    print("\tBatch Norm:", config["mas_batch_norm"])
                     print("Mask Type:", type(intrv_module.swap_mask).__name__,
                             "- FSR:", config["fsr"],
                             "- Const Inpt:", config["const_targ_inpt_id"],
@@ -1131,6 +1134,7 @@ def main():
                     print("\tSwap Keys:", config["swap_keys"])
                     print("Mtx  Type:", config["mtx_types"][0])
                     print("\tAlignFn:", config.get("nonlin_align_fn","identity"))
+                    print("\tBatch Norm:", config["mas_batch_norm"])
                     print("Mask Type:", type(intrv_module.swap_mask).__name__,
                             "- FSR:", config["fsr"],
                             "- Const Inpt:", config["const_targ_inpt_id"],
