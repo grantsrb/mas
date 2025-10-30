@@ -182,7 +182,7 @@ def compare_models(config):
             torch.save(model.state_dict(), model_save_path)
         print(f"Saved model to {model_save_path}")
     
-    file_save_dir = model_save_path.split("_sd_")[0]
+    file_save_dir = "_".join(model_save_path.split("_sd_")).split(".")[0]
     if not os.path.exists(file_save_dir):
         os.makedirs(file_save_dir, exist_ok=True)
     config["file_save_dir"] = file_save_dir
