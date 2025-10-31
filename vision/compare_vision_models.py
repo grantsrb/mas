@@ -506,7 +506,8 @@ def compare_models(config):
                 "|| Loss:", round(np.max(valid["valid_actn_loss"]), 5)
             )
 
-            if config.get("track_relevance", False) and (epoch % 10 == 0 or debug):
+            if config.get("track_relevance", False) and\
+                    ((epoch % 10 == 0 and epoch!=num_epochs-1) or debug):
                 print("Evaluating behavioral relevance...")
                 rel_df = evaluate_behavioral_relevance(
                     models=models,
@@ -571,47 +572,51 @@ def compare_models(config):
     grad_df = None
     cols = ["actn_loss","penalty","cl_loss","acc","behav_acc","label_acc","src_acc"]
     groups = ["src_idx","trg_idx"]
-    rel_groups = [c for c in groups if c in rel_df.columns]
-    rel_cols = [c for c in cols if c in rel_df.columns] +\
-            ["grad_mse", "grad_cosine", "grad_correlation"]
-    grad_df = evaluate_behavioral_relevance(
-        models=models,
-        alignment=alignment,
-        actvs_sets=actvs_valid_sets,
-        batch_size=batch_size,
-        one_hot_loss=one_hot_loss,
-        use_ground_truth_labels=ground_truth_labels,
-        ablate_low_rank_transformation=False,
-        verbose=True,
-        debug=debug,
-    )
-    print("Gradient based relevance")
-    grad = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-    print(grad.sort_values(by=rel_groups,ascending=True))
-    dolow = config.get("do_low_rank_transformation", False)
-    if dolow:
-        ablate_df = evaluate_behavioral_relevance(
-            models=models,
-            alignment=alignment,
-            actvs_sets=actvs_valid_sets,
-            batch_size=batch_size,
-            one_hot_loss=one_hot_loss,
-            use_ground_truth_labels=ground_truth_labels,
-            ablate_low_rank_transformation=True,
-            verbose=True,
-            debug=debug,
-        )
-        print("Ablated low-rank transformation")
-        ablat = ablate_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-        print(ablat.sort_values(by=rel_groups,ascending=True))
-    if dolow and config.get("ablate_low_rank_transformation", False):
-        rel_df = pd.concat([grad_df, ablate_df])
-    else:
-        rel_df = grad_df
-    rel = rel_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-    rel["epoch"] = epoch
-    rel_dfs.append(rel)
-    rel_df = pd.concat(rel_dfs)
+    if config.get("track_relevance", False):
+        try:
+            rel_groups = [c for c in groups if c in rel_df.columns]
+            rel_cols = [c for c in cols if c in rel_df.columns] +\
+                    ["grad_mse", "grad_cosine", "grad_correlation"]
+            grad_df = evaluate_behavioral_relevance(
+                models=models,
+                alignment=alignment,
+                actvs_sets=actvs_valid_sets,
+                batch_size=batch_size,
+                one_hot_loss=one_hot_loss,
+                use_ground_truth_labels=ground_truth_labels,
+                ablate_low_rank_transformation=False,
+                verbose=True,
+                debug=debug,
+            )
+            print("Gradient based relevance")
+            grad = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+            print(grad.sort_values(by=rel_groups,ascending=True))
+            dolow = config.get("do_low_rank_transformation", False)
+            if dolow:
+                ablate_df = evaluate_behavioral_relevance(
+                    models=models,
+                    alignment=alignment,
+                    actvs_sets=actvs_valid_sets,
+                    batch_size=batch_size,
+                    one_hot_loss=one_hot_loss,
+                    use_ground_truth_labels=ground_truth_labels,
+                    ablate_low_rank_transformation=True,
+                    verbose=True,
+                    debug=debug,
+                )
+                print("Ablated low-rank transformation")
+                ablat = ablate_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+                print(ablat.sort_values(by=rel_groups,ascending=True))
+            if dolow and config.get("ablate_low_rank_transformation", False):
+                rel_df = pd.concat([grad_df, ablate_df])
+            else:
+                rel_df = grad_df
+            rel = rel_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+            rel["epoch"] = epoch
+            rel_dfs.append(rel)
+            rel_df = pd.concat(rel_dfs)
+        except KeyboardInterrupt:
+            print("Interrupted evaluating behavioral relevance, exiting...")
     
     ####################################################
     #    Save results
@@ -620,7 +625,11 @@ def compare_models(config):
         torch.save(alignment.state_dict(), mas_save_name)
         print(f"Saved alignment to {mas_save_name}")
 
-        if config.get("track_relevance", False): # track the behavioral relevance of the alignment
+        main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
+        save_yaml(config, f"csvs/{config_name}")
+        print(f"Saved results to {csv_name}")
+
+        if rel_df is not None: # track the behavioral relevance of the alignment
             rel_csv_name = csv_name.replace(".csv", "_rel.csv")
             rel_save_name = os.path.join(file_save_dir, rel_csv_name)
             rel_df.to_csv(rel_save_name, index=False, header=True)
@@ -636,11 +645,6 @@ def compare_models(config):
                 grad_save_name = os.path.join(file_save_dir, grad_csv_name)
                 grad_df.to_csv(grad_save_name, index=False, header=True)
                 print(f"Saved behavioral relevance results to {grad_save_name}")
-    
-        main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
-        save_yaml(config, f"csvs/{config_name}")
-        print(f"Saved results to {csv_name}")
-
     
     if not config["make_figs"]:
         print("Ending", id_str)
