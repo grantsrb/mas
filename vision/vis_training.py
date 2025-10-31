@@ -976,15 +976,16 @@ def evaluate_behavioral_relevance(
                 behav_accs[(src_idx,trg_idx)] = behav_acc
                 actn_losses[(src_idx,trg_idx)] = loss.item()
 
-                trg = trg_grad
-                src = src_grad
-                mse = (((trg - src)**2).sum(-1)).mean()
-                mses[(src_idx,trg_idx)] = mse.item()
-                cosine = torch.nn.functional.cosine_similarity(
-                    trg, src, dim=-1).mean()
-                cosines[(src_idx,trg_idx)] = cosine.item()
-                correlation = pearsonr(trg.T, src.T).mean()
-                correlations[(src_idx,trg_idx)] = correlation.item()
+                with torch.no_grad():
+                    trg = trg_grad/trg_grad.norm(dim=-1, keepdim=True)
+                    src = src_grad/src_grad.norm(dim=-1, keepdim=True)
+                    mse = (((trg - src)**2).sum(-1)).mean()
+                    mses[(src_idx,trg_idx)] = mse.item()
+                    cosine = torch.nn.functional.cosine_similarity(
+                        trg, src, dim=-1).mean()
+                    cosines[(src_idx,trg_idx)] = cosine.item()
+                    correlation = pearsonr(trg.T, src.T).mean()
+                    correlations[(src_idx,trg_idx)] = correlation.item()
 
         if verbose:
             n_batches = len(actvs_sets[0]['inputs'])
