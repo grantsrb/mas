@@ -437,7 +437,10 @@ def compare_models(config):
     best_valid_acc = 0
     for epoch in range(num_epochs):
         try:
-            print(f"Epoch {epoch} - Training", id_str)
+            print(f"Epoch {epoch} - Training", id_str,
+                f"Train Directions: {train_directions}",
+                f"CL Directions: {cl_directions}"
+            )
             start_time = time.time()
             train_df = train_mas_alignment_one_epoch(
                 models=models,
