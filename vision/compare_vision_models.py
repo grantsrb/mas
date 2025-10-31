@@ -439,7 +439,8 @@ def compare_models(config):
         try:
             print(f"Epoch {epoch} - Training", id_str,
                 f"Train Directions: {train_directions}",
-                f"CL Directions: {cl_directions}"
+                f"CL Directions: {cl_directions}",
+                f"Seed: {config.get('seed', 0)}"
             )
             start_time = time.time()
             train_df = train_mas_alignment_one_epoch(
