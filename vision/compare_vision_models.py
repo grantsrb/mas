@@ -151,7 +151,7 @@ def compare_models(config):
         model_save_path = os.path.join(model_save_dir, model_save_path)
         if not config["pretrained"]:
             model_save_path = model_save_path.replace(".pt", "_unpretrained.pt")
-        if config.get("image_resize", None) is not None:
+        if config.get("image_resize", None) is not None and config.get("image_resize", None) > 0:
             size = config["image_resize"]
             model_save_path = model_save_path.replace(".pt", f"_resize{size}.pt")
         if new_models and os.path.exists(model_save_path):
@@ -272,6 +272,11 @@ def compare_models(config):
             if config.get("save_actvs", False) or (os.path.exists(actvs_name) and overwrite):
                 torch.save(actvs_train, actvs_name)
                 torch.save(actvs_valid, actvs_name.replace("train", "valid"))
+
+    for i,actvs_train_set in enumerate(actvs_train_sets):
+        print("Set", i)
+        for k in actvs_train_set.keys():
+            print(k, actvs_train_set[k].shape)
 
     ####################################################
     #    Instantiate the MAS alignment object
