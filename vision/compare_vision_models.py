@@ -624,10 +624,13 @@ def compare_models(config):
     if not config.get("debug", False):
         torch.save(alignment.state_dict(), mas_save_name)
         print(f"Saved alignment to {mas_save_name}")
+        if not os.path.exists(file_save_dir):
+            os.makedirs(file_save_dir, exist_ok=True)
 
-        main_df.to_csv(f"csvs/{csv_name}", index=False, header=True)
-        save_yaml(config, f"csvs/{config_name}")
-        print(f"Saved results to {csv_name}")
+        csv_path = os.path.join(file_save_dir, csv_name)
+        main_df.to_csv(csv_path, index=False, header=True)
+        save_yaml(config, csv_path.replace(".csv", ".yaml"))
+        print(f"Saved results to {csv_path}")
 
         if rel_df is not None: # track the behavioral relevance of the alignment
             rel_csv_name = csv_name.replace(".csv", "_rel.csv")
