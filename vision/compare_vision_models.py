@@ -851,6 +851,8 @@ default_config = {
         # and the latent loss in a similar fashion to a biological neural network
         # compared to an artificial neural network.
     "latent_mas": False, # if True, will train the MAS alignment on the CL loss only.
+    "all_mas": False, # if True, will train the MAS alignment on the behavioral
+        # and the latent loss in all directions.
     "cl_directions": None, # will only collect CL vectors for the specified
         # directions (argue a list of tuples of (src_idx, trg_idx)).
         # None defaults to no directions. Set cl_eps to 0 if you wish to
@@ -894,6 +896,12 @@ def prepare_config(config):
     elif config.get("latent_mas", False):
         config["train_directions"] = []
         config["cl_directions"] = [(0,1),(1,0)]
+    elif config.get("all_mas", False):
+        config["train_directions"] = [(0,0),(0,1),(1,0),(1,1)]
+        config["cl_directions"] = [(0,0),(0,1),(1,0),(1,1)]
+    assert not (config.get("all_mas", False) and config.get("latent_mas", False))
+    assert not (config.get("all_mas", False) and config.get("bnn_mas", False))
+    assert not (config.get("latent_mas", False) and config.get("bnn_mas", False))
     if config["train_directions"] is not None and config["train_directions"] == "":
         config["train_directions"] = []
     elif config["train_directions"] is None or config["train_directions"] == "all":
