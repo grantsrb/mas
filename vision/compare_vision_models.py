@@ -472,6 +472,8 @@ def compare_models(config):
                 batch_size=val_batch_size,
                 one_hot_loss=one_hot_loss,
                 use_ground_truth_labels=ground_truth_labels,
+                use_trg_labels=use_trg_labels,
+                label_smoothing=label_smoothing,
                 cl_directions=cl_directions,
                 cl_eps=cl_eps,
                 cl_method=cl_method,
@@ -898,6 +900,9 @@ def prepare_config(config):
     elif config.get("all_mas", False):
         config["train_directions"] = [(0,0),(0,1),(1,0),(1,1)]
         config["cl_directions"] = [(0,0),(0,1),(1,0),(1,1)]
+    elif config.get("bimodel_das", False):
+        config["train_directions"] = [(0,0),(1,1)]
+        config["cl_directions"] = []
     assert not (config.get("all_mas", False) and config.get("latent_mas", False))
     assert not (config.get("all_mas", False) and config.get("bnn_mas", False))
     assert not (config.get("latent_mas", False) and config.get("bnn_mas", False))
