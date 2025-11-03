@@ -32,6 +32,8 @@ def make_jsonable(x):
             if newk!=k or type(newk)!=type(k):
                 print("K:", k, x[k])
                 del x[k]
+    elif type(x)==str:
+        return x
     elif hasattr(x, "__len__"):
         x = [make_jsonable(xx) for xx in x]
     elif hasattr(x,"__name__"):
