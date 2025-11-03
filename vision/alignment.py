@@ -972,8 +972,7 @@ class MASAlignment(AlignmentModule):
             new_h: torch tensor (B,H)
                 the causally interchanged vector
         """
-        if varb_idx is None:
-            varb_idx = 0
+        if varb_idx is None: varb_idx = 0
         og_dtype = target.dtype
         target = target.to(self.dtype)
         source = source.to(self.dtype)
@@ -981,8 +980,8 @@ class MASAlignment(AlignmentModule):
         trg_mtx = self.rot_mtxs[target_idx]
         src_mtx = self.rot_mtxs[source_idx]
 
-        rot_trg_h = trg_mtx(target)
         rot_src_h = src_mtx(source)
+        rot_trg_h = trg_mtx(target)
 
         rot_swapped = self.swap_mask(
             source=rot_src_h,
