@@ -713,6 +713,7 @@ def evaluate_mas_alignment(
     models = [model.eval() for model in models]
     alignment.eval()
     alignment.comms_dict["track_grads"] = False
+    alignment.comms_dict["varb_idx"] = varb_idx
 
     if use_ground_truth_labels:
         label_key = "labels"
@@ -734,7 +735,7 @@ def evaluate_mas_alignment(
     df_dict["batch_idx"] = []
 
     src_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
-    trg_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
+    trg_perm = torch.randperm(len(actvs_sets[0]["inputs"])).long()
     for batch_idx in range(0,len(actvs_sets[0]["inputs"]),batch_size):
         src_batch = src_perm[batch_idx:batch_idx+batch_size]
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]
@@ -916,7 +917,7 @@ def evaluate_behavioral_relevance(
         label_key = "preds"
 
     src_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
-    trg_perm = torch.arange(len(actvs_sets[0]["inputs"])).long()
+    trg_perm = torch.randperm(len(actvs_sets[0]["inputs"])).long()
     for batch_idx in range(0,len(actvs_sets[0]["inputs"]),batch_size):
         src_batch = src_perm[batch_idx:batch_idx+batch_size]
         trg_batch = trg_perm[batch_idx:batch_idx+batch_size]

@@ -472,6 +472,8 @@ def compare_models(config):
                 batch_size=val_batch_size,
                 one_hot_loss=one_hot_loss,
                 use_ground_truth_labels=ground_truth_labels,
+                use_trg_labels=use_trg_labels,
+                label_smoothing=label_smoothing,
                 cl_directions=cl_directions,
                 cl_eps=cl_eps,
                 cl_method=cl_method,
@@ -590,8 +592,8 @@ def compare_models(config):
                 debug=debug,
             )
             print("Gradient based relevance")
-            grad = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-            print(grad.sort_values(by=rel_groups,ascending=True))
+            grad_df = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+            print(grad_df.sort_values(by=rel_groups,ascending=True))
             dolow = config.get("do_low_rank_transformation", False)
             if dolow:
                 ablate_df = evaluate_behavioral_relevance(
@@ -606,15 +608,14 @@ def compare_models(config):
                     debug=debug,
                 )
                 print("Ablated low-rank transformation")
-                ablat = ablate_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-                print(ablat.sort_values(by=rel_groups,ascending=True))
+                ablate_df = ablate_df.groupby(rel_groups)[rel_cols].mean().reset_index()
+                print(ablate_df.sort_values(by=rel_groups,ascending=True))
             if dolow and config.get("ablate_low_rank_transformation", False):
                 rel_df = pd.concat([grad_df, ablate_df])
             else:
                 rel_df = grad_df
-            rel = rel_df.groupby(rel_groups)[rel_cols].mean().reset_index()
-            rel["epoch"] = epoch
-            rel_dfs.append(rel)
+            rel_df["epoch"] = epoch
+            rel_dfs.append(rel_df)
             rel_df = pd.concat(rel_dfs)
         except KeyboardInterrupt:
             print("Interrupted evaluating behavioral relevance, exiting...")
@@ -899,6 +900,9 @@ def prepare_config(config):
     elif config.get("all_mas", False):
         config["train_directions"] = [(0,0),(0,1),(1,0),(1,1)]
         config["cl_directions"] = [(0,0),(0,1),(1,0),(1,1)]
+    elif config.get("bimodel_das", False):
+        config["train_directions"] = [(0,0),(1,1)]
+        config["cl_directions"] = []
     assert not (config.get("all_mas", False) and config.get("latent_mas", False))
     assert not (config.get("all_mas", False) and config.get("bnn_mas", False))
     assert not (config.get("latent_mas", False) and config.get("bnn_mas", False))
