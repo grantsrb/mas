@@ -3,6 +3,7 @@ import torch
 import copy
 from tqdm import tqdm
 import scipy.stats as stats
+from sklearn.utils.extmath import randomized_svd
 
 DEVICES = { -1: "cpu", **{i:i for i in range(10)} }
 
@@ -367,3 +368,285 @@ def pearsonr(x,y,eps=1e-7):
     if shape is not None:
         r = r.reshape(shape)
     return r
+
+def get_cor_mtx(X, Y, batch_size=500, to_numpy=False, zscore=True, device=None):
+    """
+    Creates a correlation matrix for X and Y using the GPU
+
+    X: torch tensor or ndarray (T, C) or (T, C, H, W)
+    Y: torch tensor or ndarray (T, K) or (T, K, H1, W1)
+    batch_size: int
+        batches the calculation if this is not None
+    to_numpy: bool
+        if true, returns matrix as ndarray
+    zscore: bool
+        if true, both X and Y are normalized over the T dimension
+    device: int
+        optionally argue a device to use for the matrix multiplications
+
+    Returns:
+        cor_mtx: (C,K) or (C*H*W, K*H1*W1)
+            the correlation matrix
+    """
+    if len(X.shape) < 2:
+        X = X[:,None]
+    if len(Y.shape) < 2:
+        Y = Y[:,None]
+    if len(X.shape) > 2:
+        X = X.reshape(len(X), -1)
+    if len(Y.shape) > 2:
+        Y = Y.reshape(len(Y), -1)
+    if type(X) == type(np.array([])):
+        to_numpy = True
+        X = torch.FloatTensor(X)
+        Y = torch.FloatTensor(Y)
+    if device is None:
+        device = X.get_device()
+        if device<0: device = "cpu"
+    if zscore:
+        xmean = X.mean(0)
+        xstd = torch.sqrt(((X-xmean)**2).mean(0))
+        ymean = Y.mean(0)
+        ystd = torch.sqrt(((Y-ymean)**2).mean(0))
+        xstd[xstd<=0] = 1
+        X = (X-xmean)/(xstd+1e-5)
+        ystd[ystd<=0] = 1
+        Y = (Y-ymean)/(ystd+1e-5)
+    X = X.permute(1,0)
+
+    with torch.no_grad():
+        if batch_size is None:
+            X = X.to(device)
+            Y = Y.to(device)
+            cor_mtx = torch.einsum("it,tj->ij", X, Y).detach().cpu()
+        else:
+            cor_mtx = []
+            for i in range(0,len(X),batch_size): # loop over x neurons
+                sub_mtx = []
+                x = X[i:i+batch_size].to(device)
+
+                # Loop over y neurons
+                for j in range(0,Y.shape[1], batch_size):
+                    y = Y[:,j:j+batch_size].to(device)
+                    cor_block = torch.einsum("it,tj->ij",x,y)
+                    cor_block = cor_block.detach().cpu()
+                    sub_mtx.append(cor_block)
+                cor_mtx.append(torch.cat(sub_mtx,dim=1))
+            cor_mtx = torch.cat(cor_mtx, dim=0)
+    cor_mtx = cor_mtx/len(Y)
+    if to_numpy:
+        return cor_mtx.numpy()
+    return cor_mtx
+
+def perform_pca(
+        X,
+        n_components=None,
+        scale=True,
+        center=True,
+        transform_data=False,
+        full_matrices=False,
+        randomized=False,
+        use_eigen=True,
+        batch_size=None,
+        verbose=True,
+):
+    """
+    Perform PCA on the data matrix X
+
+    Args:
+        X: tensor (M,N)
+        n_components: int
+            optionally specify the number of components
+        scale: bool
+            if true, will scale the data along each column
+        transform_data: bool
+            if true, will compute and return the transformed
+            data
+        full_matrices: bool
+            determines if U will be returned as a square.
+        randomized: bool
+            if true, will use randomized svd for faster
+            computations
+        use_eigen: bool
+            if true, will use an eigen decomposition on the
+            covariance matrix of X. This allows us to compute the PCA
+            in batches as a way to save compute
+        batch_size: int or None
+            optionally argue a batch size. only applies if use_eigen
+            is true.
+    Returns:
+        ret_dict: dict
+            A dictionary containing the following keys:
+            - "components": tensor (N, n_components)
+                The principal components (eigenvectors) of the data.
+            - "explained_variance": tensor (n_components,)
+                The explained variance for each principal component.
+            - "proportion_expl_var": tensor (n_components,)
+                The proportion of explained variance for each principal component.
+            - "means": tensor (N,)
+                The mean of each feature (column) in the data.
+            - "stds": tensor (N,)
+                The standard deviation of each feature (column) in the data.
+            - "transformed_X": tensor (M, n_components)
+                The data projected onto the principal components, if
+                transform_data is True.
+    """
+    if use_eigen:
+        return perform_eigen_pca(
+            X=X,
+            n_components=n_components,
+            scale=scale,
+            center=center,
+            transform_data=transform_data,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+    if n_components is None:
+        n_components = X.shape[-1]
+        
+    svd_kwargs = {}
+    if type(X)==torch.Tensor:
+        if randomized:
+            svd_kwargs["q"] = n_components
+            svd = torch.svd_lowrank
+        else:
+            svd_kwargs["full_matrices"] = full_matrices
+            svd = torch.linalg.svd
+    elif type(X)==np.ndarray:
+        if randomized:
+            svd_kwargs["n_components"] = n_components
+            svd = randomized_svd
+        else:
+            svd_kwargs["n_components"] = n_components
+            svd_kwargs["compute_uv"] = True
+            svd = np.linalg.svd
+    assert not n_components or X.shape[-1]>=n_components
+
+    # Center the data by subtracting the mean along each feature (column)
+    means = torch.zeros_like(X[0])
+    if center:
+        means = X.mean(dim=0, keepdim=True)
+        X = X - means
+    stds = torch.ones_like(X[0])
+    if scale:
+        stds = (X.std(0)+1e-6)
+        X = X/stds
+    
+    
+    # Compute the SVD of the centered data
+    # X = U @ diag(S) @ Vh, where Vh contains the principal components as its rows
+    if verbose: print("Performing SVD")
+    U, S, Vh = svd(X, **svd_kwargs)
+    
+    # The principal components (eigenvectors) are the first n_components rows of Vh
+    components = Vh[:n_components]
+    
+    # Explained variance for each component can be computed from the singular values
+    explained_variance = (S[:n_components] ** 2) / (X.shape[0] - 1)
+    proportion_expl_var = explained_variance/explained_variance.sum()
+    
+    ret_dict = {
+        "components": components,
+        "explained_variance": explained_variance,
+        "proportion_expl_var": proportion_expl_var,
+        "means": means,
+        "stds": stds,
+    }
+    if transform_data:
+        # Project the data onto the principal components
+        # Note: components.T has shape (features, n_components)
+        ret_dict["transformed_X"] = X @ components.T
+
+    return ret_dict
+
+def perform_eigen_pca(
+        X,
+        n_components=None,
+        scale=True,
+        center=True,
+        transform_data=False,
+        batch_size=None,
+        verbose=True,
+):
+    """
+    Perform PCA on the data matrix X by using an eigen decomp on
+    the covariance matrix
+
+    Args:
+        X: tensor (M,N)
+        n_components: int
+            optionally specify the number of components
+        scale: bool
+            if true, will scale the data along each column
+        transform_data: bool
+            if true, will compute and return the transformed
+            data
+    Returns:
+        ret_dict: dict
+            A dictionary containing the following keys:
+            - "components": tensor (N, n_components)
+                The principal components (eigenvectors) of the data.
+            - "explained_variance": tensor (n_components,)
+                The explained variance for each principal component.
+            - "proportion_expl_var": tensor (n_components,)
+                The proportion of explained variance for each principal component.
+            - "means": tensor (N,)
+                The mean of each feature (column) in the data.
+            - "stds": tensor (N,)
+                The standard deviation of each feature (column) in the data.
+            - "transformed_X": tensor (M, n_components)
+                The data projected onto the principal components, if
+                transform_data is True.
+    """
+    if n_components is None:
+        n_components = X.shape[-1]
+        
+    if type(X)==torch.Tensor:
+        eigen_fn = torch.linalg.eigh
+    elif type(X)==np.ndarray:
+        eigen_fn = np.linalg.eigh
+    assert not n_components or X.shape[-1]>=n_components
+
+    # Center the data by subtracting the mean along each feature (column)
+    means = torch.zeros_like(X[0])
+    if center:
+        means = X.mean(dim=0, keepdim=True)
+        X = X - means
+    stds = torch.ones_like(X[0])
+    if scale:
+        stds = (X.std(0)+1e-6)
+        X = X/stds
+    
+    cov = get_cor_mtx(
+        X,X,
+        zscore=False,
+        batch_size=batch_size)
+    ## Use eigendecomposition of the covariance matrix for efficiency
+    ## Cov = (1 / (M - 1)) * X^T X
+    #cov = X.T @ X / (X.shape[0] - 1)  # shape (N, N)
+
+    # Compute eigenvalues and eigenvectors
+    eigvals, eigvecs = eigen_fn(cov)  # eigvals in ascending order
+
+    # Select top n_components in descending order
+    eigvals = eigvals[-n_components:].flip(0)
+    eigvecs = eigvecs[:, -n_components:].flip(1)  # shape (N, n_components)
+
+    explained_variance = eigvals
+    proportion_expl_var = explained_variance / explained_variance.sum()
+    components = eigvecs.T  # shape (n_components, N)
+
+    ret_dict = {
+        "components": components,
+        "explained_variance": explained_variance,
+        "proportion_expl_var": proportion_expl_var,
+        "means": means,
+        "stds": stds,
+    }
+    if transform_data:
+        # Project the data onto the principal components
+        # Note: components.T has shape (features, n_components)
+        ret_dict["transformed_X"] = X @ components.T
+
+    return ret_dict
+
