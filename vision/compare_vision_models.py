@@ -414,13 +414,14 @@ def compare_models(config):
     batches_per_optim_step = config["mas_batches_per_optim_step"]
 
     timestamp = get_timestamp()
+    hash_str = str(hash("".join([f"{k}={v}" for k,v in config.items()])))[-4:]
     m1 = model_names[0].replace("/", "_")
     m1 = m1+layer_names[0].replace("backbone", "").replace(".", "-")
     m2 = model_names[1].replace("/", "_")
     m2 = m2+layer_names[1].replace("backbone", "").replace(".", "-")
     if config["model_stitch"]: label = "stitch"
     else: label = "mas"
-    csv_name = f"{m1}_{m2}_{dataset_name}_{label}_{timestamp}.csv"
+    csv_name = f"{m1}_{m2}_{dataset_name}_{label}_{timestamp}_h{hash_str}.csv"
     config_name = csv_name.replace(".csv", ".yaml")
     mas_save_name = config_name.replace(".yaml", ".pt")
     mas_save_name = os.path.join(file_save_dir, mas_save_name)
@@ -571,15 +572,13 @@ def compare_models(config):
     ####################################################
     #    Evaluate behavioral relevance
     ####################################################
+    rel_df = None
     ablate_df = None
     grad_df = None
     cols = ["actn_loss","penalty","cl_loss","acc","behav_acc","label_acc","src_acc"]
     groups = ["src_idx","trg_idx"]
     if config.get("track_relevance", False):
         try:
-            rel_groups = [c for c in groups if c in rel_df.columns]
-            rel_cols = [c for c in cols if c in rel_df.columns] +\
-                    ["grad_mse", "grad_cosine", "grad_correlation"]
             grad_df = evaluate_behavioral_relevance(
                 models=models,
                 alignment=alignment,
@@ -591,6 +590,9 @@ def compare_models(config):
                 verbose=True,
                 debug=debug,
             )
+            rel_groups = [c for c in groups if c in grad_df.columns]
+            rel_cols = [c for c in cols if c in grad_df.columns] +\
+                       ["grad_mse", "grad_cosine", "grad_correlation"]
             print("Gradient based relevance")
             grad_df = grad_df.groupby(rel_groups)[rel_cols].mean().reset_index()
             print(grad_df.sort_values(by=rel_groups,ascending=True))
